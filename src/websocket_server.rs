@@ -1,7 +1,6 @@
 // src/websocket_server.rs
 use futures::{SinkExt, StreamExt};
 use std::error::Error;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite::protocol::Message};
@@ -23,7 +22,11 @@ impl WebsocketServer {
 
         while let Ok((stream, addr)) = listener.accept().await {
             println!("クライアント接続: {}", addr);
-            tokio::spawn(Self::handle_connection(stream));
+            tokio::spawn(async move {
+                if let Err(e) = Self::handle_connection(stream).await {
+                    eprintln!("Connection error: {}", e);
+                }
+            });
         }
 
         Ok(())
