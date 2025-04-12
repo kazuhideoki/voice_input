@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-fn main() {
+pub fn record_audio() {
     // CPALのデフォルトホストと入力デバイスを取得する
     let host = cpal::default_host();
     let device = host
@@ -19,10 +19,10 @@ fn main() {
         .expect("デフォルト入力設定が取得できんけぇ");
     println!("入力設定: {:?}", config);
 
-    // WAVファイルの設定に必要なサンプルレートを先に保存
+    // WAVファイルの設定に必要なサンプルレートを保存
     let sample_rate = config.sample_rate().0;
 
-    // 録音サンプルを格納するバッファ（共有リソース）を作成
+    // ここが重要: 録音のたびに新しいバッファを作成する
     let samples = Arc::new(Mutex::new(Vec::<f32>::new()));
 
     // エラーコールバック
@@ -48,14 +48,17 @@ fn main() {
     println!("5秒間録音しとるけぇ……");
     thread::sleep(Duration::from_secs(5));
 
-    // 録音終了（streamはスコープアウトでドロップされる）
+    // 重要: ストリームを明示的に停止して、データの追加を止める
+    stream.pause().expect("ストリームの停止に失敗しとる");
+
+    // 録音終了
     let recorded_samples = samples.lock().unwrap().clone();
     if recorded_samples.is_empty() {
         println!("録音サンプルが一つも取れてへんけぇ");
         return;
     }
 
-    // WAVファイルの設定（入力設定のサンプルレートを使う）
+    // WAVファイルの設定
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate,
@@ -63,10 +66,14 @@ fn main() {
         sample_format: hound::SampleFormat::Int,
     };
 
+    let filename = format!(
+        "recording_{}.wav",
+        chrono::Local::now().format("%Y%m%d_%H%M%S")
+    );
     let mut writer =
-        hound::WavWriter::create("recording.wav", spec).expect("WAVファイルの作成に失敗しとる");
+        hound::WavWriter::create(filename, spec).expect("WAVファイルの作成に失敗しとる");
 
-    // f32サンプルを16bit整数に変換して書き出す（-1.0〜1.0の範囲を前提）
+    // サンプルをWAVファイルに書き出す
     for sample in recorded_samples.iter() {
         let clamped = sample.max(-1.0).min(1.0);
         let value = (clamped * i16::MAX as f32) as i16;
@@ -84,12 +91,18 @@ fn build_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     samples: Arc<Mutex<Vec<f32>>>,
-    mut err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
+    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
 ) -> cpal::Stream
 where
     T: Sample + cpal::SizedSample + Send + 'static,
     <T as Sample>::Float: std::convert::Into<f32>,
 {
+    // 重要な修正: ストリーム作成前にバッファをクリア
+    {
+        let mut samples_lock = samples.lock().unwrap();
+        samples_lock.clear();
+    }
+
     device
         .build_input_stream(
             config,
