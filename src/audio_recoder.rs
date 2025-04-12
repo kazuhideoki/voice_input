@@ -1,17 +1,17 @@
+use crate::transcribe_audio;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Sample, SampleFormat};
 use hound;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use crate::request_speech_to_text;
 
-pub async fn record_and_transcribe() -> Result<String, Box<dyn std::error::Error>> {
+pub async fn record() -> Result<String, Box<dyn std::error::Error>> {
     let filename = record_audio();
-    
+
     println!("音声をテキストに変換しとるけぇ...");
-    let transcription = request_speech_to_text::transcribe_audio(&filename).await?;
-    
+    let transcription = transcribe_audio::transcribe_audio(&filename).await?;
+
     println!("文字起こし結果: {}", transcription);
     Ok(transcription)
 }
