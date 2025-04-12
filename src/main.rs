@@ -1,3 +1,4 @@
+mod audio_recorder;
 mod key_monitor;
 mod text_selection;
 mod websocket_client;
@@ -66,6 +67,33 @@ fn main() {
     println!("  F2: 選択テキストを取得");
     println!("  F3: WebSocketサーバーを起動");
     println!("  F4: WebSocketクライアントを起動");
+    println!("  F5: 音声録音を開始");
+    println!("  F6: 音声録音を停止");
+
+    // 音声録音の設定
+    let audio_recorder = Arc::new(audio_recorder::AudioRecorder::new());
+    let audio_recorder_clone = Arc::clone(&audio_recorder);
+    
+    // F5/F6キーのハンドラを追加
+    let key_monitor_recorder = key_monitor::KeyMonitor::new(move |key| {
+        match key {
+            Keycode::F5 => {
+                println!("F5キーが押されました - 音声録音を開始します");
+                if let Err(e) = audio_recorder_clone.start_recording() {
+                    println!("録音開始エラー: {}", e);
+                }
+            }
+            Keycode::F6 => {
+                println!("F6キーが押されました - 音声録音を停止します");
+                audio_recorder_clone.stop_recording();
+                let samples = audio_recorder_clone.get_samples();
+                println!("録音サンプル数: {}", samples.len());
+            }
+            _ => {}
+        }
+    });
+    
+    let _recorder_monitor_handle = key_monitor_recorder.start_monitoring();
 
     // メインスレッドを動作させ続ける
     loop {
