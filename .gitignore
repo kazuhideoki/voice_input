@@ -1,3 +1,6 @@
 /target
 .mcp.json
 .DS_Store
+.env
+
+recording*

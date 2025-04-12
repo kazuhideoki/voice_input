@@ -4,8 +4,19 @@ use hound;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use crate::request_speech_to_text;
 
-pub fn record_audio() {
+pub async fn record_and_transcribe() -> Result<String, Box<dyn std::error::Error>> {
+    let filename = record_audio();
+    
+    println!("音声をテキストに変換しとるけぇ...");
+    let transcription = request_speech_to_text::transcribe_audio(&filename).await?;
+    
+    println!("文字起こし結果: {}", transcription);
+    Ok(transcription)
+}
+
+pub fn record_audio() -> String {
     // CPALのデフォルトホストと入力デバイスを取得する
     let host = cpal::default_host();
     let device = host
@@ -55,7 +66,7 @@ pub fn record_audio() {
     let recorded_samples = samples.lock().unwrap().clone();
     if recorded_samples.is_empty() {
         println!("録音サンプルが一つも取れてへんけぇ");
-        return;
+        return String::new();
     }
 
     // WAVファイルの設定
@@ -71,7 +82,7 @@ pub fn record_audio() {
         chrono::Local::now().format("%Y%m%d_%H%M%S")
     );
     let mut writer =
-        hound::WavWriter::create(filename, spec).expect("WAVファイルの作成に失敗しとる");
+        hound::WavWriter::create(&filename, spec).expect("WAVファイルの作成に失敗しとる");
 
     // サンプルをWAVファイルに書き出す
     for sample in recorded_samples.iter() {
@@ -83,7 +94,8 @@ pub fn record_audio() {
     }
     writer.finalize().expect("WAVファイルの確定に失敗しとる");
 
-    println!("WAVファイルとして 'recording.wav' に保存したけぇ");
+    println!("WAVファイルとして '{}' に保存したけぇ", filename);
+    filename
 }
 
 // 指定したサンプルフォーマットで入力ストリームを構築する関数

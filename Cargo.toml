@@ -14,3 +14,7 @@ cpal = "0.15.3"
 clippy = "0.0.302"
 hound = "3.5.1"
 chrono = "0.4.40"
+reqwest = { version = "0.11", features = ["multipart", "json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dotenv = "0.15.0"

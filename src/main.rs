@@ -1,17 +1,29 @@
 mod audio_recorder;
 mod key_monitor;
+mod request_speech_to_text;
 mod sample_audio_recoder;
 mod text_selection;
 mod websocket_client;
 mod websocket_server;
 
 use device_query::Keycode;
-use sample_audio_recoder::record_audio;
+use sample_audio_recoder::{record_audio, record_and_transcribe};
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
+use dotenv::dotenv;
 
-fn main() {
-    record_audio();
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // .env ファイルの読み込み
+    dotenv().ok();
+    println!("環境変数を読み込みました");
+    
+    // 録音して文字起こし
+    let transcription = record_and_transcribe().await?;
+    
+    // 結果をコンソールに表示
+    println!("文字起こし結果: {}", transcription);
+    Ok(())
     // println!("Rust多機能ツールを起動しています...");
 
     // // 選択テキストを保持する共有変数
