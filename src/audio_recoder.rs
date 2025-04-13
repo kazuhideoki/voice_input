@@ -30,10 +30,11 @@ thread_local! {
 }
 
 // 録音状態を管理するためのファイルパス
-pub const RECORDING_STATUS_FILE: &str = "recording_status.txt";
+pub const RECORDING_STATUS_FILE: &str = "/tmp/voice_input_recording_status.txt";
 
 // TODO record file 管理を repository 的にまとめる？
-const LAST_RECORDING_FILE: &str = "last_recording.txt";
+const LAST_RECORDING_FILE: &str = "/tmp/voice_input_last_recording.txt";
+const RECORDING_FILE_PATH: &str = "/tmp/voice_input_recorded.wav";
 
 // 録音を開始する関数（時間指定可能、Noneなら無限に録音）
 pub async fn record_with_duration(
@@ -59,11 +60,8 @@ pub async fn record_with_duration(
             // 録音状態をファイルに保存（プロセス間で共有）
             fs::write(RECORDING_STATUS_FILE, "recording").expect("録音状態の保存に失敗しました");
 
-            // 録音ファイル名をあらかじめ生成して保存
-            let filename = format!(
-                "recording_{}.wav",
-                chrono::Local::now().format("%Y%m%d_%H%M%S")
-            );
+            // 録音ファイル名を固定で保存
+            let filename = RECORDING_FILE_PATH.to_string();
             println!("filenameは。。。 :{:?}", filename);
             fs::write(LAST_RECORDING_FILE, &filename).expect("録音ファイル名の保存に失敗しました");
 
@@ -262,8 +260,7 @@ fn save_recording_to_file(state: &RecordingState) -> String {
     };
 
     // 新しいファイル名を生成
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let filename = format!("recording_{}.wav", timestamp);
+    let filename = RECORDING_FILE_PATH;
 
     let mut writer =
         hound::WavWriter::create(&filename, spec).expect("WAVファイルの作成に失敗しとる");
@@ -279,7 +276,7 @@ fn save_recording_to_file(state: &RecordingState) -> String {
     writer.finalize().expect("WAVファイルの確定に失敗しとる");
 
     println!("WAVファイルとして '{}' に保存したけぇ", filename);
-    filename
+    filename.to_string()
 }
 
 // 指定したサンプルフォーマットで入力ストリームを構築する関数
