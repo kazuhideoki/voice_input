@@ -10,6 +10,9 @@ struct TranscriptionResponse {
     pub text: String,
 }
 
+// const OPENAI_TRANSCRIBE_MODEL: &str = "gpt-4o-transcribe";
+const OPENAI_TRANSCRIBE_MODEL: &str = "gpt-4o-mini-transcribe";
+
 pub async fn transcribe_audio(
     audio_file_path: &str,
     prompt: Option<&str>,
@@ -39,7 +42,7 @@ pub async fn transcribe_audio(
     // Build the form
     let mut form = multipart::Form::new()
         .part("file", file_part)
-        .text("model", "gpt-4o-transcribe")
+        .text("model", OPENAI_TRANSCRIBE_MODEL)
         .text("language", "ja");
 
     // Add prompt if provided

@@ -3,6 +3,7 @@ use std::process::Command;
 
 pub fn get_selected_text() -> Result<String, String> {
     // アクティブラウィンドウの選択部分のみを取得する
+    // TODO macOSのシステムAPIを試す。Cのバインディングとかでできる？
     let script = r#"
         tell application "System Events"
             set frontApp to name of first application process whose frontmost is true
