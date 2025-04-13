@@ -30,20 +30,17 @@ thread_local! {
 }
 
 // 録音状態を管理するためのファイルパス
-const RECORDING_STATUS_FILE: &str = "recording_status.txt";
+pub const RECORDING_STATUS_FILE: &str = "recording_status.txt";
 
 // TODO record file 管理を repository 的にまとめる？
 const LAST_RECORDING_FILE: &str = "last_recording.txt";
-pub fn is_recording() -> bool {
-    Path::new(RECORDING_STATUS_FILE).exists()
-}
 
 // 録音を開始する関数（時間指定可能、Noneなら無限に録音）
 pub async fn record_with_duration(
     duration_secs: Option<u64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // 録音状態を確認
-    if is_recording() {
+    if Path::new(RECORDING_STATUS_FILE).exists() {
         return Err("すでに録音中です".into());
     }
 
@@ -118,7 +115,7 @@ pub async fn stop_recording() -> Result<String, Box<dyn std::error::Error>> {
     // 録音状態の確認（ファイルベースでの確認は同一プロセス内では不要）
 
     // プロセス外から呼び出された場合のためにファイルが存在していれば削除
-    if is_recording() {
+    if Path::new(RECORDING_STATUS_FILE).exists() {
         fs::remove_file(RECORDING_STATUS_FILE).ok();
     }
 
@@ -127,7 +124,10 @@ pub async fn stop_recording() -> Result<String, Box<dyn std::error::Error>> {
         let mut state = state_cell.borrow_mut();
 
         // ストリームが存在しない場合でも、同一プロセス内であれば録音状態をチェック
-        if !state.is_recording && state.stream.is_none() && !is_recording() {
+        if !state.is_recording
+            && state.stream.is_none()
+            && !Path::new(RECORDING_STATUS_FILE).exists()
+        {
             // ストリームが無い場合でも、録音状態ファイルが存在しない場合はWAVファイルを探す
             let wav_files: Vec<_> = std::fs::read_dir(".")
                 .expect("ディレクトリの読み取りに失敗しました")

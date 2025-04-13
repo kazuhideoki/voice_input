@@ -1,5 +1,7 @@
+use std::path::Path;
+
 use arboard::Clipboard;
-use audio_recoder::is_recording;
+use audio_recoder::RECORDING_STATUS_FILE;
 use tokio::runtime::Runtime;
 
 mod audio_recoder;
@@ -14,7 +16,7 @@ use request_speech_to_text::{start_recording, stop_recording_and_transcribe};
 // ここは既存の録音開始・停止処理のモジュールを使う前提
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if is_recording() {
+    if Path::new(RECORDING_STATUS_FILE).exists() {
         // 起動と停止を同じコマンドで実行するため、録音中の場合は処理をスキップ。
         return Ok(());
     }
