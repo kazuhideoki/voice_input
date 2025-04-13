@@ -1,4 +1,3 @@
-use crate::transcribe_audio;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Sample, SampleFormat};
 use hound;
@@ -108,7 +107,7 @@ pub async fn record_with_duration(
     result
 }
 
-// 録音を停止し、文字起こしを行う関数
+// 録音を停止し、録音ファイルのパスを返す関数
 pub async fn stop_recording() -> Result<String, Box<dyn std::error::Error>> {
     // 録音状態の確認（ファイルベースでの確認は同一プロセス内では不要）
 
@@ -182,13 +181,8 @@ pub async fn stop_recording() -> Result<String, Box<dyn std::error::Error>> {
         let _ = tx.send(()).await;
     }
 
-    // 文字起こし
-    println!("音声をテキストに変換しとるけぇ... {:?}", filename);
-
-    let transcription = transcribe_audio::transcribe_audio(&filename).await?;
-
-    println!("文字起こし結果: {}", transcription);
-    Ok(transcription)
+    println!("録音を停止しました: {:?}", filename);
+    Ok(filename)
 }
 
 // 録音の準備を行う関数
