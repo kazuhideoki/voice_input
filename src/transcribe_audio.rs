@@ -1,4 +1,3 @@
-use dotenv::dotenv;
 use reqwest::multipart;
 use serde::Deserialize;
 use std::env;
@@ -12,9 +11,6 @@ struct TranscriptionResponse {
 }
 
 pub async fn transcribe_audio(audio_file_path: &str) -> Result<String, Box<dyn std::error::Error>> {
-    // .envファイルから環境変数を読み込む
-    dotenv().ok();
-
     let api_key =
         env::var("OPENAI_API_KEY").map_err(|_| "OPENAI_API_KEY environment variable not set")?;
 
