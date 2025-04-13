@@ -1,12 +1,21 @@
 # Voice Input
 
-OpenAIの Speech to TextのAPIを使って文字入力をするスクリプト。
-任意のタイミングで録音開始と停止を行うことができる。
+A script that enables text input using OpenAI's Speech to Text API.
+You can start and stop recording at any desired timing.
 
 ## Feature
 
-- スクリプトを一度目に起動したときは録音を開始、二度目は録音を停止し、Speech-to-Text APIにリクエストをする。そしてクリップボードに貼り付ける。
-- カーソル位置や選択部分をコンテキストとして一緒にリクエストする。
+- When the script is launched for the first time, it starts recording; the second time, it stops recording and sends a request to the Speech-to-Text API. Then it pastes the result to the clipboard.
+- The cursor position or selected text is included in the request as context.
+
+## Environment Variables
+
+You can customize settings using environment variables:
+
+- `OPENAI_API_KEY`: OpenAI API key (required)
+- `OPENAI_TRANSCRIBE_MODEL`: Transcription model to use (default: `gpt-4o-mini-transcribe`)
+
+Please refer to the `.env.example` file for configuration examples.
 
 ## How to Use
 
