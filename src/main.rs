@@ -20,8 +20,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
     println!("環境変数を読み込みました");
 
-    // ここは省略、API Keyなどのチェックは同じ
-
     // Tokio ランタイムの作成
     let rt = Runtime::new()?;
 
@@ -36,24 +34,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // device_query を使ってグローバルなキー入力監視をバックグラウンドスレッドで実行
     let monitor_handle = thread::spawn(move || {
         let device_state = DeviceState::new();
-        let mut last_keys = Vec::new();
+        let mut alt_pressed = false;
 
         loop {
             let keys = device_state.get_keys();
-            // 直前に押されてなかったキーだけを対象にする
-            for key in &keys {
-                if !last_keys.contains(key) {
-                    println!("キーが押された: {:?}", key);
-                    if *key == Keycode::Enter {
-                        // Enter キーなら
-                        let mut trigger = stop_trigger_clone.lock().unwrap();
-                        *trigger = true;
-                        println!("Enter キー検知！録音停止トリガー発動！");
-                        return; // ループを抜けてスレッド終了
-                    }
-                }
+
+            // Altキーが押されているか確認
+            alt_pressed = keys.contains(&Keycode::LAlt) || keys.contains(&Keycode::RAlt);
+
+            // Alt+8の組み合わせをチェック
+            if alt_pressed && keys.contains(&Keycode::Key8) {
+                let mut trigger = stop_trigger_clone.lock().unwrap();
+                *trigger = true;
+                println!("Alt+8 キー検知！録音停止トリガー発動！");
+                return; // ループを抜けてスレッド終了
             }
-            last_keys = keys;
+
             thread::sleep(Duration::from_millis(10));
         }
     });
@@ -73,11 +69,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("録音停止処理開始するで...");
     let transcription = rt.block_on(stop_recording_and_transcribe())?;
-    println!("録音停止完了！文字起こし結果: {}", transcription);
+    println!("{}", transcription);
 
     let mut clipboard = Clipboard::new().unwrap();
     clipboard.set_text(transcription).unwrap();
-    println!("文字起こし結果をクリップボードにコピーしました");
 
     Ok(())
 }
