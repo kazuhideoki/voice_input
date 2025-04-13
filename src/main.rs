@@ -13,8 +13,6 @@ mod transcribe_audio;
 use key_monitor::{start_key_monitor, wait_for_stop_trigger};
 use request_speech_to_text::{start_recording, stop_recording_and_transcribe};
 
-// ここは既存の録音開始・停止処理のモジュールを使う前提
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if Path::new(RECORDING_STATUS_FILE).exists() {
         // 起動と停止を同じコマンドで実行するため、録音中の場合は処理をスキップ。

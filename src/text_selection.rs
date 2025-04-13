@@ -2,6 +2,7 @@
 use std::process::Command;
 
 pub fn get_selected_text() -> Result<String, String> {
+    // アクティブラウィンドウの選択部分のみを取得する
     let script = r#"
         tell application "System Events"
             set frontApp to name of first application process whose frontmost is true
@@ -19,13 +20,13 @@ pub fn get_selected_text() -> Result<String, String> {
         .arg("-e")
         .arg(script)
         .output()
-        .map_err(|e| format!("AppleScriptの実行に失敗: {}", e))?;
+        .map_err(|e| format!("Failed to execute AppleScript: {}", e))?;
 
     if output.status.success() {
         let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(text)
     } else {
         let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        Err(format!("AppleScriptエラー: {}", error))
+        Err(format!("AppleScript error: {}", error))
     }
 }

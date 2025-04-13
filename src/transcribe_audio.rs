@@ -10,7 +10,10 @@ struct TranscriptionResponse {
     pub text: String,
 }
 
-pub async fn transcribe_audio(audio_file_path: &str) -> Result<String, Box<dyn std::error::Error>> {
+pub async fn transcribe_audio(
+    audio_file_path: &str,
+    prompt: Option<&str>,
+) -> Result<String, Box<dyn std::error::Error>> {
     let api_key =
         env::var("OPENAI_API_KEY").map_err(|_| "OPENAI_API_KEY environment variable not set")?;
 
@@ -34,10 +37,19 @@ pub async fn transcribe_audio(audio_file_path: &str) -> Result<String, Box<dyn s
         .mime_str("audio/wav")?;
 
     // Build the form
-    let form = multipart::Form::new()
+    let mut form = multipart::Form::new()
         .part("file", file_part)
         .text("model", "gpt-4o-transcribe")
         .text("language", "ja");
+
+    // Add prompt if provided
+    if let Some(prompt_text) = prompt {
+        let formatted_prompt = format!(
+            "以下に示すのは関連する文章。これを考慮して文字起こしをしてほしい。 {:?}",
+            prompt_text
+        );
+        form = form.text("prompt", formatted_prompt);
+    }
 
     // Send request
     let response = client
