@@ -31,8 +31,9 @@ thread_local! {
 
 // 録音状態を管理するためのファイルパス
 const RECORDING_STATUS_FILE: &str = "recording_status.txt";
-const LAST_RECORDING_FILE: &str = "last_recording.txt";
 
+// TODO record file 管理を repository 的にまとめる？
+const LAST_RECORDING_FILE: &str = "last_recording.txt";
 pub fn is_recording() -> bool {
     Path::new(RECORDING_STATUS_FILE).exists()
 }

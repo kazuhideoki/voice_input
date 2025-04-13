@@ -15,6 +15,7 @@ use request_speech_to_text::{start_recording, stop_recording_and_transcribe};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if is_recording() {
+        // 起動と停止を同じコマンドで実行するため、録音中の場合は処理をスキップ。
         return Ok(());
     }
     dotenv::dotenv().ok();
