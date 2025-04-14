@@ -24,8 +24,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rt = Runtime::new()?;
 
     println!("Starting recording...");
-    sound_player::play_start_sound();
     let (selected_text, was_music_playing) = rt.block_on(start_recording())?;
+    sound_player::play_start_sound();
     println!("Recording started! Press Alt+8 key anywhere to stop recording!");
 
     // Store selected text and music state for later use
@@ -40,12 +40,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Starting to process recording stop...");
     sound_player::play_stop_sound();
-    let transcription = rt.block_on(stop_recording_and_transcribe(start_selected_text, was_music_playing))?;
-    sound_player::play_transcription_complete_sound();
+    let transcription = rt.block_on(stop_recording_and_transcribe(
+        start_selected_text,
+        was_music_playing,
+    ))?;
     println!("{}", transcription);
 
     let mut clipboard = Clipboard::new().unwrap();
     clipboard.set_text(transcription).unwrap();
+
+    sound_player::play_transcription_complete_sound();
 
     Ok(())
 }
