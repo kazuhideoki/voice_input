@@ -25,10 +25,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Starting recording...");
     sound_player::play_start_sound();
-    let (selected_text, _) = rt.block_on(start_recording())?;
+    let (selected_text, was_music_playing) = rt.block_on(start_recording())?;
     println!("Recording started! Press Alt+8 key anywhere to stop recording!");
 
-    // Store selected text for later use
+    // Store selected text and music state for later use
     let start_selected_text = selected_text;
 
     // キー監視の開始
@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Starting to process recording stop...");
     sound_player::play_stop_sound();
-    let transcription = rt.block_on(stop_recording_and_transcribe(start_selected_text))?;
+    let transcription = rt.block_on(stop_recording_and_transcribe(start_selected_text, was_music_playing))?;
     sound_player::play_transcription_complete_sound();
     println!("{}", transcription);
 
