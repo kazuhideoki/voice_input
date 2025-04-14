@@ -40,7 +40,7 @@ pub fn pause_apple_music() -> bool {
         .arg("-e")
         .arg(check_script)
         .output();
-    
+
     // Apple Musicが起動していて、再生中か確認
     if let Ok(output) = check_output {
         if let Ok(result) = String::from_utf8(output.stdout) {
@@ -58,8 +58,8 @@ pub fn pause_apple_music() -> bool {
                 if let Ok(output) = std::process::Command::new("osascript")
                     .arg("-e")
                     .arg(playing_script)
-                    .output() {
-                    
+                    .output()
+                {
                     if let Ok(result) = String::from_utf8(output.stdout) {
                         return result.trim() == "true";
                     }
@@ -67,7 +67,7 @@ pub fn pause_apple_music() -> bool {
             }
         }
     }
-    
+
     false
 }
 
@@ -83,7 +83,7 @@ pub fn resume_apple_music() {
         .arg("-e")
         .arg(check_script)
         .output();
-    
+
     // コマンド実行に成功し、出力が "true" ならば再生を試みる
     if let Ok(output) = check_output {
         if let Ok(result) = String::from_utf8(output.stdout) {
