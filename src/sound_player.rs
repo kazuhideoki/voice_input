@@ -26,3 +26,32 @@ pub fn play_transcription_complete_sound() {
         .spawn()
         .ok();
 }
+
+// 例: Apple Music を一時停止させる
+pub fn pause_apple_music() {
+    let script = r#"
+        tell application "Music"
+            if player state is playing then
+                pause
+            end if
+        end tell
+    "#;
+
+    let _ = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output();
+}
+
+pub fn resume_apple_music() {
+    let script = r#"
+        tell application "Music"
+            play
+        end tell
+    "#;
+
+    let _ = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output();
+}

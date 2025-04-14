@@ -1,7 +1,8 @@
-use std::path::Path;
-
 use arboard::Clipboard;
 use audio_recoder::RECORDING_STATUS_FILE;
+use key_monitor::{start_key_monitor, wait_for_stop_trigger};
+use request_speech_to_text::{start_recording, stop_recording_and_transcribe};
+use std::path::Path;
 use tokio::runtime::Runtime;
 
 mod audio_recoder;
@@ -10,9 +11,6 @@ mod request_speech_to_text;
 mod sound_player;
 mod text_selection;
 mod transcribe_audio;
-
-use key_monitor::{start_key_monitor, wait_for_stop_trigger};
-use request_speech_to_text::{start_recording, stop_recording_and_transcribe};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if Path::new(RECORDING_STATUS_FILE).exists() {
