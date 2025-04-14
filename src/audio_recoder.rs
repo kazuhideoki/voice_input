@@ -28,7 +28,7 @@ thread_local! {
     });
 }
 
-// 録音状態を管理するためのファイルパス
+// 録音状態を管理するためのファイルパス TODO SQLite などちゃんとしたデータ管理にする
 pub const RECORDING_STATUS_FILE: &str = "/tmp/voice_input_recording_status.txt";
 
 // TODO record file 管理を repository 的にまとめる？
