@@ -11,13 +11,12 @@ pub fn start_key_monitor() -> (Arc<Mutex<bool>>, JoinHandle<()>) {
     // device_query を使ってグローバルなキー入力監視をバックグラウンドスレッドで実行
     let monitor_handle = thread::spawn(move || {
         let device_state = DeviceState::new();
-        let mut alt_pressed = false;
 
         loop {
             let keys = device_state.get_keys();
 
             // Altキーが押されているか確認
-            alt_pressed = keys.contains(&Keycode::LAlt) || keys.contains(&Keycode::RAlt);
+            let alt_pressed = keys.contains(&Keycode::LAlt) || keys.contains(&Keycode::RAlt);
 
             // Alt+8の組み合わせをチェック
             if alt_pressed && keys.contains(&Keycode::Key8) {
