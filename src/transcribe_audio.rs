@@ -16,9 +16,10 @@ pub async fn transcribe_audio(
 ) -> Result<String, Box<dyn std::error::Error>> {
     let api_key =
         env::var("OPENAI_API_KEY").map_err(|_| "OPENAI_API_KEY environment variable not set")?;
-        
+
     // Get model from environment variable or use default
-    let model = env::var("OPENAI_TRANSCRIBE_MODEL").unwrap_or_else(|_| "gpt-4o-mini-transcribe".to_string());
+    let model = env::var("OPENAI_TRANSCRIBE_MODEL")
+        .unwrap_or_else(|_| "gpt-4o-mini-transcribe".to_string());
 
     let client = reqwest::Client::new();
     let url = "https://api.openai.com/v1/audio/transcriptions";
@@ -48,7 +49,7 @@ pub async fn transcribe_audio(
     // Add prompt if provided
     if let Some(prompt_text) = prompt {
         let formatted_prompt = format!(
-            "以下に示すのは関連する文章。これを考慮して文字起こしをしてほしい。 {:?}",
+            "The following text provides relevant context. Please consider this when creating the transcription: {:?}",
             prompt_text
         );
         form = form.text("prompt", formatted_prompt);
