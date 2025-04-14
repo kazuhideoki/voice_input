@@ -7,6 +7,7 @@ use tokio::runtime::Runtime;
 mod audio_recoder;
 mod key_monitor;
 mod request_speech_to_text;
+mod sound_player;
 mod text_selection;
 mod transcribe_audio;
 
@@ -25,6 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rt = Runtime::new()?;
 
     println!("Starting recording...");
+    sound_player::play_start_sound();
     rt.block_on(start_recording())?;
     println!("Recording started! Press Alt+8 key anywhere to stop recording!");
 
@@ -36,7 +38,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     monitor_handle.join().unwrap();
 
     println!("Starting to process recording stop...");
+    sound_player::play_stop_sound();
     let transcription = rt.block_on(stop_recording_and_transcribe())?;
+    sound_player::play_transcription_complete_sound();
     println!("{}", transcription);
 
     let mut clipboard = Clipboard::new().unwrap();
