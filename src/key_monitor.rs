@@ -2,8 +2,11 @@ use device_query::{DeviceQuery, DeviceState, Keycode};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+use tokio::sync::mpsc::Receiver;
 
-pub fn start_key_monitor() -> (Arc<Mutex<bool>>, JoinHandle<()>) {
+pub fn start_key_monitor(
+    mut notify_timeout_rx: Receiver<()>,
+) -> (Arc<Mutex<bool>>, JoinHandle<()>) {
     // 停止トリガーを共有するためのフラグ
     let stop_trigger = Arc::new(Mutex::new(false));
     let stop_trigger_clone = stop_trigger.clone();
@@ -23,6 +26,13 @@ pub fn start_key_monitor() -> (Arc<Mutex<bool>>, JoinHandle<()>) {
                 let mut trigger = stop_trigger_clone.lock().unwrap();
                 *trigger = true;
                 println!("Alt+8 キー検知！録音停止トリガー発動！");
+                return; // ループを抜けてスレッド終了
+            }
+
+            if notify_timeout_rx.try_recv().is_ok() {
+                let mut trigger = stop_trigger_clone.lock().unwrap();
+                *trigger = true;
+                println!("タイムアウト発生！録音停止トリガー発動！");
                 return; // ループを抜けてスレッド終了
             }
 

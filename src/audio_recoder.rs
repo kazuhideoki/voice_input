@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, Sender};
 
 // グローバル状態を管理するための構造体
 pub struct RecordingState {
@@ -38,6 +38,7 @@ const RECORDING_FILE_PATH: &str = "/tmp/voice_input_recorded.wav";
 // 録音を開始する関数（時間指定可能、Noneなら無限に録音）
 pub async fn record_with_duration(
     duration_secs: Option<u64>,
+    notify_timeout_tx: Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // 録音状態を確認
     if Path::new(RECORDING_STATUS_FILE).exists() {
@@ -69,31 +70,16 @@ pub async fn record_with_duration(
                 let (tx, mut rx) = mpsc::channel::<()>(1);
                 state.stop_signal = Some(tx);
 
-                // 別スレッドで指定時間後に録音を停止するための通知チャネル
-                let (notify_tx, mut notify_rx) = mpsc::channel::<()>(1);
-
                 // 別スレッドで指定時間後に録音を停止
                 tokio::spawn(async move {
                     tokio::select! {
                         _ = tokio::time::sleep(Duration::from_secs(duration)) => {
                             // 時間が経過したので録音を停止
-                            let _ = notify_tx.send(()).await;
+                            let _ = notify_timeout_tx.send(()).await;
                         }
                         _ = rx.recv() => {
                             // 明示的に停止された場合は何もしない
                         }
-                    }
-                });
-
-                // メインスレッドに停止通知が来た場合の処理
-                tokio::spawn(async move {
-                    if notify_rx.recv().await.is_some() {
-                        println!("タイムアウトにより録音を停止します...");
-                        // ここでstop_recordingをモジュール外から呼び出す
-                        std::process::Command::new("cargo")
-                            .args(&["run", "--", "stop"])
-                            .spawn()
-                            .ok();
                     }
                 });
             }
@@ -157,22 +143,19 @@ pub async fn stop_recording() -> Result<String, Box<dyn std::error::Error>> {
             }
         }
 
-        // ストリームを停止（存在する場合）
         if let Some(stream) = &state.stream {
             stream.pause().expect("ストリームの停止に失敗しとる");
         }
-
-        // 停止シグナルを取り出す
         let tx_opt = state.stop_signal.take();
         state.is_recording = false;
-
-        // 録音データをファイルに保存
-        let filename = save_recording_to_file(&state);
-
-        // 最後の録音ファイル名を保存
+        let filename = match save_recording_to_file(&state) {
+            Ok(f) => f,
+            Err(e) => {
+                return Err(format!("録音データの保存に失敗しました: {}", e).into());
+            }
+        };
         fs::write(LAST_RECORDING_FILE, &filename)
             .expect("最後の録音ファイル名の保存に失敗しました");
-
         Ok((filename, tx_opt))
     })?; // エラーの場合は早期リターン
 
@@ -237,40 +220,28 @@ fn prepare_recording(state: &mut RecordingState) {
 }
 
 // 録音データをファイルに保存する関数
-fn save_recording_to_file(state: &RecordingState) -> String {
-    // 録音データを取得
+fn save_recording_to_file(state: &RecordingState) -> Result<String, Box<dyn std::error::Error>> {
     let recorded_samples = state.samples.lock().unwrap().clone();
     if recorded_samples.is_empty() {
-        println!("録音サンプルが一つも取れてへんけぇ");
-        return String::new();
+        Err("録音サンプルが一つも取れてへんけぇ".into())
+    } else {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: state.sample_rate,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let filename = RECORDING_FILE_PATH;
+        let mut writer = hound::WavWriter::create(&filename, spec)?;
+        for sample in recorded_samples.iter() {
+            let clamped = sample.max(-1.0).min(1.0);
+            let value = (clamped * i16::MAX as f32) as i16;
+            writer.write_sample(value)?;
+        }
+        writer.finalize()?;
+        println!("WAVファイルとして '{}' に保存したけぇ", filename);
+        Ok(filename.to_string())
     }
-
-    // WAVファイルの設定
-    let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: state.sample_rate,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-
-    // 新しいファイル名を生成
-    let filename = RECORDING_FILE_PATH;
-
-    let mut writer =
-        hound::WavWriter::create(&filename, spec).expect("WAVファイルの作成に失敗しとる");
-
-    // サンプルをWAVファイルに書き出す
-    for sample in recorded_samples.iter() {
-        let clamped = sample.max(-1.0).min(1.0);
-        let value = (clamped * i16::MAX as f32) as i16;
-        writer
-            .write_sample(value)
-            .expect("サンプルの書き込みに失敗しとる");
-    }
-    writer.finalize().expect("WAVファイルの確定に失敗しとる");
-
-    println!("WAVファイルとして '{}' に保存したけぇ", filename);
-    filename.to_string()
 }
 
 // 指定したサンプルフォーマットで入力ストリームを構築する関数

@@ -3,7 +3,7 @@ use audio_recoder::RECORDING_STATUS_FILE;
 use key_monitor::{start_key_monitor, wait_for_stop_trigger};
 use request_speech_to_text::{start_recording, stop_recording_and_transcribe};
 use std::path::Path;
-use tokio::runtime::Runtime;
+use tokio::{runtime::Runtime, sync::mpsc};
 
 mod audio_recoder;
 mod key_monitor;
@@ -26,7 +26,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rt = Runtime::new()?;
 
     println!("Starting recording...");
-    let selected_text = rt.block_on(start_recording())?;
+    // 別スレッドで指定時間後に録音を停止するための通知チャネル
+    let (notify_timeout_tx, notify_timeout_rx) = mpsc::channel::<()>(2);
+
+    let selected_text = rt.block_on(start_recording(notify_timeout_tx))?;
     println!("Recording started! Press Alt+8 key anywhere to stop recording!");
 
     sound_player::play_start_sound();
@@ -35,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start_selected_text = selected_text;
 
     // キー監視の開始
-    let (stop_trigger, monitor_handle) = start_key_monitor();
+    let (stop_trigger, monitor_handle) = start_key_monitor(notify_timeout_rx);
     // 停止トリガーを待つ
     wait_for_stop_trigger(&stop_trigger);
     // 監視スレッドの終了待ち
