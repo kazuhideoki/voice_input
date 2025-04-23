@@ -2,6 +2,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Sample, SampleFormat};
 use hound;
 use std::cell::RefCell;
+use std::env;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -167,15 +168,86 @@ pub async fn stop_recording() -> Result<String, Box<dyn std::error::Error>> {
     println!("録音を停止しました: {:?}", filename);
     Ok(filename)
 }
+// 優先度に基づいて入力デバイスを選択する関数
+fn select_input_device(host: &cpal::Host) -> Option<cpal::Device> {
+    // 環境変数からデバイス優先順位を取得
+    let priority_devices = match env::var("INPUT_DEVICE_PRIORITY") {
+        Ok(value) => {
+            // 環境変数が設定されている場合、カンマで分割
+            let devices: Vec<String> = value
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            if devices.is_empty() {
+                println!(
+                    "環境変数 INPUT_DEVICE_PRIORITY が空です。デフォルトの優先順位を使用します。"
+                );
+                panic!("デバイス優先順位が空です。")
+            } else {
+                println!("環境変数から読み込んだ優先デバイスリスト: {:?}", devices);
+                devices
+            }
+        }
+        Err(_) => {
+            println!(
+                "環境変数 INPUT_DEVICE_PRIORITY が設定されていません。デフォルトの優先順位を使用します。"
+            );
+            panic!("デバイス優先順位が設定されていません。")
+        }
+    };
+
+    // 利用可能なすべての入力デバイスを取得
+    let input_devices = match host.input_devices() {
+        Ok(devices) => devices.collect::<Vec<_>>(),
+        Err(e) => {
+            println!("入力デバイスの一覧取得に失敗しました: {:?}", e);
+            return host.default_input_device();
+        }
+    };
+
+    println!("利用可能な入力デバイス:");
+    for (i, device) in input_devices.iter().enumerate() {
+        if let Ok(name) = device.name() {
+            println!("  {}. {}", i + 1, name);
+        }
+    }
+
+    // 優先順位に従ってデバイスを探す
+    for device_name in priority_devices.iter() {
+        for device in &input_devices {
+            if let Ok(name) = device.name() {
+                if name == device_name.as_str() {
+                    println!("優先デバイスを選択: {}", name);
+                    return Some(device.clone());
+                }
+            }
+        }
+    }
+
+    // 優先デバイスが見つからない場合はデフォルトデバイスを使用
+    println!("優先デバイスが見つからないためデフォルトデバイスを使用します");
+    if let Some(default_device) = host.default_input_device() {
+        if let Ok(name) = default_device.name() {
+            println!("デフォルトデバイス: {}", name);
+        }
+        Some(default_device)
+    } else {
+        println!("デフォルトデバイスも見つかりません。録音できない可能性があります。");
+        None
+    }
+}
 
 // 録音の準備を行う関数
 fn prepare_recording(state: &mut RecordingState) {
-    // CPALのデフォルトホストと入力デバイスを取得する
+    // CPALのデフォルトホストを取得する
     let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .expect("入力デバイスが見つからんけぇ");
-    println!("入力デバイス: {}", device.name().unwrap());
+
+    // 優先順位に基づいて入力デバイスを選択
+    let device = select_input_device(&host).expect("入力デバイスが見つからんけぇ");
+
+    println!("選択された入力デバイス: {}", device.name().unwrap());
 
     // 入力設定を取得する
     let config = device
