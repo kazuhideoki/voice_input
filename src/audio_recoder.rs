@@ -1,3 +1,4 @@
+use chrono::Utc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Sample, SampleFormat};
 use hound;
@@ -303,7 +304,13 @@ fn save_recording_to_file(state: &RecordingState) -> Result<String, Box<dyn std:
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
-        let filename = RECORDING_FILE_PATH;
+
+        // ★ タイムスタンプ付きファイル名に変更
+        let filename = format!(
+            "/tmp/voice_input_{}.wav",
+            Utc::now().format("%Y%m%d_%H%M%S")
+        );
+
         let mut writer = hound::WavWriter::create(&filename, spec)?;
         for sample in recorded_samples.iter() {
             let clamped = sample.max(-1.0).min(1.0);
@@ -312,7 +319,12 @@ fn save_recording_to_file(state: &RecordingState) -> Result<String, Box<dyn std:
         }
         writer.finalize()?;
         println!("WAVファイルとして '{}' に保存したけぇ", filename);
-        Ok(filename.to_string())
+
+        // 最後の録音ファイル名を記録
+        fs::write(LAST_RECORDING_FILE, &filename)
+            .expect("最後の録音ファイル名の保存に失敗しました");
+
+        Ok(filename)
     }
 }
 
