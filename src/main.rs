@@ -1,6 +1,4 @@
 use std::process::Command;
-use std::{fs, path::Path};
-use sysinfo::System;
 
 use arboard::Clipboard;
 use clap::{Parser, Subcommand};
@@ -8,13 +6,11 @@ use ctrlc;
 use tokio::{runtime::Runtime, sync::mpsc};
 
 mod audio_recoder;
-mod key_monitor;
 mod request_speech_to_text;
 mod sound_player;
 mod text_selection;
 mod transcribe_audio;
 
-use audio_recoder::RECORDING_STATUS_FILE;
 use voice_input::spawn_detached;
 
 /// ===================================================
@@ -123,14 +119,4 @@ fn record_flow() -> Result<(), Box<dyn std::error::Error>> {
     println!("Spawned transcribe process for {wav_path}");
 
     Ok(())
-}
-
-fn someone_else_is_recording() -> bool {
-    let me = std::process::id() as usize; // ← 自分の PID
-    System::new_all()
-        .processes_by_exact_name(std::ffi::OsStr::new("voice_input"))
-        .any(|proc| {
-            usize::from(proc.pid()) != me             // ★ PID が違う
-             && proc.cmd().iter().any(|c| c == "record")
-        }) //   かつ subcmd=record
 }
