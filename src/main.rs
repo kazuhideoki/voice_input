@@ -44,14 +44,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.cmd.unwrap_or(Cmd::Record) {
-        Cmd::Transcribe { wav, prompt } => transcribe_flow(&wav, prompt.as_deref()),
-        Cmd::Record => record_flow(),
+        Cmd::Transcribe { wav, prompt } => run_transcription(&wav, prompt.as_deref()),
+        Cmd::Record => run_record_cycle(),
     }
 }
 
 /// ---------------------------------------------------
 /// 転写処理（バックグラウンド実行）
-fn transcribe_flow(wav: &str, prompt: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+fn run_transcription(wav: &str, prompt: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     println!("Transcribing {wav} …");
 
     let rt = Runtime::new()?;
@@ -75,7 +75,7 @@ fn transcribe_flow(wav: &str, prompt: Option<&str>) -> Result<(), Box<dyn std::e
 
 /// ---------------------------------------------------
 /// 録音トグル処理
-fn record_flow() -> Result<(), Box<dyn std::error::Error>> {
+fn run_record_cycle() -> Result<(), Box<dyn std::error::Error>> {
     // ---------------- 録音開始 ----------------
     let rt = Runtime::new()?;
     let (notify_tx, _notify_rx) = mpsc::channel::<()>(1);
