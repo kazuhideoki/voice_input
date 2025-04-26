@@ -2282,6 +2282,7 @@ dependencies = [
  "sysinfo",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "url",
 ]
 

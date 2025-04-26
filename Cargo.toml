@@ -3,6 +3,23 @@ name = "voice_input"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+path = "src/lib.rs" # 既存ライブラリ
+
+# ─────────────────────────────────────────
+# 実行バイナリ（全て [[bin]] で列挙）
+# ─────────────────────────────────────────
+[[bin]]
+name = "voice_input" # クライアント CLI
+path = "src/main.rs"
+
+[[bin]]
+name = "voice_inputd"            # 常駐デーモン
+path = "src/bin/voice_inputd.rs"
+
+# ─────────────────────────────────────────
+# 依存クレート ― ご指定をそのまま使用
+# ─────────────────────────────────────────
 [dependencies]
 device_query = "1.1.0"
 tokio = { version = "1.28.0", features = ["full"] }
@@ -21,3 +38,4 @@ clap = { version = "4.5", features = ["derive"] }
 arboard = "3.5.0"
 ctrlc = "3.4"
 sysinfo = "0.34.2"
+tokio-util = { version = "0.7", features = ["codec"] }
