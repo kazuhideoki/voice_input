@@ -29,6 +29,39 @@ impl Default for CpalAudioBackend {
     }
 }
 
+/// `INPUT_DEVICE_PRIORITY` を解釈して使用デバイスを決定する
+fn select_input_device(host: &cpal::Host) -> Option<Device> {
+    use std::env;
+
+    // 1) 環境変数から優先リストを取得
+    let priorities: Vec<String> = env::var("INPUT_DEVICE_PRIORITY")
+        .ok()?
+        .split(',')
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    // 2) システム上の入力デバイスを列挙
+    let available: Vec<Device> = host.input_devices().ok()?.collect();
+
+    // 3) 優先順位で探索
+    for want in &priorities {
+        if let Some(dev) = available
+            .iter()
+            .find(|d| d.name().map(|n| n == *want).unwrap_or(false))
+        {
+            println!("🎙️  Using preferred device: {}", want);
+            return Some(dev.clone());
+        }
+    }
+
+    // 4) 見つからなければデフォルト
+    println!("⚠️  No preferred device found, falling back to default input device");
+    host.default_input_device()
+}
+
+// =============== 既存実装 ================================
+
 impl CpalAudioBackend {
     fn make_output_path() -> String {
         let ts = SystemTime::now()
@@ -96,16 +129,16 @@ impl AudioBackend for CpalAudioBackend {
             return Err("already recording".into());
         }
 
+        // ─── Host とデバイス選択 ─────────────────────────
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .ok_or("no input device available")?;
+        let device = select_input_device(&host)
+            .ok_or("no input device available (check INPUT_DEVICE_PRIORITY)")?;
 
         let supported = device.default_input_config()?;
         let sample_format = supported.sample_format();
         let config: StreamConfig = supported.into();
 
-        // 動的に出力パス生成
+        // ─── WAV 出力パス & ストリーム ────────────────────
         let wav_path = Self::make_output_path();
         let stream = Self::build_input_stream(
             self.recording.clone(),
@@ -126,7 +159,7 @@ impl AudioBackend for CpalAudioBackend {
         if !self.is_recording() {
             return Err("not recording".into());
         }
-        *self.stream.lock().unwrap() = None; // drop
+        *self.stream.lock().unwrap() = None; // drop stream
         self.recording.store(false, Ordering::SeqCst);
 
         let path = self
