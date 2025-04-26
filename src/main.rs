@@ -1,5 +1,3 @@
-//! src/main.rs  ― フル機能版
-
 use std::{fs, process::Command, thread, time::Duration};
 
 use arboard::Clipboard;

@@ -1,8 +1,5 @@
-// src/domain/recorder.rs
 use crate::infrastructure::audio::AudioBackend;
 use std::error::Error;
-
-/// Recorder domain service
 pub struct Recorder<T: AudioBackend> {
     audio_backend: T,
 }
@@ -28,4 +25,3 @@ impl<T: AudioBackend> Recorder<T> {
         self.audio_backend.is_recording()
     }
 }
-
