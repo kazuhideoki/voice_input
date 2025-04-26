@@ -26,6 +26,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Keep functions focused and small when possible
 - Format code with rustfmt
 
+## crate
+
+- **MUST NOT USE** anyhow
+
 ## Workflows
 
 - After Edit, MUST run `cargo check` for type checking unless otherwise instructed

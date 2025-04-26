@@ -3,11 +3,11 @@ use std::{fs, process::Command, thread, time::Duration};
 use arboard::Clipboard;
 use clap::{Parser, Subcommand};
 use ctrlc;
-use tokio::{runtime::Runtime, sync::mpsc};
+use tokio::runtime::Runtime;
 
 use voice_input::{
     infrastructure::{
-        audio::cpal_backend,
+        audio::CpalAudioBackend,
         external::{
             clipboard, openai,
             sound::{
@@ -60,7 +60,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Record { paste } => run_record_cycle(paste),
     }
 }
-
 /// ---------------------------------------------------
 /// 転写処理（バックグラウンド実行）
 fn run_transcription(
@@ -102,42 +101,45 @@ fn run_transcription(
 /// ---------------------------------------------------
 /// 録音トグル処理
 fn run_record_cycle(paste: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let rt = Runtime::new()?;
-    let (notify_tx, _notify_rx) = mpsc::channel::<()>(1);
-
-    // Apple Music を一時停止
+    // Apple Music 一時停止
     if pause_apple_music() {
         let _ = fs::write(MUSIC_MARKER_FILE, "");
     }
     play_start_sound();
 
-    // 選択テキスト取得 & 録音開始
+    // ==== 録音開始 ====
     let start_selected_text = clipboard::get_selected_text().ok();
-    rt.block_on(cpal_backend::start_recording(Some(30), notify_tx))?;
-    println!("Recording… もう一度 ⌥+8 で停止 (Raycast が SIGINT を送ります)");
+    let recorder = voice_input::domain::recorder::Recorder::new(CpalAudioBackend::default());
 
-    // ---------- 停止待ち ----------
-    let (sig_tx, sig_rx) = std::sync::mpsc::channel::<()>();
+    recorder.start()?; // ← block_on 不要
+    println!("Recording… もう一度 ⌥+8 で停止");
+
+    // Ctrl-C 待ち
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
     ctrlc::set_handler(move || {
-        let _ = sig_tx.send(());
+        let _ = tx.send(());
     })?;
-    sig_rx.recv().ok();
+    rx.recv().ok();
 
-    // ---------- 録音停止 ----------
+    // ==== 録音停止 ====
     println!("Stopping recording…");
-    let wav_path = rt.block_on(cpal_backend::stop_recording())?;
+    let wav_path = recorder.stop()?; // path 取得
     play_stop_sound();
 
-    // ---------- 転写サブプロセス detatch ----------
+    // ==== 転写プロセス detatch ====
     let exe = std::env::current_exe()?;
-    let mut args = vec!["transcribe", &wav_path];
+    let mut args: Vec<String> = vec![
+        "transcribe".to_owned(),
+        wav_path.clone(), // String のまま保持
+    ];
+
     if paste {
-        args.push("--paste");
+        args.push("--paste".to_owned());
     }
-    if let Some(ref txt) = start_selected_text {
-        if !txt.trim().is_empty() {
-            args.extend(["--prompt", txt]);
-        }
+
+    if let Some(txt) = start_selected_text.filter(|t| !t.trim().is_empty()) {
+        args.push("--prompt".to_owned());
+        args.push(txt); // 所有権ごと渡すので OK
     }
     spawn_detached(Command::new(exe), args)?;
     println!("Spawned transcribe process for {wav_path}");
