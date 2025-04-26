@@ -1,64 +1,123 @@
+use std::fs;
+use std::process::Command;
+
 use arboard::Clipboard;
-use audio_recoder::RECORDING_STATUS_FILE;
-use key_monitor::{start_key_monitor, wait_for_stop_trigger};
-use request_speech_to_text::{start_recording, stop_recording_and_transcribe};
-use std::path::Path;
+use clap::{Parser, Subcommand};
+use ctrlc;
 use tokio::{runtime::Runtime, sync::mpsc};
 
 mod audio_recoder;
-mod key_monitor;
 mod request_speech_to_text;
 mod sound_player;
 mod text_selection;
 mod transcribe_audio;
 
+use voice_input::spawn_detached;
+
+/// Apple Music の再生状態を一時保存するマーカー
+const MUSIC_MARKER_FILE: &str = "/tmp/voice_input_music_was_playing";
+
+/// ===================================================
+/// CLI
+/// ===================================================
+#[derive(Parser)]
+#[command(author, version, about = "Voice Input Toggle & Transcribe")]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// バックグラウンドで呼ばれる転写サブコマンド
+    Transcribe {
+        wav: String,
+        #[arg(long)]
+        prompt: Option<String>,
+    },
+    /// 録音 + 停止トグル
+    Record,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if Path::new(RECORDING_STATUS_FILE).exists() {
-        // 起動と停止を同じコマンドで実行するため、録音中の場合は処理をスキップ。
-        return Ok(());
-    }
     dotenv::dotenv().ok();
-    println!("Environment variables loaded");
+    let cli = Cli::parse();
 
-    let was_music_playing = sound_player::pause_apple_music(); // 音楽を停止、再生中だったかどうかを返す
+    match cli.cmd.unwrap_or(Cmd::Record) {
+        Cmd::Transcribe { wav, prompt } => transcribe_flow(&wav, prompt.as_deref()),
+        Cmd::Record => record_flow(),
+    }
+}
 
-    // Tokio ランタイムの作成
+/// ---------------------------------------------------
+/// 転写処理（バックグラウンド実行）
+fn transcribe_flow(wav: &str, prompt: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Transcribing {wav} …");
+
     let rt = Runtime::new()?;
+    let txt = rt.block_on(transcribe_audio::transcribe_audio(wav, prompt))?;
 
-    println!("Starting recording...");
-    // 別スレッドで指定時間後に録音を停止するための通知チャネル
-    let (notify_timeout_tx, notify_timeout_rx) = mpsc::channel::<()>(2);
-
-    let selected_text = rt.block_on(start_recording(notify_timeout_tx))?;
-    println!("Recording started! Press Alt+8 key anywhere to stop recording!");
-
-    sound_player::play_start_sound();
-
-    // Store selected text and music state for later use
-    let start_selected_text = selected_text;
-
-    // キー監視の開始
-    let (stop_trigger, monitor_handle) = start_key_monitor(notify_timeout_rx);
-    // 停止トリガーを待つ
-    wait_for_stop_trigger(&stop_trigger);
-    // 監視スレッドの終了待ち
-    monitor_handle.join().unwrap();
-
-    println!("Starting to process recording stop...");
-    sound_player::play_stop_sound();
-    let transcription = rt.block_on(stop_recording_and_transcribe(start_selected_text))?;
-    println!("{}", transcription);
-
-    let mut clipboard = Clipboard::new().unwrap();
-    clipboard.set_text(transcription).unwrap();
+    // クリップボードに貼り付け
+    let mut clipboard = Clipboard::new()?;
+    clipboard.set_text(&txt)?;
 
     sound_player::play_transcription_complete_sound();
+    println!("Transcription done:\n{txt}");
 
-    // 録音開始時に音楽が再生されていた場合のみ再開
-    if was_music_playing {
-        std::thread::sleep(std::time::Duration::from_secs(1));
+    // --- Apple Music を再開 ---
+    if std::path::Path::new(MUSIC_MARKER_FILE).exists() {
         sound_player::resume_apple_music();
+        let _ = fs::remove_file(MUSIC_MARKER_FILE);
     }
 
+    Ok(())
+}
+
+/// ---------------------------------------------------
+/// 録音トグル処理
+fn record_flow() -> Result<(), Box<dyn std::error::Error>> {
+    // ---------------- 録音開始 ----------------
+    let rt = Runtime::new()?;
+    let (notify_tx, _notify_rx) = mpsc::channel::<()>(1);
+
+    // ① テキスト選択を取得 & 録音開始
+    let start_selected_text = rt.block_on(request_speech_to_text::start_recording(notify_tx))?;
+    sound_player::play_start_sound();
+
+    // ② Apple Music が再生中なら一時停止し、マーカーを作成
+    if sound_player::pause_apple_music() {
+        let _ = fs::write(MUSIC_MARKER_FILE, "");
+    }
+
+    println!("Recording… もう一度 ⌥+8 で停止 (Raycast が SIGINT を送ります)");
+
+    // ---------------- 停止待ち ----------------
+    let (sig_tx, sig_rx) = std::sync::mpsc::channel::<()>();
+    ctrlc::set_handler(move || {
+        let _ = sig_tx.send(());
+    })?; // SIGINT / SIGTERM
+
+    sig_rx.recv().ok(); // ブロック
+
+    // ---------------- 録音停止 & 転写起動 ----------------
+    println!("Stopping recording…");
+    let wav_path = rt.block_on(audio_recoder::stop_recording())?;
+    sound_player::play_stop_sound();
+
+    // ③ 転写サブプロセスを detach で起動
+    let exe = std::env::current_exe()?;
+    match start_selected_text {
+        Some(ref txt) if !txt.trim().is_empty() => {
+            spawn_detached(
+                Command::new(exe),
+                ["transcribe", &wav_path, "--prompt", txt],
+            )?;
+        }
+        _ => {
+            spawn_detached(Command::new(exe), ["transcribe", &wav_path])?;
+        }
+    }
+
+    println!("Spawned transcribe process for {wav_path}");
     Ok(())
 }

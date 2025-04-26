@@ -1,3 +1,4 @@
+use chrono::Utc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Sample, SampleFormat};
 use hound;
@@ -226,17 +227,9 @@ fn select_input_device(host: &cpal::Host) -> Option<cpal::Device> {
         }
     }
 
-    // 優先デバイスが見つからない場合はデフォルトデバイスを使用
-    println!("優先デバイスが見つからないためデフォルトデバイスを使用します");
-    if let Some(default_device) = host.default_input_device() {
-        if let Ok(name) = default_device.name() {
-            println!("デフォルトデバイス: {}", name);
-        }
-        Some(default_device)
-    } else {
-        println!("デフォルトデバイスも見つかりません。録音できない可能性があります。");
-        None
-    }
+    // ---------- ③ フォールバック ----------
+    println!("優先リストが無い / 見つからないのでデフォルトを使用");
+    host.default_input_device()
 }
 
 // 録音の準備を行う関数
@@ -303,7 +296,13 @@ fn save_recording_to_file(state: &RecordingState) -> Result<String, Box<dyn std:
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
-        let filename = RECORDING_FILE_PATH;
+
+        // ★ タイムスタンプ付きファイル名に変更
+        let filename = format!(
+            "/tmp/voice_input_{}.wav",
+            Utc::now().format("%Y%m%d_%H%M%S")
+        );
+
         let mut writer = hound::WavWriter::create(&filename, spec)?;
         for sample in recorded_samples.iter() {
             let clamped = sample.max(-1.0).min(1.0);
@@ -312,7 +311,12 @@ fn save_recording_to_file(state: &RecordingState) -> Result<String, Box<dyn std:
         }
         writer.finalize()?;
         println!("WAVファイルとして '{}' に保存したけぇ", filename);
-        Ok(filename.to_string())
+
+        // 最後の録音ファイル名を記録
+        fs::write(LAST_RECORDING_FILE, &filename)
+            .expect("最後の録音ファイル名の保存に失敗しました");
+
+        Ok(filename)
     }
 }
 
