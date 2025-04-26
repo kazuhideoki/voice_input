@@ -1,3 +1,4 @@
+use std::fs;
 use std::process::Command;
 
 use arboard::Clipboard;
@@ -13,6 +14,9 @@ mod transcribe_audio;
 
 use voice_input::spawn_detached;
 
+/// Apple Music の再生状態を一時保存するマーカー
+const MUSIC_MARKER_FILE: &str = "/tmp/voice_input_music_was_playing";
+
 /// ===================================================
 /// CLI
 /// ===================================================
@@ -25,12 +29,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    // 文字起こしリクエストで別プロセスで実行される
+    /// バックグラウンドで呼ばれる転写サブコマンド
     Transcribe {
         wav: String,
         #[arg(long)]
         prompt: Option<String>,
     },
+    /// 録音 + 停止トグル
     Record,
 }
 
@@ -45,8 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// ---------------------------------------------------
-/// 転写処理（バックグラウンドで実行）
-/// ---------------------------------------------------
+/// 転写処理（バックグラウンド実行）
 fn transcribe_flow(wav: &str, prompt: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     println!("Transcribing {wav} …");
 
@@ -60,15 +64,31 @@ fn transcribe_flow(wav: &str, prompt: Option<&str>) -> Result<(), Box<dyn std::e
     sound_player::play_transcription_complete_sound();
     println!("Transcription done:\n{txt}");
 
+    // --- Apple Music を再開 ---
+    if std::path::Path::new(MUSIC_MARKER_FILE).exists() {
+        sound_player::resume_apple_music();
+        let _ = fs::remove_file(MUSIC_MARKER_FILE);
+    }
+
     Ok(())
 }
 
+/// ---------------------------------------------------
+/// 録音トグル処理
 fn record_flow() -> Result<(), Box<dyn std::error::Error>> {
     // ---------------- 録音開始 ----------------
     let rt = Runtime::new()?;
     let (notify_tx, _notify_rx) = mpsc::channel::<()>(1);
+
+    // ① テキスト選択を取得 & 録音開始
     let start_selected_text = rt.block_on(request_speech_to_text::start_recording(notify_tx))?;
     sound_player::play_start_sound();
+
+    // ② Apple Music が再生中なら一時停止し、マーカーを作成
+    if sound_player::pause_apple_music() {
+        let _ = fs::write(MUSIC_MARKER_FILE, "");
+    }
+
     println!("Recording… もう一度 ⌥+8 で停止 (Raycast が SIGINT を送ります)");
 
     // ---------------- 停止待ち ----------------
@@ -84,9 +104,8 @@ fn record_flow() -> Result<(), Box<dyn std::error::Error>> {
     let wav_path = rt.block_on(audio_recoder::stop_recording())?;
     sound_player::play_stop_sound();
 
+    // ③ 転写サブプロセスを detach で起動
     let exe = std::env::current_exe()?;
-
-    // ★ prompt 付きで転写プロセスを起動
     match start_selected_text {
         Some(ref txt) if !txt.trim().is_empty() => {
             spawn_detached(
@@ -98,7 +117,7 @@ fn record_flow() -> Result<(), Box<dyn std::error::Error>> {
             spawn_detached(Command::new(exe), ["transcribe", &wav_path])?;
         }
     }
-    println!("Spawned transcribe process for {wav_path}");
 
+    println!("Spawned transcribe process for {wav_path}");
     Ok(())
 }
