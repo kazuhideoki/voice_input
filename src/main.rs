@@ -80,14 +80,13 @@ fn run_record_cycle() -> Result<(), Box<dyn std::error::Error>> {
     let rt = Runtime::new()?;
     let (notify_tx, _notify_rx) = mpsc::channel::<()>(1);
 
-    // ① テキスト選択を取得 & 録音開始
-    let start_selected_text = rt.block_on(request_speech_to_text::start_recording(notify_tx))?;
-    sound_player::play_start_sound();
-
-    // ② Apple Music が再生中なら一時停止し、マーカーを作成
+    // 1 Apple Music が再生中なら一時停止し、マーカーを作成
     if sound_player::pause_apple_music() {
         let _ = fs::write(MUSIC_MARKER_FILE, "");
     }
+    sound_player::play_start_sound();
+    // 2 テキスト選択を取得 & 録音開始
+    let start_selected_text = rt.block_on(request_speech_to_text::start_recording(notify_tx))?;
 
     println!("Recording… もう一度 ⌥+8 で停止 (Raycast が SIGINT を送ります)");
 
@@ -104,7 +103,7 @@ fn run_record_cycle() -> Result<(), Box<dyn std::error::Error>> {
     let wav_path = rt.block_on(audio_recoder::stop_recording())?;
     sound_player::play_stop_sound();
 
-    // ③ 転写サブプロセスを detach で起動
+    // 3 転写サブプロセスを detach で起動
     let exe = std::env::current_exe()?;
     match start_selected_text {
         Some(ref txt) if !txt.trim().is_empty() => {
