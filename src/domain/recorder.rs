@@ -1,31 +1,22 @@
-// src/domain/recorder.rs
 use crate::infrastructure::audio::AudioBackend;
 use std::error::Error;
 
-/// Recorder domain service
+/// Thin wrapper around an `AudioBackend`
 pub struct Recorder<T: AudioBackend> {
-    audio_backend: T,
+    backend: T,
 }
 
 impl<T: AudioBackend> Recorder<T> {
-    /// Create a new recorder with the specified audio backend
-    pub fn new(audio_backend: T) -> Self {
-        Self { audio_backend }
+    pub fn new(backend: T) -> Self {
+        Self { backend }
     }
-
-    /// Start recording audio
-    pub fn start_recording(&self) -> Result<(), Box<dyn Error>> {
-        self.audio_backend.start_recording()
+    pub fn start(&self) -> Result<(), Box<dyn Error>> {
+        self.backend.start_recording()
     }
-
-    /// Stop recording and save to the specified WAV file path
-    pub fn stop_recording(&self, output_path: &str) -> Result<(), Box<dyn Error>> {
-        self.audio_backend.stop_recording(output_path)
+    pub fn stop(&self) -> Result<String, Box<dyn Error>> {
+        self.backend.stop_recording()
     }
-
-    /// Check if recording is in progress
     pub fn is_recording(&self) -> bool {
-        self.audio_backend.is_recording()
+        self.backend.is_recording()
     }
 }
-

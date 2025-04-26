@@ -1,15 +1,11 @@
-// src/infrastructure/audio/mod.rs
-pub mod cpal_backend;
+use std::error::Error;
 
-/// Trait for audio recording backends
 pub trait AudioBackend {
-    /// Start recording audio
-    fn start_recording(&self) -> Result<(), Box<dyn std::error::Error>>;
-    
-    /// Stop recording and save to the specified WAV file path
-    fn stop_recording(&self, output_path: &str) -> Result<(), Box<dyn std::error::Error>>;
-    
-    /// Check if recording is in progress
+    fn start_recording(&self) -> Result<(), Box<dyn Error>>;
+    /// 録音を停止し、保存した WAV ファイルのパスを返す
+    fn stop_recording(&self) -> Result<String, Box<dyn Error>>;
     fn is_recording(&self) -> bool;
 }
 
+pub mod cpal_backend;
+pub use cpal_backend::CpalAudioBackend;

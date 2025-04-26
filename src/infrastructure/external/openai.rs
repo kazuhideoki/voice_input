@@ -75,3 +75,16 @@ pub async fn transcribe_audio(
 
     Ok(transcription.text)
 }
+
+/* ===== ここからテスト ===== */
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_transcription_response_json() {
+        let json = r#"{"text":"こんにちは"}"#;
+        let resp: TranscriptionResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.text, "こんにちは");
+    }
+}
