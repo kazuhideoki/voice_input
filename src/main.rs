@@ -67,8 +67,7 @@ fn record_flow() -> Result<(), Box<dyn std::error::Error>> {
     // ---------------- 録音開始 ----------------
     let rt = Runtime::new()?;
     let (notify_tx, _notify_rx) = mpsc::channel::<()>(1);
-    // TODO prompt に渡す
-    rt.block_on(request_speech_to_text::start_recording(notify_tx))?;
+    let start_selected_text = rt.block_on(request_speech_to_text::start_recording(notify_tx))?;
     sound_player::play_start_sound();
     println!("Recording… もう一度 ⌥+8 で停止 (Raycast が SIGINT を送ります)");
 
@@ -86,7 +85,19 @@ fn record_flow() -> Result<(), Box<dyn std::error::Error>> {
     sound_player::play_stop_sound();
 
     let exe = std::env::current_exe()?;
-    spawn_detached(Command::new(exe), ["transcribe", &wav_path])?;
+
+    // ★ prompt 付きで転写プロセスを起動
+    match start_selected_text {
+        Some(ref txt) if !txt.trim().is_empty() => {
+            spawn_detached(
+                Command::new(exe),
+                ["transcribe", &wav_path, "--prompt", txt],
+            )?;
+        }
+        _ => {
+            spawn_detached(Command::new(exe), ["transcribe", &wav_path])?;
+        }
+    }
     println!("Spawned transcribe process for {wav_path}");
 
     Ok(())
