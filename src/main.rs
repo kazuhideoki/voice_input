@@ -25,53 +25,23 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    Toggle,
+    // 文字起こしリクエストで別プロセスで実行される
     Transcribe {
         wav: String,
         #[arg(long)]
         prompt: Option<String>,
     },
-    Record, // ★ 追加
+    Record,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
     let cli = Cli::parse();
 
-    match cli.cmd.unwrap_or(Cmd::Toggle) {
-        Cmd::Toggle => toggle_flow(),
+    match cli.cmd.unwrap_or(Cmd::Record) {
         Cmd::Transcribe { wav, prompt } => transcribe_flow(&wav, prompt.as_deref()),
-        Cmd::Record => record_flow(), // ★ 追加
+        Cmd::Record => record_flow(),
     }
-}
-
-/// ---------------------------------------------------
-/// トグル処理
-/// ---------------------------------------------------
-fn toggle_flow() -> Result<(), Box<dyn std::error::Error>> {
-    // Tokio ランタイム（同期/非同期混在のため都度生成）
-    let rt = Runtime::new()?;
-
-    // 録音中かどうか判定
-    // ---------- 録音状態を確認（孤児ファイル対策付き） ----------
-    // if Path::new(RECORDING_STATUS_FILE).exists() {
-    //     if someone_else_is_recording() {
-    //         return Err("すでに録音中です".into());
-    //     }
-    //     fs::remove_file(RECORDING_STATUS_FILE).ok(); // 孤児なら掃除
-    // }
-
-    // -------------------- 録音停止 --------------------
-    println!("Stopping recording…");
-    let wav_path = rt.block_on(audio_recoder::stop_recording())?;
-    sound_player::play_stop_sound();
-
-    // detach で転写サブプロセスを起動
-    let exe = std::env::current_exe()?;
-    spawn_detached(Command::new(exe), ["transcribe", &wav_path])?;
-    println!("Spawned transcribe process for {wav_path}");
-
-    Ok(())
 }
 
 /// ---------------------------------------------------
@@ -97,6 +67,7 @@ fn record_flow() -> Result<(), Box<dyn std::error::Error>> {
     // ---------------- 録音開始 ----------------
     let rt = Runtime::new()?;
     let (notify_tx, _notify_rx) = mpsc::channel::<()>(1);
+    // TODO prompt に渡す
     rt.block_on(request_speech_to_text::start_recording(notify_tx))?;
     sound_player::play_start_sound();
     println!("Recording… もう一度 ⌥+8 で停止 (Raycast が SIGINT を送ります)");
