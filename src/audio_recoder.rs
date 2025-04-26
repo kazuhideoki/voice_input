@@ -227,17 +227,9 @@ fn select_input_device(host: &cpal::Host) -> Option<cpal::Device> {
         }
     }
 
-    // 優先デバイスが見つからない場合はデフォルトデバイスを使用
-    println!("優先デバイスが見つからないためデフォルトデバイスを使用します");
-    if let Some(default_device) = host.default_input_device() {
-        if let Ok(name) = default_device.name() {
-            println!("デフォルトデバイス: {}", name);
-        }
-        Some(default_device)
-    } else {
-        println!("デフォルトデバイスも見つかりません。録音できない可能性があります。");
-        None
-    }
+    // ---------- ③ フォールバック ----------
+    println!("優先リストが無い / 見つからないのでデフォルトを使用");
+    host.default_input_device()
 }
 
 // 録音の準備を行う関数
