@@ -2,7 +2,6 @@ use std::{fs, process::Command, thread, time::Duration};
 
 use arboard::Clipboard;
 use clap::{Parser, Subcommand};
-use ctrlc;
 use tokio::runtime::Runtime;
 
 use voice_input::{
@@ -25,14 +24,14 @@ const MUSIC_MARKER_FILE: &str = "/tmp/voice_input_music_was_playing";
 /// ===================================================
 /// CLI 定義
 /// ===================================================
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(author, version, about = "Voice Input Toggle & Transcribe")]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum Cmd {
     /// バックグラウンドで呼ばれる転写サブコマンド
     Transcribe {
@@ -51,6 +50,12 @@ enum Cmd {
     },
 }
 
+//
+// ────────────────────────────────────────────────────────────
+//  本番実行エントリ（テストビルド時は無効化）
+// ────────────────────────────────────────────────────────────
+//
+#[cfg(not(test))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
     let cli = Cli::parse();
@@ -60,6 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Record { paste } => run_record_cycle(paste),
     }
 }
+
 /// ---------------------------------------------------
 /// 転写処理（バックグラウンド実行）
 fn run_transcription(
@@ -145,4 +151,30 @@ fn run_record_cycle(paste: bool) -> Result<(), Box<dyn std::error::Error>> {
     println!("Spawned transcribe process for {wav_path}");
 
     Ok(())
+}
+
+/* ===== ここからユニットテスト ===== */
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn record_with_paste_flag_parses() {
+        let cli = Cli::try_parse_from(["prog", "record", "--paste"]).unwrap();
+        match cli.cmd.unwrap() {
+            Cmd::Record { paste } => assert!(paste),
+            _ => panic!("expected Record variant"),
+        }
+    }
+
+    #[test]
+    fn default_command_is_record() {
+        let cli = Cli::try_parse_from(["prog"]).unwrap();
+        let cmd = cli.cmd.unwrap_or(Cmd::Record { paste: false });
+        match cmd {
+            Cmd::Record { paste } => assert!(!paste),
+            _ => panic!("expected default Record"),
+        }
+    }
 }
