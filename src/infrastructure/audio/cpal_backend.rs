@@ -13,9 +13,14 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+/// CPAL によるローカルマイク入力実装。
+/// WAV ファイルを `/tmp` 相当の一時ディレクトリに保存します。
 pub struct CpalAudioBackend {
+    /// ランタイム中の入力ストリーム
     stream: Mutex<Option<Stream>>,
+    /// 録音フラグ
     recording: Arc<AtomicBool>,
+    /// 出力 WAV パス
     output_path: Mutex<Option<String>>,
 }
 
@@ -29,11 +34,11 @@ impl Default for CpalAudioBackend {
     }
 }
 
-/// `INPUT_DEVICE_PRIORITY` を解釈して使用デバイスを決定する
+/// `INPUT_DEVICE_PRIORITY` 環境変数を解釈し、優先順位の高い入力デバイスを選択します。
 fn select_input_device(host: &cpal::Host) -> Option<Device> {
     use std::env;
 
-    // 1) 環境変数から優先リストを取得
+    // 1) 優先リスト取得 (カンマ区切り)
     let priorities: Vec<String> = env::var("INPUT_DEVICE_PRIORITY")
         .ok()?
         .split(',')
@@ -41,10 +46,10 @@ fn select_input_device(host: &cpal::Host) -> Option<Device> {
         .filter(|s| !s.is_empty())
         .collect();
 
-    // 2) システム上の入力デバイスを列挙
+    // 2) 利用可能なデバイスを列挙
     let available: Vec<Device> = host.input_devices().ok()?.collect();
 
-    // 3) 優先順位で探索
+    // 3) 優先度順に一致デバイスを探す
     for want in &priorities {
         if let Some(dev) = available
             .iter()
@@ -60,9 +65,9 @@ fn select_input_device(host: &cpal::Host) -> Option<Device> {
     host.default_input_device()
 }
 
-// =============== 既存実装 ================================
-
+// =============== 内部ユーティリティ ================================
 impl CpalAudioBackend {
+    /// `/tmp/voice_input_<epoch>.wav` 形式の一意なファイルパスを生成
     fn make_output_path() -> String {
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -73,6 +78,7 @@ impl CpalAudioBackend {
         p.to_string_lossy().into_owned()
     }
 
+    /// CPAL ストリームを構築。サンプルを WAV ライターに書き込みます。
     fn build_input_stream(
         recording: Arc<AtomicBool>,
         device: &Device,
@@ -80,7 +86,7 @@ impl CpalAudioBackend {
         sample_format: SampleFormat,
         output_path: String,
     ) -> Result<Stream, Box<dyn Error>> {
-        // WAV header
+        // WAV ヘッダ
         let spec = hound::WavSpec {
             channels: config.channels,
             sample_rate: config.sample_rate.0,
@@ -124,12 +130,13 @@ impl CpalAudioBackend {
 }
 
 impl AudioBackend for CpalAudioBackend {
+    /// 録音ストリームを開始します。
     fn start_recording(&self) -> Result<(), Box<dyn Error>> {
         if self.is_recording() {
             return Err("already recording".into());
         }
 
-        // ─── Host とデバイス選択 ─────────────────────────
+        // ホスト・デバイス取得
         let host = cpal::default_host();
         let device = select_input_device(&host)
             .ok_or("no input device available (check INPUT_DEVICE_PRIORITY)")?;
@@ -138,7 +145,7 @@ impl AudioBackend for CpalAudioBackend {
         let sample_format = supported.sample_format();
         let config: StreamConfig = supported.into();
 
-        // ─── WAV 出力パス & ストリーム ────────────────────
+        // 出力パス生成 & ストリーム構築
         let wav_path = Self::make_output_path();
         let stream = Self::build_input_stream(
             self.recording.clone(),
@@ -155,11 +162,13 @@ impl AudioBackend for CpalAudioBackend {
         Ok(())
     }
 
+    /// 録音を停止し、WAV ファイルパスを返します。
     fn stop_recording(&self) -> Result<String, Box<dyn Error>> {
         if !self.is_recording() {
             return Err("not recording".into());
         }
-        *self.stream.lock().unwrap() = None; // drop stream
+        // ストリームを解放して終了
+        *self.stream.lock().unwrap() = None;
         self.recording.store(false, Ordering::SeqCst);
 
         let path = self
@@ -171,6 +180,7 @@ impl AudioBackend for CpalAudioBackend {
         Ok(path)
     }
 
+    /// 録音中かどうかを確認します。
     fn is_recording(&self) -> bool {
         self.recording.load(Ordering::SeqCst)
     }

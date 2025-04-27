@@ -1,7 +1,11 @@
-use std::io;
-use std::process::{Command, Stdio};
+use std::{
+    io,
+    process::{Command, Stdio},
+};
 
-/// バックグラウンドに完全デタッチして子プロセスを起動するヘルパ
+/// 子プロセスを完全にデタッチしてバックグラウンド実行するヘルパ。
+///
+/// 標準入出力をすべて `/dev/null` に向けるため、親プロセス終了後も子が残ります。
 pub fn spawn_detached<I, S>(mut cmd: Command, args: I) -> io::Result<()>
 where
     I: IntoIterator<Item = S>,

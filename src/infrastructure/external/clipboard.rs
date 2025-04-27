@@ -1,9 +1,15 @@
-// src/text_selection.rs
+//! 選択テキスト取得ユーティリティ。
+//! AppleScript 経由でフロントアプリに Cmd+C を送り、pbpaste で取得します。
 use std::process::Command;
 
+/// 現在フォーカスされているアプリケーションの選択テキストを取得します。
+///
+/// 戻り値:
+/// - Ok(text)  … 成功
+/// - Err(msg) … AppleScript 実行失敗または pbpaste 失敗
+///
+/// TODO: macOSのシステムAPIを試す。Cのバインディングとかでできる？
 pub fn get_selected_text() -> Result<String, String> {
-    // アクティブラウィンドウの選択部分のみを取得する
-    // TODO macOSのシステムAPIを試す。Cのバインディングとかでできる？
     let script = r#"
         tell application "System Events"
             set frontApp to name of first application process whose frontmost is true
@@ -24,10 +30,11 @@ pub fn get_selected_text() -> Result<String, String> {
         .map_err(|e| format!("Failed to execute AppleScript: {}", e))?;
 
     if output.status.success() {
-        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Ok(text)
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
-        let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        Err(format!("AppleScript error: {}", error))
+        Err(format!(
+            "AppleScript error: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
     }
 }

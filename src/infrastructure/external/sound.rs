@@ -1,47 +1,38 @@
+//! 効果音および Apple Music 制御ユーティリティ。
 use std::process::Command;
 
-/// Play the start recording sound
+/// 録音開始を示すサウンドを再生します。
 pub fn play_start_sound() {
-    // Use afplay on macOS to play a system sound
-    Command::new("afplay")
+    let _ = Command::new("afplay")
         .arg("/System/Library/Sounds/Ping.aiff")
-        .spawn()
-        .ok();
+        .spawn();
 }
 
-/// Play the stop recording sound
+/// 録音停止を示すサウンドを再生します。
 pub fn play_stop_sound() {
-    // Use afplay on macOS to play a system sound
-    Command::new("afplay")
+    let _ = Command::new("afplay")
         .arg("/System/Library/Sounds/Purr.aiff")
-        .spawn()
-        .ok();
+        .spawn();
 }
 
-/// Play the transcription complete sound
+/// 転写完了を示すサウンドを再生します。
 pub fn play_transcription_complete_sound() {
-    // Use afplay on macOS to play a system sound
-    Command::new("afplay")
+    let _ = Command::new("afplay")
         .arg("/System/Library/Sounds/Glass.aiff")
-        .spawn()
-        .ok();
+        .spawn();
 }
 
-// 例: Apple Music を一時停止させる
+/// Apple Music を一時停止し、元々再生中だったかを返します。
 pub fn pause_apple_music() -> bool {
     let check_script = r#"
-        tell application "System Events"
-            set isRunning to (exists (processes where name is "Music"))
-        end tell
+        tell application \"System Events\" to (exists (processes where name is \"Music\"))
     "#;
 
-    // まずApple Musicが起動しているか確認
-    let check_output = std::process::Command::new("osascript")
+    let check_output = Command::new("osascript")
         .arg("-e")
         .arg(check_script)
         .output();
 
-    // Apple Musicが起動していて、再生中か確認
     if let Ok(output) = check_output {
         if let Ok(result) = String::from_utf8(output.stdout) {
             if result.trim() == "true" {
@@ -67,10 +58,10 @@ pub fn pause_apple_music() -> bool {
             }
         }
     }
-
     false
 }
 
+/// Apple Music を再開します (起動している場合のみ)。
 pub fn resume_apple_music() {
     let check_script = r#"
         tell application "System Events"

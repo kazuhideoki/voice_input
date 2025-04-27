@@ -1,3 +1,5 @@
+//! OpenAI STT API ラッパ。
+//! WAV ファイルを multipart/form-data で転写エンドポイントに送信します。
 use reqwest::multipart;
 use serde::Deserialize;
 use std::env;
@@ -5,11 +7,18 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
+/// STT API のレスポンス JSON。
 #[derive(Debug, Deserialize)]
 struct TranscriptionResponse {
     pub text: String,
 }
 
+/// WAV ファイルを STT API で文字起こしします。
+///
+/// * `audio_file_path` – 入力 WAV ファイルパス
+/// * `prompt`           – コンテキストプロンプト (任意)
+///
+/// STT モデルは `OPENAI_TRANSCRIBE_MODEL` が存在しない場合 `gpt-4o-mini-transcribe` を使用します。
 pub async fn transcribe_audio(
     audio_file_path: &str,
     prompt: Option<&str>,
@@ -23,8 +32,8 @@ pub async fn transcribe_audio(
     let client = reqwest::Client::new();
     let url = "https://api.openai.com/v1/audio/transcriptions";
 
-    // Create file part
     // TODO ファイルを作成せずにオンメモリで試す
+    // ---- ファイル読み込み ------------------------------------------------
     let path = Path::new(audio_file_path);
     let file_name = path
         .file_name()
@@ -40,13 +49,12 @@ pub async fn transcribe_audio(
         .file_name(file_name)
         .mime_str("audio/wav")?;
 
-    // Build the form
+    // ---- multipart/form-data -------------------------------------------
     let mut form = multipart::Form::new()
         .part("file", file_part)
         .text("model", model)
         .text("language", "ja");
 
-    // Add prompt if provided
     if let Some(prompt_text) = prompt {
         let formatted_prompt = format!(
             "The following text provides relevant context. Please consider this when creating the transcription: {:?}",
@@ -55,7 +63,7 @@ pub async fn transcribe_audio(
         form = form.text("prompt", formatted_prompt);
     }
 
-    // Send request
+    // ---- 送信 -----------------------------------------------------------
     let response = client
         .post(url)
         .header("Authorization", format!("Bearer {}", api_key))
@@ -70,13 +78,11 @@ pub async fn transcribe_audio(
         return Err(format!("API request failed with status {}: {}", status, body).into());
     }
 
-    // Parse the response
     let transcription: TranscriptionResponse = serde_json::from_str(&body)?;
-
     Ok(transcription.text)
 }
 
-/* ===== ここからテスト ===== */
+// === Unit tests ==========================================================
 #[cfg(test)]
 mod tests {
     use super::*;
