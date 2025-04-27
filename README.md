@@ -14,6 +14,16 @@ Rust 製の **音声録音・文字起こし CLI / デーモン** です。
 | **Apple Music 自動ポーズ** | 録音中は BGM を一時停止               |
 | **IPC Unix Socket**        | CLI ↔ デーモン間通信は JSON over UDS |
 
+## 環境変数準備
+
+```sh
+cp .env.example .env
+```
+
+- OPENAI_API_KEY=your_openai_api_key_here
+- OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe # デフォルト
+- INPUT_DEVICE_PRIORITY="device1,device2,device3" // TODO デバイス確認コマンド
+
 ## ビルド
 
 ```bash
