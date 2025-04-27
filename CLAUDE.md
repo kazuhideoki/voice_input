@@ -26,7 +26,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Keep functions focused and small when possible
 - Format code with rustfmt
 
-## crate
+## Crate
 
 - **MUST NOT USE** anyhow
 

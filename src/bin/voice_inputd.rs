@@ -321,3 +321,75 @@ async fn set_clipboard(text: &str) -> Result<(), Box<dyn Error>> {
     child.wait().await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper: construct a Recorder<CpalAudioBackend>
+    fn make_recorder() -> Arc<Recorder<CpalAudioBackend>> {
+        Arc::new(Recorder::new(CpalAudioBackend::default()))
+    }
+
+    /// `stop_recording` に `prompt` を提供すると、WAV と並べてメタJSONファイルが
+    /// 作成されることを検証します。入力デバイスが存在しない場合は自動的にスキップします。
+    #[tokio::test(flavor = "current_thread")]
+    async fn prompt_is_saved_as_meta() -> Result<(), Box<dyn std::error::Error>> {
+        // このテスト中に30秒タイマーが発火するのを防止する
+        unsafe {
+            std::env::set_var("VOICE_INPUT_MAX_SECS", "60");
+        }
+
+        let recorder = make_recorder();
+        let ctx = Arc::new(Mutex::new(RecCtx {
+            state: RecState::Idle,
+            cancel: None,
+        }));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        if start_recording(recorder.clone(), &ctx, &tx, false, None)
+            .await
+            .is_err()
+        {
+            eprintln!("⚠️  No audio device – prompt meta test skipped");
+            return Ok(());
+        }
+        stop_recording(recorder, &ctx, &tx, false, Some("hello".into())).await?;
+
+        let (wav, _) = rx.recv().await.expect("wav path not queued");
+        let meta = std::fs::read_to_string(format!("{wav}.json"))?;
+        assert!(meta.contains("hello"));
+        Ok(())
+    }
+
+    /// 自動タイムアウト（1秒に設定）が録音を停止し、状態を
+    /// Idleに戻すことを確認します。オーディオデバイスが利用できない場合はスキップします。
+    #[tokio::test(flavor = "current_thread")]
+    async fn auto_timeout_triggers_stop() -> Result<(), Box<dyn std::error::Error>> {
+        unsafe {
+            std::env::set_var("VOICE_INPUT_MAX_SECS", "1");
+        }
+
+        let recorder = make_recorder();
+        let ctx = Arc::new(Mutex::new(RecCtx {
+            state: RecState::Idle,
+            cancel: None,
+        }));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        if start_recording(recorder.clone(), &ctx, &tx, false, None)
+            .await
+            .is_err()
+        {
+            eprintln!("⚠️  No audio device – timeout test skipped");
+            return Ok(());
+        }
+        assert!(recorder.is_recording(), "recording did not start");
+
+        tokio::time::sleep(Duration::from_secs(2)).await; // wait > 1 s
+        assert!(!recorder.is_recording(), "recording did not auto‑stop");
+        assert_eq!(ctx.lock().unwrap().state, RecState::Idle);
+        assert!(rx.try_recv().is_ok(), "WAV not queued after timeout");
+        Ok(())
+    }
+}

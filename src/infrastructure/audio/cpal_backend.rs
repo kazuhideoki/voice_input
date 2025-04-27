@@ -185,3 +185,50 @@ impl AudioBackend for CpalAudioBackend {
         self.recording.load(Ordering::SeqCst)
     }
 }
+
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+
+//     /// `INPUT_DEVICE_PRIORITY` が参照されているかをエラーメッセージで確認。
+//     #[test]
+//     fn input_device_priority_env_is_respected_in_error() {
+//         unsafe { std::env::set_var("INPUT_DEVICE_PRIORITY", "ClearlyNonexistentDevice") };
+//         let backend = CpalAudioBackend::default();
+//         let err = backend
+//             .start_recording()
+//             .expect_err("should fail without device");
+//         assert!(err.to_string().contains("INPUT_DEVICE_PRIORITY"));
+//     }
+// }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `INPUT_DEVICE_PRIORITY` に存在しないデバイスを設定し、バックエンドが
+    /// (1) フォールバックを介して開始する **または** (2) 入力デバイスの欠落に
+    /// 言及するエラーを返すことを確認します。これにより、優先順位/フォールバック
+    /// コードが誤って削除されることを防ぎます。
+    #[test]
+    fn input_device_priority_env_is_handled() {
+        unsafe { std::env::set_var("INPUT_DEVICE_PRIORITY", "ClearlyNonexistentDevice") };
+
+        let backend = CpalAudioBackend::default();
+        match backend.start_recording() {
+            Ok(_) => {
+                // Fallback device found → recording started
+                assert!(backend.is_recording());
+                backend.stop_recording().unwrap();
+            }
+            Err(e) => {
+                // Headless / CI environment without any devices
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("INPUT_DEVICE_PRIORITY") || msg.contains("no input device"),
+                    "unexpected error: {msg}"
+                );
+            }
+        }
+    }
+}

@@ -93,3 +93,19 @@ pub fn resume_apple_music() {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// macOS 専用のため CI ではスキップする想定。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn sound_helpers_do_not_panic() {
+        play_start_sound();
+        play_stop_sound();
+        play_transcription_complete_sound();
+        let _ = pause_apple_music();
+        resume_apple_music();
+    }
+}
