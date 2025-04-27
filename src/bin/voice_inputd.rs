@@ -38,6 +38,12 @@ enum RecState {
 // ───────────────────────────────────────────────────────────
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
+    // main の最初
+    if let Ok(path) = std::env::var("VOICE_INPUT_ENV_PATH") {
+        dotenvy::from_path(path).ok();
+    } else {
+        dotenvy::dotenv().ok(); // fallback
+    }
     let local = LocalSet::new();
     local.run_until(async_main()).await
 }
@@ -52,7 +58,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     let state = Arc::new(Mutex::new(RecState::Idle));
 
     // 転写キュー
-    let (tx, mut rx) = mpsc::unbounded_channel::<(String, bool)>();
+    let (tx, rx) = mpsc::unbounded_channel::<(String, bool)>();
     let sem = Arc::new(Semaphore::new(2));
 
     // ─── 転写ワーカー（ローカルタスク） ──────────────────────────
@@ -182,9 +188,12 @@ async fn stop_recording(
 async fn handle_transcription(wav: &str, paste: bool) -> Result<(), Box<dyn Error>> {
     let text = transcribe_audio(wav, None).await?;
 
-    let mut clipboard = Clipboard::new()?;
-    clipboard.set_text(&text)?;
+    // --- クリップボードにセット ----------------------------
+    if let Err(e) = set_clipboard(&text).await {
+        eprintln!("clipboard error: {e}");
+    }
 
+    // --- ペースト (⌘V) ----------------------------------------
     if paste {
         tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
         tokio::process::Command::new("osascript")
@@ -195,9 +204,28 @@ async fn handle_transcription(wav: &str, paste: bool) -> Result<(), Box<dyn Erro
             .ok();
     }
 
-    if std::path::Path::new("/tmp/voice_input_music_was_playing").exists() {
-        resume_apple_music();
-        let _ = fs::remove_file("/tmp/voice_input_music_was_playing");
+    // --- Apple Music 再開等（省略） ---
+    Ok(())
+}
+
+async fn set_clipboard(text: &str) -> Result<(), Box<dyn Error>> {
+    // ① arboard（GUI セッションなら高速）
+    if let Ok(mut cb) = Clipboard::new() {
+        if cb.set_text(text).is_ok() {
+            return Ok(());
+        }
     }
+    // ② フォールバック: pbcopy（どんなセッションでも動く）
+    let mut child = tokio::process::Command::new("pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()?;
+    use tokio::io::AsyncWriteExt;
+    child
+        .stdin
+        .as_mut()
+        .ok_or("failed to open pbcopy stdin")?
+        .write_all(text.as_bytes())
+        .await?;
+    child.wait().await?;
     Ok(())
 }

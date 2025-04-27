@@ -27,6 +27,13 @@ enum Cmd {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // main の最初
+    if let Ok(path) = std::env::var("VOICE_INPUT_ENV_PATH") {
+        dotenvy::from_path(path).ok();
+    } else {
+        dotenvy::dotenv().ok(); // fallback
+    }
+
     let cli = Cli::parse();
     let resp = match cli.cmd.unwrap_or(Cmd::Toggle {
         paste: false,
