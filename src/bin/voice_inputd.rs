@@ -50,6 +50,7 @@ struct RecCtx {
 // ────────────────────────────────────────────────────────
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
+    // TODO env の扱いまとめる
     if let Ok(path) = std::env::var("VOICE_INPUT_ENV_PATH") {
         dotenvy::from_path(path).ok();
     } else {

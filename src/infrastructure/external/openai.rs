@@ -17,7 +17,6 @@ pub async fn transcribe_audio(
     let api_key =
         env::var("OPENAI_API_KEY").map_err(|_| "OPENAI_API_KEY environment variable not set")?;
 
-    // Get model from environment variable or use default
     let model = env::var("OPENAI_TRANSCRIBE_MODEL")
         .unwrap_or_else(|_| "gpt-4o-mini-transcribe".to_string());
 
@@ -25,6 +24,7 @@ pub async fn transcribe_audio(
     let url = "https://api.openai.com/v1/audio/transcriptions";
 
     // Create file part
+    // TODO ファイルを作成せずにオンメモリで試す
     let path = Path::new(audio_file_path);
     let file_name = path
         .file_name()
