@@ -38,11 +38,13 @@ cargo build --release
 
 ## MacOS での権限設定
 
-毎度、ビルド後orログイン後はやり直す必要があることがある？
+以下、ペーストできるようにする
 
 - `設定` -> `プライバシーとセキュリティ` -> `アクセシビリティ`
-  - `/usr/bin/osascript` (ペーストできるように)
-  - `/Users/kazuhideoki/voice_input/target/release/voice_inputd`
+  - `/usr/bin/osascript`
+  - `/Users/kazuhideoki/voice_input/target/release/voice_inputd` **再ビルド時必要**
+
+また、初回実行時にはいくつか権限のリクエストが来る。
 
 ## 使い方（基本）
 
