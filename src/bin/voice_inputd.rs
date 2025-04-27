@@ -4,7 +4,7 @@
 //! CLI から Unix Domain Socket (UDS) 経由で受け取ったコマンドをハンドリングし、
 //!  - `Recorder` を介した録音の開始 / 停止
 //!  - OpenAI API を用いた文字起こし
-//!  - クリップボードへの貼り付け & Apple Music の自動ポーズ / 再開
+//!  - クリップボードへの貼り付け & Apple Music の自動ポーズ / 再開
 //! を非同期・協調的に実行します。
 //!
 //! *ソケットパス*: `/tmp/voice_input.sock`
@@ -80,6 +80,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         dotenvy::dotenv().ok();
     }
 
+    // `spawn_local` はこのスレッドだけで動かしたい非同期ジョブを登録する。LocalSet はその実行エンジン
     let local = LocalSet::new();
     local.run_until(async_main()).await
 }
@@ -194,6 +195,7 @@ async fn start_recording(
 
     // Apple Music を一時停止し、録音開始 SE を再生
     if pause_apple_music() {
+        // TODO これは不要かもしれない。他で参照されてない
         let _ = fs::write("/tmp/voice_input_music_was_playing", "");
     }
     play_start_sound();
