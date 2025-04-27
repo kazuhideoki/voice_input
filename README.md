@@ -34,15 +34,27 @@ cargo build --release
 生成物:
 	•	target/release/voice_input … CLI
 	•	target/release/voice_inputd … デーモン
+```
 
-使い方（基本）
+## MacOS での権限設定
 
-# 録音開始
+ビルド後はやり直す必要がある
+
+- `設定` -> `プライバシーとセキュリティ` -> `アクセシビリティ`
+  - `/usr/bin/osascript` (ペーストできるように)
+  - `/Users/kazuhideoki/voice_input/target/release/voice_inputd`
+
+## 使い方（基本）
+
+録音開始,停止
+
+```sh
 voice_input start
+voice_input stop
+```
 
-# 録音停止 → 文字起こし
-voice_input stop --paste
+録音開始,停止の切り替え+ペースト。
 
-使い方(ワンコマンド)
+```sh
 voice_input toggle --paste
 ```
