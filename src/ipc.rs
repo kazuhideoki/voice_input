@@ -10,13 +10,20 @@ pub const SOCKET_PATH: &str = "/tmp/voice_input.sock";
 #[derive(Debug, Serialize, Deserialize)]
 pub enum IpcCmd {
     /// 録音開始
-    Start { paste: bool, prompt: Option<String> },
+    Start {
+        paste: bool,
+        prompt: Option<String>,
+    },
     /// 録音停止
     Stop,
     /// 録音トグル
-    Toggle { paste: bool, prompt: Option<String> },
+    Toggle {
+        paste: bool,
+        prompt: Option<String>,
+    },
     /// ステータス取得
     Status,
+    ListDevices,
 }
 
 /// デーモンからの汎用レスポンス。

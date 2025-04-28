@@ -164,6 +164,17 @@ async fn handle_client(
                 ok: true,
                 msg: format!("state={:?}", ctx.lock().unwrap().state),
             }),
+            IpcCmd::ListDevices => {
+                let list = CpalAudioBackend::list_devices();
+                Ok(IpcResp {
+                    ok: true,
+                    msg: if list.is_empty() {
+                        "⚠️  No input devices detected".into()
+                    } else {
+                        list.join("\n")
+                    },
+                })
+            }
         }
         .unwrap_or_else(|e| IpcResp {
             ok: false,

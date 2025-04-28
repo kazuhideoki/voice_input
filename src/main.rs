@@ -6,6 +6,10 @@ use voice_input::ipc::{IpcCmd, send_cmd};
 #[derive(Parser)]
 #[command(author, version, about = "Voice Input client (daemon control)")]
 struct Cli {
+    /// 利用可能な入力デバイスを一覧表示して終了
+    #[arg(long)]
+    list_devices: bool,
+
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -44,6 +48,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let cli = Cli::parse();
+
+    /* ── 追加: デバイス一覧フラグ ── */
+    if cli.list_devices {
+        match send_cmd(&IpcCmd::ListDevices) {
+            Ok(resp) if resp.ok => println!("{}", resp.msg),
+            Ok(resp) => eprintln!("Error: {}", resp.msg),
+            Err(e) => eprintln!("Error: {}", e),
+        }
+        return Ok(());
+    }
+
     let resp = match cli.cmd.unwrap_or(Cmd::Toggle {
         paste: false,
         prompt: None,

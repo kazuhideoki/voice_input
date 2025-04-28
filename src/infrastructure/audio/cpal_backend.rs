@@ -67,6 +67,13 @@ fn select_input_device(host: &cpal::Host) -> Option<Device> {
 
 // =============== 内部ユーティリティ ================================
 impl CpalAudioBackend {
+    /// 利用可能な入力デバイス名を返すユーティリティ
+    pub fn list_devices() -> Vec<String> {
+        let host = cpal::default_host();
+        host.input_devices()
+            .map(|iter| iter.filter_map(|d| d.name().ok()).collect::<Vec<String>>())
+            .unwrap_or_default()
+    }
     /// `/tmp/voice_input_<epoch>.wav` 形式の一意なファイルパスを生成
     fn make_output_path() -> String {
         let ts = SystemTime::now()

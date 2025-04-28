@@ -66,6 +66,12 @@ voice_input start
 voice_input stop
 ```
 
+利用可能な入力デバイスを一覧表示
+
+```sh
+voice_input --list-devices
+```
+
 録音開始,停止の切り替え+ペースト。
 
 ```sh
