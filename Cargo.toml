@@ -39,3 +39,4 @@ arboard = "3.5.0"
 ctrlc = "3.4"
 sysinfo = "0.34.2"
 tokio-util = { version = "0.7", features = ["codec"] }
+directories = "6.0.0"

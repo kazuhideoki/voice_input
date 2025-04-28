@@ -1,12 +1,16 @@
 //! voice_input CLI: `voice_inputd` デーモンの簡易コントローラ。
 //! `Start` / `Stop` / `Toggle` / `Status` の各コマンドを `ipc::send_cmd` で送信します。
 use clap::{Parser, Subcommand};
-use voice_input::ipc::{IpcCmd, send_cmd};
+use voice_input::{
+    domain::dict::{DictRepository, WordEntry},
+    infrastructure::dict::JsonFileDictRepo,
+    ipc::{IpcCmd, send_cmd},
+};
 
 #[derive(Parser)]
-#[command(author, version, about = "Voice Input client (daemon control)")]
+#[command(author, version, about = "Voice Input client (daemon control + dict)")]
 struct Cli {
-    /// 利用可能な入力デバイスを一覧表示して終了
+    /// 利用可能な入力デバイスを一覧表示
     #[arg(long)]
     list_devices: bool,
 
@@ -36,6 +40,24 @@ enum Cmd {
     },
     /// デーモン状態取得
     Status,
+    /// 🔤 辞書操作
+    Dict {
+        #[command(subcommand)]
+        action: DictCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum DictCmd {
+    /// 登録 or 置換
+    Add {
+        surface: String,
+        replacement: String,
+    },
+    /// 削除
+    Remove { surface: String },
+    /// 一覧表示
+    List,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -59,16 +81,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let resp = match cli.cmd.unwrap_or(Cmd::Toggle {
+    /* ───── コマンド解析 ──────────── */
+    match cli.cmd.unwrap_or(Cmd::Toggle {
         paste: false,
         prompt: None,
     }) {
-        Cmd::Start { paste, prompt } => send_cmd(&IpcCmd::Start { paste, prompt })?,
-        Cmd::Stop => send_cmd(&IpcCmd::Stop)?,
-        Cmd::Toggle { paste, prompt } => send_cmd(&IpcCmd::Toggle { paste, prompt })?,
-        Cmd::Status => send_cmd(&IpcCmd::Status)?,
-    };
+        /* 録音系 → IPC */
+        Cmd::Start { paste, prompt } => relay(IpcCmd::Start { paste, prompt })?,
+        Cmd::Stop => relay(IpcCmd::Stop)?,
+        Cmd::Toggle { paste, prompt } => relay(IpcCmd::Toggle { paste, prompt })?,
+        Cmd::Status => relay(IpcCmd::Status)?,
 
+        /* 辞書操作 → ローカル JSON */
+        Cmd::Dict { action } => {
+            let repo = JsonFileDictRepo::new();
+            match action {
+                DictCmd::Add {
+                    surface,
+                    replacement,
+                } => {
+                    repo.upsert(WordEntry {
+                        surface: surface.clone(),
+                        replacement,
+                        hit: 0,
+                    })?;
+                    println!("✅ Added/updated entry for “{surface}”");
+                }
+                DictCmd::Remove { surface } => {
+                    if repo.delete(&surface)? {
+                        println!("🗑️  Removed “{surface}”");
+                    } else {
+                        println!("ℹ️  No entry found for “{surface}”");
+                    }
+                }
+                DictCmd::List => {
+                    let list = repo.load()?;
+                    if list.is_empty() {
+                        println!("(no entries)");
+                    } else {
+                        println!("─ Dictionary ───────────────");
+                        for e in list {
+                            println!("• {:<20} → {}", e.surface, e.replacement);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn relay(cmd: IpcCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let resp = send_cmd(&cmd)?;
     if resp.ok {
         println!("{}", resp.msg);
     } else {
