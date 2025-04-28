@@ -51,6 +51,10 @@ launchctl unload ~/Library/LaunchAgents/com.user.voiceinputd.plist
 launchctl load ~/Library/LaunchAgents/com.user.voiceinputd.plist
 ```
 
+```sh
+osascript -e 'tell app "System Events" to keystroke "v" using {command down}'
+```
+
 また、初回実行時にはいくつか権限のリクエストが来る。
 
 ## 使い方（基本）

@@ -294,7 +294,7 @@ async fn handle_transcription(wav: &str, paste: bool) -> Result<(), Box<dyn Erro
         tokio::time::sleep(Duration::from_millis(80)).await;
         let _ = tokio::process::Command::new("osascript")
             .arg("-e")
-            .arg(r#"tell application \"System Events\" to keystroke \"v\" using {command down}"#)
+            .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
             .output()
             .await;
     }
