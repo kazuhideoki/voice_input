@@ -31,9 +31,9 @@ git clone https://github.com/yourname/voice_input.git
 cd voice_input
 cargo build --release
 
-生成物:
-	•	target/release/voice_input … CLI
-	•	target/release/voice_inputd … デーモン
+# 生成物:
+# - target/release/voice_input … CLI
+# - target/release/voice_inputd … デーモン
 ```
 
 ## MacOS での権限設定
@@ -41,8 +41,15 @@ cargo build --release
 以下、ペーストできるようにする
 
 - `設定` -> `プライバシーとセキュリティ` -> `アクセシビリティ`
-  - `/usr/bin/osascript`
-  - `/Users/kazuhideoki/voice_input/target/release/voice_inputd` **再ビルド時必要**
+  - **メインで使うターミナル** に許可を与える
+  - `/Users/kazuhideoki/voice_input/target/release/voice_inputd` **再ビルド時再設定**
+
+**再ビルド時は `voiceinputd` のデーモンの再起動**
+
+```sh
+launchctl unload ~/Library/LaunchAgents/com.user.voiceinputd.plist
+launchctl load ~/Library/LaunchAgents/com.user.voiceinputd.plist
+```
 
 また、初回実行時にはいくつか権限のリクエストが来る。
 
