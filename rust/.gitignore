@@ -1,7 +1,4 @@
-# old
 /target
-.env
-
-# for common
 .mcp.json
 .DS_Store
+.env

@@ -1,0 +1,5 @@
+[workspace]
+members = ["ime_voice_input", "ime_voice_input_cli", "ime_voice_inputd"]
+
+# edition 2024 を使うなら resolver = "3" 推奨
+resolver = "3"
