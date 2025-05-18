@@ -34,3 +34,6 @@ arboard = "3.5.0"
 tokio-util = { version = "0.7", features = ["codec"] }
 directories = "6.0.0"
 scopeguard = "1.2.0"
+
+[dev-dependencies]
+tempfile = "3.8"
