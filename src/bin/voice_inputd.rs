@@ -307,7 +307,45 @@ async fn handle_transcription(
         }
     });
 
-    let text_result = transcribe_audio(wav, None).await;
+    // ---- プロンプト組み立て --------------------------------------------
+    let mut prompt_parts: Vec<String> = Vec::new();
+
+    // 1) 辞書エントリ → YAML
+    {
+        use voice_input::domain::dict::{DictRepository, WordEntry};
+        use voice_input::infrastructure::dict::JsonFileDictRepo;
+
+        let repo = JsonFileDictRepo::new();
+        if let Ok(entries) = repo.load() {
+            if !entries.is_empty() {
+                let mut yaml = String::from("word_list:\n");
+                for WordEntry { surface, replacement, .. } in entries {
+                    yaml.push_str(&format!(
+                        "  - surface: \"{}\"\n    replacement: \"{}\"\n",
+                        surface, replacement
+                    ));
+                }
+                prompt_parts.push(yaml);
+            }
+        }
+    }
+
+    // 2) 録音時に保存した選択テキスト
+    if let Ok(meta) = std::fs::read_to_string(format!("{wav}.json")) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&meta) {
+            if let Some(p) = v.get("prompt").and_then(|v| v.as_str()) {
+                prompt_parts.push(p.to_string());
+            }
+        }
+    }
+
+    let prompt = if prompt_parts.is_empty() {
+        None
+    } else {
+        Some(prompt_parts.join("\n"))
+    };
+
+    let text_result = transcribe_audio(wav, prompt.as_deref()).await;
     
     // 転写に失敗してもクリップボード操作やペーストは試みない
     if let Ok(text) = text_result {
