@@ -2037,6 +2037,7 @@ dependencies = [
  "futures",
  "hound",
  "reqwest",
+ "scopeguard",
  "serde",
  "serde_json",
  "tokio",

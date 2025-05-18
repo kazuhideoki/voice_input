@@ -303,26 +303,38 @@ async fn handle_transcription(
     paste: bool,
     resume_music: bool,
 ) -> Result<(), Box<dyn Error>> {
-    let text = transcribe_audio(wav, None).await?;
+    // エラーが発生しても確実に音楽を再開するためにdeferパターンで実装
+    let _defer_guard = scopeguard::guard(resume_music, |should_resume| {
+        if should_resume {
+            // 念のため少し遅延を入れて他の処理が完了するのを待つ
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            resume_apple_music();
+        }
+    });
 
-    // クリップボードへコピー
-    if let Err(e) = set_clipboard(&text).await {
-        eprintln!("clipboard error: {e}");
+    let text_result = transcribe_audio(wav, None).await;
+    
+    // 転写に失敗してもクリップボード操作やペーストは試みない
+    if let Ok(text) = text_result {
+        // クリップボードへコピー
+        if let Err(e) = set_clipboard(&text).await {
+            eprintln!("clipboard error: {e}");
+        }
+
+        // 即貼り付け
+        if paste {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            let _ = tokio::process::Command::new("osascript")
+                .arg("-e")
+                .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
+                .output()
+                .await;
+        }
+    } else if let Err(e) = text_result {
+        eprintln!("transcription error: {e}");
+        return Err(e);
     }
 
-    // 即貼り付け
-    if paste {
-        tokio::time::sleep(Duration::from_millis(80)).await;
-        let _ = tokio::process::Command::new("osascript")
-            .arg("-e")
-            .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
-            .output()
-            .await;
-    }
-
-    if resume_music {
-        resume_apple_music();
-    }
     Ok(())
 }
 
