@@ -4,7 +4,8 @@ use clap::{Parser, Subcommand};
 use voice_input::{
     domain::dict::{DictRepository, WordEntry},
     infrastructure::dict::JsonFileDictRepo,
-    ipc::{IpcCmd, send_cmd},
+    ipc::{send_cmd, IpcCmd},
+    load_env,
 };
 
 #[derive(Parser)]
@@ -61,13 +62,7 @@ enum DictCmd {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // TODO env の扱いまとめる
-    // .env 読み込み
-    if let Ok(path) = std::env::var("VOICE_INPUT_ENV_PATH") {
-        dotenvy::from_path(path).ok();
-    } else {
-        dotenvy::dotenv().ok();
-    }
+    load_env();
 
     let cli = Cli::parse();
 
