@@ -64,6 +64,8 @@ struct RecCtx {
     state: RecState,
     /// 自動停止タイマーのキャンセル用
     cancel: Option<oneshot::Sender<()>>,
+    /// 録音開始時にApple Musicが再生中だったか
+    music_was_playing: bool,
 }
 
 // ────────────────────────────────────────────────────────
@@ -91,10 +93,11 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     let ctx = Arc::new(Mutex::new(RecCtx {
         state: RecState::Idle,
         cancel: None,
+        music_was_playing: false,
     }));
 
     // 転写ジョブ用チャンネルと同時実行セマフォ
-    let (tx, rx) = mpsc::unbounded_channel::<(String, bool)>();
+    let (tx, rx) = mpsc::unbounded_channel::<(String, bool, bool)>();
     let sem = Arc::new(Semaphore::new(2));
 
     // ─── 転写ワーカー ─────────────────────────────
@@ -102,10 +105,10 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         let worker_sem = sem.clone();
         let mut rx = rx;
         spawn_local(async move {
-            while let Some((wav, paste)) = rx.recv().await {
+            while let Some((wav, paste, resume_music)) = rx.recv().await {
                 let permit = worker_sem.clone().acquire_owned().await.unwrap();
                 spawn_local(async move {
-                    let _ = handle_transcription(&wav, paste).await;
+                    let _ = handle_transcription(&wav, paste, resume_music).await;
                     drop(permit);
                 });
             }
@@ -135,7 +138,7 @@ async fn handle_client(
     stream: UnixStream,
     recorder: Arc<Recorder<CpalAudioBackend>>,
     ctx: Arc<Mutex<RecCtx>>,
-    tx: mpsc::UnboundedSender<(String, bool)>,
+    tx: mpsc::UnboundedSender<(String, bool, bool)>,
 ) -> Result<(), Box<dyn Error>> {
     let (r, w) = stream.into_split();
     let mut reader = FramedRead::new(r, LinesCodec::new());
@@ -190,7 +193,7 @@ async fn handle_client(
 async fn start_recording(
     recorder: Arc<Recorder<CpalAudioBackend>>,
     ctx: &Arc<Mutex<RecCtx>>,
-    tx: &mpsc::UnboundedSender<(String, bool)>,
+    tx: &mpsc::UnboundedSender<(String, bool, bool)>,
     paste: bool,
     _prompt: Option<String>,
 ) -> Result<IpcResp, Box<dyn Error>> {
@@ -199,11 +202,9 @@ async fn start_recording(
         return Err("already recording".into());
     }
 
-    // Apple Music を一時停止し、録音開始 SE を再生
-    if pause_apple_music() {
-        // TODO これは不要かもしれない。他で参照されてない
-        let _ = fs::write("/tmp/voice_input_music_was_playing", "");
-    }
+    // Apple Music を一時停止し、後で再開するかを記録
+    c.music_was_playing = pause_apple_music();
+    // 録音開始 SE
     play_start_sound();
 
     recorder.start()?;
@@ -226,12 +227,15 @@ async fn start_recording(
             _ = tokio::time::sleep(Duration::from_secs(max_secs)) => {
                 if recorder.is_recording() {
                     if let Ok(wav) = recorder.stop() {
-                        {
+                        let was_playing = {
                             let mut c = ctx_clone.lock().unwrap();
                             c.state = RecState::Idle;
                             c.cancel = None;
-                        }
-                        let _ = tx_clone.send((wav, paste));
+                            let w = c.music_was_playing;
+                            c.music_was_playing = false;
+                            w
+                        };
+                        let _ = tx_clone.send((wav, paste, was_playing));
                         play_stop_sound();
                     }
                 }
@@ -252,7 +256,7 @@ async fn start_recording(
 async fn stop_recording(
     recorder: Arc<Recorder<CpalAudioBackend>>,
     ctx: &Arc<Mutex<RecCtx>>,
-    tx: &mpsc::UnboundedSender<(String, bool)>,
+    tx: &mpsc::UnboundedSender<(String, bool, bool)>,
     paste: bool,
     prompt: Option<String>,
 ) -> Result<IpcResp, Box<dyn Error>> {
@@ -275,7 +279,9 @@ async fn stop_recording(
         let meta = format!("{wav}.json");
         fs::write(&meta, json!({ "prompt": p }).to_string())?;
     }
-    tx.send((wav, paste))?;
+    let was_playing = c.music_was_playing;
+    c.music_was_playing = false;
+    tx.send((wav, paste, was_playing))?;
 
     Ok(IpcResp {
         ok: true,
@@ -287,25 +293,43 @@ async fn stop_recording(
 
 /// WAV ファイルを OpenAI STT API で文字起こしし、結果をクリップボードへ保存。
 /// `paste` フラグが `true` の場合は 80ms 後に ⌘V を送信して即貼り付けを行います。
-async fn handle_transcription(wav: &str, paste: bool) -> Result<(), Box<dyn Error>> {
-    let text = transcribe_audio(wav, None).await?;
+async fn handle_transcription(
+    wav: &str,
+    paste: bool,
+    resume_music: bool,
+) -> Result<(), Box<dyn Error>> {
+    // エラーが発生しても確実に音楽を再開するためにdeferパターンで実装
+    let _defer_guard = scopeguard::guard(resume_music, |should_resume| {
+        if should_resume {
+            // 念のため少し遅延を入れて他の処理が完了するのを待つ
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            resume_apple_music();
+        }
+    });
 
-    // クリップボードへコピー
-    if let Err(e) = set_clipboard(&text).await {
-        eprintln!("clipboard error: {e}");
+    let text_result = transcribe_audio(wav, None).await;
+    
+    // 転写に失敗してもクリップボード操作やペーストは試みない
+    if let Ok(text) = text_result {
+        // クリップボードへコピー
+        if let Err(e) = set_clipboard(&text).await {
+            eprintln!("clipboard error: {e}");
+        }
+
+        // 即貼り付け
+        if paste {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            let _ = tokio::process::Command::new("osascript")
+                .arg("-e")
+                .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
+                .output()
+                .await;
+        }
+    } else if let Err(e) = text_result {
+        eprintln!("transcription error: {e}");
+        return Err(e);
     }
 
-    // 即貼り付け
-    if paste {
-        tokio::time::sleep(Duration::from_millis(80)).await;
-        let _ = tokio::process::Command::new("osascript")
-            .arg("-e")
-            .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
-            .output()
-            .await;
-    }
-
-    resume_apple_music();
     Ok(())
 }
 
@@ -352,8 +376,9 @@ mod tests {
         let ctx = Arc::new(Mutex::new(RecCtx {
             state: RecState::Idle,
             cancel: None,
+            music_was_playing: false,
         }));
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::unbounded_channel::<(String, bool, bool)>();
 
         if start_recording(recorder.clone(), &ctx, &tx, false, None)
             .await
@@ -364,7 +389,7 @@ mod tests {
         }
         stop_recording(recorder, &ctx, &tx, false, Some("hello".into())).await?;
 
-        let (wav, _) = rx.recv().await.expect("wav path not queued");
+        let (wav, _, _) = rx.recv().await.expect("wav path not queued");
         let meta = std::fs::read_to_string(format!("{wav}.json"))?;
         assert!(meta.contains("hello"));
         Ok(())
@@ -382,8 +407,9 @@ mod tests {
         let ctx = Arc::new(Mutex::new(RecCtx {
             state: RecState::Idle,
             cancel: None,
+            music_was_playing: false,
         }));
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::unbounded_channel::<(String, bool, bool)>();
 
         if start_recording(recorder.clone(), &ctx, &tx, false, None)
             .await

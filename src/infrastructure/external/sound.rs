@@ -24,79 +24,93 @@ pub fn play_transcription_complete_sound() {
 
 /// Apple Music を一時停止し、元々再生中だったかを返します。
 pub fn pause_apple_music() -> bool {
-    let check_script = r#"
-        tell application \"System Events\" to (exists (processes where name is \"Music\"))
+    // 直接 Music アプリを操作する - プロセスチェックをバイパス
+    let playing_script = r#"
+        try
+            tell application "Music"
+                set was_playing to (player state is playing)
+                if was_playing then
+                    pause
+                end if
+                return was_playing
+            end tell
+        on error
+            return false
+        end try
     "#;
 
-    let check_output = Command::new("osascript")
+    // エラーハンドリングを強化
+    match Command::new("osascript")
         .arg("-e")
-        .arg(check_script)
-        .output();
-
-    if let Ok(output) = check_output {
-        if let Ok(result) = String::from_utf8(output.stdout) {
-            if result.trim() == "true" {
-                let playing_script = r#"
-                    tell application "Music"
-                        set was_playing to (player state is playing)
-                        if was_playing then
-                            pause
-                        end if
-                        return was_playing
-                    end tell
-                "#;
-
-                if let Ok(output) = std::process::Command::new("osascript")
-                    .arg("-e")
-                    .arg(playing_script)
-                    .output()
-                {
-                    if let Ok(result) = String::from_utf8(output.stdout) {
-                        return result.trim() == "true";
+        .arg(playing_script)
+        .output()
+    {
+        Ok(output) => {
+            if output.status.success() {
+                if let Ok(result) = String::from_utf8(output.stdout) {
+                    let trimmed = result.trim();
+                    // デバッグ用に結果を出力
+                    println!("Music pause result: '{}'", trimmed);
+                    return trimmed == "true";
+                }
+            } else {
+                // エラー出力がある場合は表示
+                if let Ok(err) = String::from_utf8(output.stderr) {
+                    if !err.trim().is_empty() {
+                        eprintln!("Music pause error: {}", err.trim());
                     }
                 }
             }
+        }
+        Err(e) => {
+            eprintln!("Failed to execute osascript: {}", e);
         }
     }
     false
 }
 
-/// Apple Music を再開します (起動している場合のみ)。
+/// Apple Music を再開します。
 pub fn resume_apple_music() {
-    let check_script = r#"
-        tell application "System Events"
-            set isRunning to (exists (processes where name is "Music"))
-        end tell
+    // 直接 Music アプリを操作する - プロセスチェックをバイパス
+    let play_script = r#"
+        try
+            tell application "Music"
+                play
+                return true
+            end tell
+        on error
+            return false
+        end try
     "#;
 
-    // まずApple Musicが起動しているか確認
-    let check_output = std::process::Command::new("osascript")
+    // エラーハンドリングを強化
+    match std::process::Command::new("osascript")
         .arg("-e")
-        .arg(check_script)
-        .output();
-
-    // コマンド実行に成功し、出力が "true" ならば再生を試みる
-    if let Ok(output) = check_output {
-        if let Ok(result) = String::from_utf8(output.stdout) {
-            if result.trim() == "true" {
-                let play_script = r#"
-                    tell application "Music"
-                        play
-                    end tell
-                "#;
-
-                let _ = std::process::Command::new("osascript")
-                    .arg("-e")
-                    .arg(play_script)
-                    .output();
+        .arg(play_script)
+        .output()
+    {
+        Ok(output) => {
+            if output.status.success() {
+                if let Ok(result) = String::from_utf8(output.stdout) {
+                    println!("Music resume result: '{}'", result.trim());
+                }
+            } else {
+                // エラー出力がある場合は表示
+                if let Ok(err) = String::from_utf8(output.stderr) {
+                    if !err.trim().is_empty() {
+                        eprintln!("Music resume error: {}", err.trim());
+                    }
+                }
             }
+        }
+        Err(e) => {
+            eprintln!("Failed to execute osascript: {}", e);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     /// macOS 専用のため CI ではスキップする想定。
     #[test]
