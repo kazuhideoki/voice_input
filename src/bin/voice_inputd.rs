@@ -22,7 +22,7 @@ use std::{
 
 use arboard::Clipboard;
 use futures::{SinkExt, StreamExt};
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::{
     net::{UnixListener, UnixStream},
     sync::{Semaphore, mpsc, oneshot},
@@ -307,7 +307,16 @@ async fn handle_transcription(
         }
     });
 
-    let text_result = transcribe_audio(wav, None).await;
+    // メタJSONが存在すれば prompt を読み込む
+    let prompt = fs::read_to_string(format!("{wav}.json"))
+        .ok()
+        .and_then(|s| {
+            serde_json::from_str::<Value>(&s)
+                .ok()
+                .and_then(|v| v.get("prompt").and_then(|p| p.as_str().map(|s| s.to_string())))
+        });
+
+    let text_result = transcribe_audio(wav, prompt.as_deref()).await;
     
     // 転写に失敗してもクリップボード操作やペーストは試みない
     if let Ok(text) = text_result {
