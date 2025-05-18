@@ -41,6 +41,7 @@ use voice_input::{
         },
     },
     ipc::{IpcCmd, IpcResp, SOCKET_PATH},
+    load_env,
 };
 
 /// デフォルトの最大録音秒数 (`VOICE_INPUT_MAX_SECS` が未設定の場合に適用)。
@@ -72,13 +73,7 @@ struct RecCtx {
 /// エントリポイント。環境変数を読み込み、`async_main` を current‑thread ランタイムで実行します。
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
-    // TODO env の扱いまとめる
-    // .env 読み込み (VOICE_INPUT_ENV_PATH > .env)
-    if let Ok(path) = std::env::var("VOICE_INPUT_ENV_PATH") {
-        dotenvy::from_path(path).ok();
-    } else {
-        dotenvy::dotenv().ok();
-    }
+    load_env();
 
     // `spawn_local` はこのスレッドだけで動かしたい非同期ジョブを登録する。LocalSet はその実行エンジン
     let local = LocalSet::new();
