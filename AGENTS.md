@@ -33,3 +33,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Workflows
 
 - After Edit, MUST run `cargo check` for type checking unless otherwise instructed
+
+
+## Communication
+- ユーザーが日本語でやり取りを希望する場合、日本語で応答してください。
