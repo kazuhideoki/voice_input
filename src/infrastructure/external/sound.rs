@@ -96,7 +96,6 @@ pub fn resume_apple_music() {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     /// macOS 専用のため CI ではスキップする想定。
     #[test]

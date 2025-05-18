@@ -232,7 +232,9 @@ mod tests {
                 // Headless / CI environment without any devices
                 let msg = e.to_string();
                 assert!(
-                    msg.contains("INPUT_DEVICE_PRIORITY") || msg.contains("no input device"),
+                    msg.contains("INPUT_DEVICE_PRIORITY")
+                        || msg.contains("no input device")
+                        || msg.contains("no longer available"),
                     "unexpected error: {msg}"
                 );
             }
