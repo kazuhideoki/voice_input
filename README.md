@@ -77,3 +77,5 @@ voice_input --list-devices
 ```sh
 voice_input toggle --paste
 ```
+
+追加の機能提案や改善点は Issue にて受け付けています。🙌
