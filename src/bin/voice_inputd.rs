@@ -32,6 +32,7 @@ use tokio::{
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 use voice_input::{
     domain::recorder::Recorder,
+    domain::dict::{apply_replacements, DictRepository},
     infrastructure::{
         audio::CpalAudioBackend,
         external::{
@@ -39,6 +40,7 @@ use voice_input::{
             openai::transcribe_audio,
             sound::{pause_apple_music, play_start_sound, play_stop_sound, resume_apple_music},
         },
+        dict::JsonFileDictRepo,
     },
     ipc::{IpcCmd, IpcResp, socket_path},
     load_env,
@@ -340,8 +342,16 @@ async fn handle_transcription(
 
     // 転写に失敗してもクリップボード操作やペーストは試みない
     if let Ok(text) = text_result {
+        // 辞書を適用
+        let repo = JsonFileDictRepo::new();
+        let mut entries = repo.load().unwrap_or_default();
+        let replaced = apply_replacements(&text, &mut entries);
+        if let Err(e) = repo.save(&entries) {
+            eprintln!("dict save error: {e}");
+        }
+
         // クリップボードへコピー
-        if let Err(e) = set_clipboard(&text).await {
+        if let Err(e) = set_clipboard(&replaced).await {
             eprintln!("clipboard error: {e}");
         }
 

@@ -11,6 +11,40 @@ pub struct WordEntry {
     pub hit: u32,            // 使用回数（学習用）
 }
 
+/// 与えられた文字列に辞書を適用して置換を行います。
+///
+/// `entries` の各 `surface` を `replacement` へ置換し、
+/// 置換が行われた回数だけ `hit` をインクリメントします。
+pub fn apply_replacements(text: &str, entries: &mut [WordEntry]) -> String {
+    for e in entries.iter_mut() {
+        let count = text.matches(&e.surface).count();
+        e.hit += count as u32;
+    }
+
+    let mut out = String::new();
+    let mut i = 0;
+    let chars: Vec<char> = text.chars().collect();
+    while i < chars.len() {
+        let mut replaced = false;
+        for e in entries.iter() {
+            let surface_chars: Vec<char> = e.surface.chars().collect();
+            if i + surface_chars.len() <= chars.len()
+                && chars[i..i + surface_chars.len()] == surface_chars[..]
+            {
+                out.push_str(&e.replacement);
+                i += surface_chars.len();
+                replaced = true;
+                break;
+            }
+        }
+        if !replaced {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 /// 辞書永続化 I/F
 pub trait DictRepository: Send + Sync {
     fn load(&self) -> io::Result<Vec<WordEntry>>;
@@ -37,5 +71,32 @@ pub trait DictRepository: Send + Sync {
             self.save(&list)?;
         }
         Ok(deleted)
+    }
+}
+
+// === Unit tests ==========================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replace_updates_hits_and_text() {
+        let mut entries = vec![
+            WordEntry {
+                surface: "foo".into(),
+                replacement: "bar".into(),
+                hit: 0,
+            },
+            WordEntry {
+                surface: "bar".into(),
+                replacement: "baz".into(),
+                hit: 1,
+            },
+        ];
+
+        let out = apply_replacements("foo bar foo", &mut entries);
+        assert_eq!(out, "bar baz bar");
+        assert_eq!(entries[0].hit, 2); // foo replaced twice
+        assert_eq!(entries[1].hit, 2); // bar appeared once, plus previous 1
     }
 }
