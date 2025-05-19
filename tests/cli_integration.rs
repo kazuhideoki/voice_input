@@ -69,14 +69,14 @@ use std::process::{Child, Command};
 use std::thread::sleep;
 use std::time::Duration;
 use tempfile::TempDir;
-use voice_input::ipc::SOCKET_PATH;
+use voice_input::ipc::socket_path;
 
 fn spawn_daemon(tmp: &TempDir) -> Child {
     let mut cmd = Command::cargo_bin("voice_inputd");
     cmd.env("TMPDIR", tmp.path());
-    let mut child = cmd.spawn().expect("spawn daemon");
+    let child = cmd.spawn().expect("spawn daemon");
     for _ in 0..10 {
-        if Path::new(SOCKET_PATH).exists() {
+        if Path::new(&socket_path()).exists() {
             break;
         }
         sleep(Duration::from_millis(200));
@@ -87,7 +87,7 @@ fn spawn_daemon(tmp: &TempDir) -> Child {
 fn kill_daemon(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
-    let _ = fs::remove_file(SOCKET_PATH);
+    let _ = fs::remove_file(socket_path());
 }
 
 #[test]

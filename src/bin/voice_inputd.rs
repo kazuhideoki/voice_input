@@ -40,7 +40,7 @@ use voice_input::{
             sound::{pause_apple_music, play_start_sound, play_stop_sound, resume_apple_music},
         },
     },
-    ipc::{IpcCmd, IpcResp, SOCKET_PATH},
+    ipc::{IpcCmd, IpcResp, socket_path},
     load_env,
 };
 
@@ -87,9 +87,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 /// ソケット待受・クライアントハンドリング・転写ワーカーを起動する本体。
 async fn async_main() -> Result<(), Box<dyn Error>> {
     // 既存ソケットがあれば削除して再バインド
-    let _ = fs::remove_file(SOCKET_PATH);
-    let listener = UnixListener::bind(SOCKET_PATH)?;
-    println!("voice-inputd listening on {SOCKET_PATH}");
+    let path = socket_path();
+    let _ = fs::remove_file(&path);
+    let listener = UnixListener::bind(&path)?;
+    println!("voice-inputd listening on {:?}", path);
 
     let recorder = Arc::new(Recorder::new(CpalAudioBackend::default()));
     let ctx = Arc::new(Mutex::new(RecCtx {
