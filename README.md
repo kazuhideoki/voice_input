@@ -11,7 +11,9 @@ Rust 製の **音声録音・文字起こし CLI / デーモン** です。
 | -------------------------- | ------------------------------------- |
 | **高速録音トグル**         | 1 コマンドで録音開始 / 停止を切替     |
 | **OpenAI API 対応**        | 日本語・英語を自動認識                |
-| **Apple Music 自動ポーズ** | 録音中は BGM を一時停止               |
+| **Apple Music 自動ポーズ/再開** | 録音中は BGM を一時停止、終了後に自動再生 |
+| **単語リスト置換**         | 転写テキストを辞書で自動置換            |
+| **録音→転写まで自動**      | 1 コマンドで録音開始から文字起こしまで |
 | **IPC Unix Socket**        | CLI ↔ デーモン間通信は JSON over UDS |
 
 ## 環境変数準備
@@ -83,3 +85,27 @@ voice_input toggle --paste
 ```sh
 voice_input health
 ```
+
+## 辞書による結果置換
+
+転写されたテキストは、ユーザー定義の辞書を通して自動的に置換されます。
+辞書は JSON 形式で `~/Library/Application Support/voice_input/dictionary.json` に保存され、
+CLI から編集できます。
+
+```sh
+# 単語登録または更新
+voice_input dict add "誤変換" "正しい語"
+
+# 単語削除
+voice_input dict remove "誤変換"
+
+# 登録一覧表示
+voice_input dict list
+```
+
+## 録音から転写までの一括実行
+
+`voice_input start` / `stop` を明示的に使わなくても、
+`voice_input toggle` 1 回で録音開始→停止→文字起こし→クリップボード保存まで
+完結します。`--paste` を付ければ自動で ⌘V が送信されます。
+
