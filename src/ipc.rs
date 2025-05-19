@@ -24,6 +24,7 @@ pub enum IpcCmd {
     /// ステータス取得
     Status,
     ListDevices,
+    Health,
 }
 
 /// デーモンからの汎用レスポンス。
