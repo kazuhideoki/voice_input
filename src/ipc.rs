@@ -1,10 +1,16 @@
 //! Unix Domain Socket (UDS) ベースのシンプルな IPC モジュール。
 //! `voice_input` CLI ↔ `voice_inputd` デーモン間の通信で利用します。
 use serde::{Deserialize, Serialize};
-use std::{error::Error, path::Path};
+use std::{
+    error::Error,
+    path::{Path, PathBuf},
+};
 
-/// デーモンソケットパス
-pub const SOCKET_PATH: &str = "/tmp/voice_input.sock";
+/// デーモンソケットパスを返します。
+pub fn socket_path() -> PathBuf {
+    let dir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
+    PathBuf::from(dir).join("voice_input.sock")
+}
 
 /// CLI からデーモンへ送るコマンド列挙。
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,11 +50,12 @@ pub fn send_cmd(cmd: &IpcCmd) -> Result<IpcResp, Box<dyn Error>> {
         .enable_all()
         .build()?
         .block_on(async {
-            if !Path::new(SOCKET_PATH).exists() {
+            let path = socket_path();
+            if !Path::new(&path).exists() {
                 return Err("daemon socket not found".into());
             }
 
-            let stream = UnixStream::connect(SOCKET_PATH).await?;
+            let stream = UnixStream::connect(path).await?;
             let (r, w) = stream.into_split();
             let mut writer = FramedWrite::new(w, LinesCodec::new());
             let mut reader = FramedRead::new(r, LinesCodec::new());
