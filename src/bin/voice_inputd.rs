@@ -66,6 +66,8 @@ struct RecCtx {
     cancel: Option<oneshot::Sender<()>>,
     /// 録音開始時にApple Musicが再生中だったか
     music_was_playing: bool,
+    /// 録音開始時点で取得した選択テキストまたはCLIプロンプト
+    start_prompt: Option<String>,
 }
 
 // ────────────────────────────────────────────────────────
@@ -94,6 +96,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         state: RecState::Idle,
         cancel: None,
         music_was_playing: false,
+        start_prompt: None,
     }));
 
     // 転写ジョブ用チャンネルと同時実行セマフォ
@@ -189,18 +192,21 @@ async fn handle_client(
 /// 録音を開始し、自動停止タイマーを登録します。
 ///
 /// * `paste` – 転写完了後に ⌘V ペーストを行うか
-/// * `_prompt` – 将来の転写 API で使用するプロンプト (現状未使用)
+/// * `prompt` – 追加プロンプト。選択テキストより優先される
 async fn start_recording(
     recorder: Arc<Recorder<CpalAudioBackend>>,
     ctx: &Arc<Mutex<RecCtx>>,
     tx: &mpsc::UnboundedSender<(String, bool, bool)>,
     paste: bool,
-    _prompt: Option<String>,
+    prompt: Option<String>,
 ) -> Result<IpcResp, Box<dyn Error>> {
     let mut c = ctx.lock().unwrap();
     if c.state != RecState::Idle {
         return Err("already recording".into());
     }
+
+    // 録音開始時点の選択テキストまたはCLI引数を保存
+    c.start_prompt = prompt.or_else(|| get_selected_text().ok());
 
     // Apple Music を一時停止し、後で再開するかを記録
     c.music_was_playing = pause_apple_music();
@@ -231,6 +237,11 @@ async fn start_recording(
                             let mut c = ctx_clone.lock().unwrap();
                             c.state = RecState::Idle;
                             c.cancel = None;
+                            let stored = c.start_prompt.take();
+                            if let Some(p) = stored.or_else(|| get_selected_text().ok()) {
+                                let meta = format!("{wav}.json");
+                                let _ = fs::write(&meta, json!({ "prompt": p }).to_string());
+                            }
                             let w = c.music_was_playing;
                             c.music_was_playing = false;
                             w
@@ -253,6 +264,7 @@ async fn start_recording(
 }
 
 /// 録音停止処理。WAV を保存して転写キューに送信します。
+/// プロンプトは開始時に取得したもの → 引数 → 停止時の選択テキストの順で使われます。
 async fn stop_recording(
     recorder: Arc<Recorder<CpalAudioBackend>>,
     ctx: &Arc<Mutex<RecCtx>>,
@@ -274,8 +286,13 @@ async fn stop_recording(
     let wav = recorder.stop()?;
     c.state = RecState::Idle;
 
-    // 選択テキスト or 引数プロンプトをメタデータとしてJSON保存
-    if let Some(p) = prompt.or_else(|| get_selected_text().ok()) {
+    // 開始時の保存値→引数→現在の選択の順でプロンプトを決定
+    let stored = c.start_prompt.take();
+    let final_prompt = prompt
+        .or(stored)
+        .or_else(|| get_selected_text().ok());
+
+    if let Some(p) = final_prompt {
         let meta = format!("{wav}.json");
         fs::write(&meta, json!({ "prompt": p }).to_string())?;
     }
@@ -386,17 +403,18 @@ mod tests {
             state: RecState::Idle,
             cancel: None,
             music_was_playing: false,
+            start_prompt: None,
         }));
         let (tx, mut rx) = mpsc::unbounded_channel::<(String, bool, bool)>();
 
-        if start_recording(recorder.clone(), &ctx, &tx, false, None)
+        if start_recording(recorder.clone(), &ctx, &tx, false, Some("hello".into()))
             .await
             .is_err()
         {
             eprintln!("⚠️  No audio device – prompt meta test skipped");
             return Ok(());
         }
-        stop_recording(recorder, &ctx, &tx, false, Some("hello".into())).await?;
+        stop_recording(recorder, &ctx, &tx, false, None).await?;
 
         let (wav, _, _) = rx.recv().await.expect("wav path not queued");
         let meta = std::fs::read_to_string(format!("{wav}.json"))?;
@@ -417,6 +435,7 @@ mod tests {
             state: RecState::Idle,
             cancel: None,
             music_was_playing: false,
+            start_prompt: None,
         }));
         let (tx, mut rx) = mpsc::unbounded_channel::<(String, bool, bool)>();
 
