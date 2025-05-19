@@ -22,7 +22,7 @@ use std::{
 
 use arboard::Clipboard;
 use futures::{SinkExt, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::{
     net::{UnixListener, UnixStream},
     sync::{Semaphore, mpsc, oneshot},
@@ -173,6 +173,7 @@ async fn handle_client(
                     },
                 })
             }
+            IpcCmd::Health => health_check().await,
         }
         .unwrap_or_else(|e| IpcResp {
             ok: false,
@@ -311,13 +312,14 @@ async fn handle_transcription(
     let prompt = fs::read_to_string(format!("{wav}.json"))
         .ok()
         .and_then(|s| {
-            serde_json::from_str::<Value>(&s)
-                .ok()
-                .and_then(|v| v.get("prompt").and_then(|p| p.as_str().map(|s| s.to_string())))
+            serde_json::from_str::<Value>(&s).ok().and_then(|v| {
+                v.get("prompt")
+                    .and_then(|p| p.as_str().map(|s| s.to_string()))
+            })
         });
 
     let text_result = transcribe_audio(wav, prompt.as_deref()).await;
-    
+
     // 転写に失敗してもクリップボード操作やペーストは試みない
     if let Ok(text) = text_result {
         // クリップボードへコピー
@@ -361,6 +363,53 @@ async fn set_clipboard(text: &str) -> Result<(), Box<dyn Error>> {
         .await?;
     child.wait().await?;
     Ok(())
+}
+
+/// 入力デバイス・環境変数・OpenAI API の状態を確認します。
+async fn health_check() -> Result<IpcResp, Box<dyn Error>> {
+    let mut ok = true;
+    let mut lines = Vec::new();
+
+    if CpalAudioBackend::list_devices().is_empty() {
+        lines.push("Input device: MISSING".to_string());
+        ok = false;
+    } else {
+        lines.push("Input device: OK".to_string());
+    }
+
+    match std::env::var("OPENAI_API_KEY") {
+        Ok(key) => {
+            lines.push("OPENAI_API_KEY: present".to_string());
+            let client = reqwest::Client::new();
+            match client
+                .get("https://api.openai.com/v1/models")
+                .bearer_auth(key)
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    lines.push("OpenAI API: reachable".to_string());
+                }
+                Ok(resp) => {
+                    lines.push(format!("OpenAI API: fail({})", resp.status()));
+                    ok = false;
+                }
+                Err(e) => {
+                    lines.push(format!("OpenAI API: error({e})"));
+                    ok = false;
+                }
+            }
+        }
+        Err(_) => {
+            lines.push("OPENAI_API_KEY: missing".to_string());
+            ok = false;
+        }
+    }
+
+    Ok(IpcResp {
+        ok,
+        msg: lines.join("\n"),
+    })
 }
 
 #[cfg(test)]

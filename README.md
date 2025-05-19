@@ -77,3 +77,9 @@ voice_input --list-devices
 ```sh
 voice_input toggle --paste
 ```
+
+デーモンと外部依存の状態をまとめて確認:
+
+```sh
+voice_input health
+```

@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use voice_input::{
     domain::dict::{DictRepository, WordEntry},
     infrastructure::dict::JsonFileDictRepo,
-    ipc::{send_cmd, IpcCmd},
+    ipc::{IpcCmd, send_cmd},
     load_env,
 };
 
@@ -41,6 +41,8 @@ enum Cmd {
     },
     /// デーモン状態取得
     Status,
+    /// ヘルスチェック
+    Health,
     /// 🔤 辞書操作
     Dict {
         #[command(subcommand)]
@@ -86,6 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Stop => relay(IpcCmd::Stop)?,
         Cmd::Toggle { paste, prompt } => relay(IpcCmd::Toggle { paste, prompt })?,
         Cmd::Status => relay(IpcCmd::Status)?,
+        Cmd::Health => relay(IpcCmd::Health)?,
 
         /* 辞書操作 → ローカル JSON */
         Cmd::Dict { action } => {
