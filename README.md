@@ -22,7 +22,7 @@ cp .env.example .env
 
 - OPENAI_API_KEY=your_openai_api_key_here
 - OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe # デフォルト
-- INPUT_DEVICE_PRIORITY="device1,device2,device3" // TODO デバイス確認コマンド
+ - INPUT_DEVICE_PRIORITY="device1,device2,device3"
 
 ## ビルド
 
@@ -71,6 +71,8 @@ voice_input stop
 ```sh
 voice_input --list-devices
 ```
+入力デバイス名とインデックスを表示します。環境変数 `INPUT_DEVICE_PRIORITY` を
+設定する際の参考にしてください。
 
 録音開始,停止の切り替え+ペースト。
 
