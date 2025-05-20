@@ -119,3 +119,51 @@ fn toggle_start_stop() -> Result<(), Box<dyn std::error::Error>> {
     kill_daemon(&mut daemon);
     Ok(())
 }
+#[test]
+fn status_returns_idle() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = TempDir::new()?;
+    let mut daemon = spawn_daemon(&tmp);
+
+    let mut cmd = Command::cargo_bin("voice_input");
+    cmd.arg("status").env("TMPDIR", tmp.path());
+    cmd.assert().success().stdout(str::contains("state=Idle"));
+
+    kill_daemon(&mut daemon);
+    Ok(())
+}
+
+#[test]
+fn health_check_runs() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = TempDir::new()?;
+    let mut daemon = spawn_daemon(&tmp);
+
+    let mut cmd = Command::cargo_bin("voice_input");
+    cmd.arg("health").env("TMPDIR", tmp.path());
+    cmd.assert().success();
+
+    kill_daemon(&mut daemon);
+    Ok(())
+}
+
+#[test]
+fn dict_add_list_remove() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = TempDir::new()?;
+
+    let mut add_cmd = Command::cargo_bin("voice_input");
+    add_cmd
+        .args(["dict", "add", "foo", "bar"])
+        .env("XDG_DATA_HOME", tmp.path());
+    add_cmd.assert().success().stdout(str::contains("Added"));
+
+    let mut list_cmd = Command::cargo_bin("voice_input");
+    list_cmd.args(["dict", "list"]).env("XDG_DATA_HOME", tmp.path());
+    list_cmd.assert().success().stdout(str::contains("foo"));
+
+    let mut remove_cmd = Command::cargo_bin("voice_input");
+    remove_cmd
+        .args(["dict", "remove", "foo"])
+        .env("XDG_DATA_HOME", tmp.path());
+    remove_cmd.assert().success().stdout(str::contains("Removed"));
+
+    Ok(())
+}
