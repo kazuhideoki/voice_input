@@ -31,16 +31,16 @@ use tokio::{
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 use voice_input::{
+    domain::dict::{DictRepository, apply_replacements},
     domain::recorder::Recorder,
-    domain::dict::{apply_replacements, DictRepository},
     infrastructure::{
         audio::CpalAudioBackend,
+        dict::JsonFileDictRepo,
         external::{
             clipboard::get_selected_text,
             openai::transcribe_audio,
             sound::{pause_apple_music, play_start_sound, play_stop_sound, resume_apple_music},
         },
-        dict::JsonFileDictRepo,
     },
     ipc::{IpcCmd, IpcResp, socket_path},
     load_env,
@@ -112,7 +112,13 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         let mut rx = rx;
         spawn_local(async move {
             while let Some((wav, paste, resume_music)) = rx.recv().await {
-                let permit = worker_sem.clone().acquire_owned().await.unwrap();
+                let permit = match worker_sem.clone().acquire_owned().await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("semaphore acquire error: {e}");
+                        continue;
+                    }
+                };
                 spawn_local(async move {
                     let _ = handle_transcription(&wav, paste, resume_music).await;
                     drop(permit);
@@ -158,7 +164,7 @@ async fn handle_client(
             }
             IpcCmd::Stop => stop_recording(recorder.clone(), &ctx, &tx, true, None).await,
             IpcCmd::Toggle { paste, prompt } => {
-                if ctx.lock().unwrap().state == RecState::Idle {
+                if ctx.lock().map_err(|e| e.to_string())?.state == RecState::Idle {
                     start_recording(recorder.clone(), &ctx, &tx, paste, prompt).await
                 } else {
                     stop_recording(recorder.clone(), &ctx, &tx, paste, prompt).await
@@ -166,7 +172,7 @@ async fn handle_client(
             }
             IpcCmd::Status => Ok(IpcResp {
                 ok: true,
-                msg: format!("state={:?}", ctx.lock().unwrap().state),
+                msg: format!("state={:?}", ctx.lock().map_err(|e| e.to_string())?.state),
             }),
             IpcCmd::ListDevices => {
                 let list = CpalAudioBackend::list_devices();
@@ -204,7 +210,7 @@ async fn start_recording(
     paste: bool,
     prompt: Option<String>,
 ) -> Result<IpcResp, Box<dyn Error>> {
-    let mut c = ctx.lock().unwrap();
+    let mut c = ctx.lock().map_err(|e| e.to_string())?;
     if c.state != RecState::Idle {
         return Err("already recording".into());
     }
@@ -238,7 +244,13 @@ async fn start_recording(
                 if recorder.is_recording() {
                     if let Ok(wav) = recorder.stop() {
                         let was_playing = {
-                            let mut c = ctx_clone.lock().unwrap();
+                            let mut c = match ctx_clone.lock() {
+                                Ok(g) => g,
+                                Err(e) => {
+                                    eprintln!("ctx lock poisoned: {e}");
+                                    return;
+                                }
+                            };
                             c.state = RecState::Idle;
                             c.cancel = None;
                             let stored = c.start_prompt.take();
@@ -276,7 +288,7 @@ async fn stop_recording(
     paste: bool,
     prompt: Option<String>,
 ) -> Result<IpcResp, Box<dyn Error>> {
-    let mut c = ctx.lock().unwrap();
+    let mut c = ctx.lock().map_err(|e| e.to_string())?;
     if c.state != RecState::Recording {
         return Err("not recording".into());
     }
@@ -292,9 +304,7 @@ async fn stop_recording(
 
     // 開始時の保存値→引数→現在の選択の順でプロンプトを決定
     let stored = c.start_prompt.take();
-    let final_prompt = prompt
-        .or(stored)
-        .or_else(|| get_selected_text().ok());
+    let final_prompt = prompt.or(stored).or_else(|| get_selected_text().ok());
 
     if let Some(p) = final_prompt {
         let meta = format!("{wav}.json");
@@ -510,7 +520,7 @@ mod tests {
 
         tokio::time::sleep(Duration::from_secs(2)).await; // wait > 1 s
         assert!(!recorder.is_recording(), "recording did not auto‑stop");
-        assert_eq!(ctx.lock().unwrap().state, RecState::Idle);
+        assert_eq!(ctx.lock().map_err(|e| e.to_string())?.state, RecState::Idle);
         assert!(rx.try_recv().is_ok(), "WAV not queued after timeout");
         Ok(())
     }
