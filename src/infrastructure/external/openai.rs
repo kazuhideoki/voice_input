@@ -3,8 +3,8 @@
 use reqwest::multipart;
 use serde::Deserialize;
 use std::env;
-use std::fs::File;
-use std::io::Read;
+use tokio::fs::File;
+use tokio::io::AsyncReadExt;
 use std::path::Path;
 
 /// STT API のレスポンス JSON。
@@ -41,9 +41,9 @@ pub async fn transcribe_audio(
         .to_string_lossy()
         .into_owned();
 
-    let mut file = File::open(path)?;
+    let mut file = File::open(path).await?;
     let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
+    file.read_to_end(&mut buffer).await?;
 
     let file_part = multipart::Part::bytes(buffer)
         .file_name(file_name)
