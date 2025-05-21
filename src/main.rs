@@ -3,8 +3,9 @@
 use clap::{Parser, Subcommand};
 use voice_input::{
     domain::dict::{DictRepository, EntryStatus, WordEntry},
+    infrastructure::config::AppConfig,
     infrastructure::dict::JsonFileDictRepo,
-    ipc::{send_cmd, IpcCmd},
+    ipc::{IpcCmd, send_cmd},
     load_env,
 };
 
@@ -48,6 +49,11 @@ enum Cmd {
         #[command(subcommand)]
         action: DictCmd,
     },
+    /// 各種設定操作
+    Config {
+        #[command(subcommand)]
+        action: ConfigCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -61,6 +67,22 @@ enum DictCmd {
     Remove { surface: String },
     /// 一覧表示
     List,
+}
+
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// `dict-path` 設定
+    Set {
+        #[command(subcommand)]
+        field: ConfigField,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigField {
+    /// 辞書ファイルの保存先を指定
+    #[command(name = "dict-path")]
+    DictPath { path: String },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -126,6 +148,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+        Cmd::Config { action } => match action {
+            ConfigCmd::Set { field } => match field {
+                ConfigField::DictPath { path } => {
+                    let mut cfg = AppConfig::load();
+                    cfg.set_dict_path(std::path::PathBuf::from(&path))?;
+                    println!("✅ dict-path set to {path}");
+                }
+            },
+        },
     }
     Ok(())
 }

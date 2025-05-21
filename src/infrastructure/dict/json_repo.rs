@@ -2,7 +2,7 @@
 #[cfg(test)]
 use crate::domain::dict::EntryStatus;
 use crate::domain::dict::{DictRepository, WordEntry};
-use directories::ProjectDirs;
+use crate::infrastructure::config::AppConfig;
 use serde_json::{from_reader, to_writer_pretty};
 use std::{fs, io::Result, path::PathBuf};
 
@@ -12,14 +12,12 @@ pub struct JsonFileDictRepo {
 
 impl JsonFileDictRepo {
     pub fn new() -> Self {
-        // ~/Library/Application Support/voice_input/dictionary.json
-        let proj =
-            ProjectDirs::from("com", "user", "voice_input").expect("cannot resolve platform dirs");
-        let dir = proj.data_local_dir();
-        fs::create_dir_all(dir).expect("create data dir");
-        Self {
-            path: dir.join("dictionary.json"),
+        let cfg = AppConfig::load();
+        let path = cfg.dict_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create data dir");
         }
+        Self { path }
     }
 }
 
