@@ -9,6 +9,32 @@ pub struct WordEntry {
     pub surface: String,     // 転写文中の語
     pub replacement: String, // 置換後
     pub hit: u32,            // 使用回数（学習用）
+    #[serde(default)]
+    pub status: EntryStatus, // 有効 / ドラフト
+}
+
+/// 単語エントリの状態
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum EntryStatus {
+    /// 置換に利用される
+    Active,
+    /// 無効状態
+    Draft,
+}
+
+impl Default for EntryStatus {
+    fn default() -> Self {
+        EntryStatus::Active
+    }
+}
+
+impl std::fmt::Display for EntryStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EntryStatus::Active => write!(f, "active"),
+            EntryStatus::Draft => write!(f, "draft"),
+        }
+    }
 }
 
 /// 与えられた文字列に辞書を適用して置換を行います。
@@ -16,7 +42,10 @@ pub struct WordEntry {
 /// `entries` の各 `surface` を `replacement` へ置換し、
 /// 置換が行われた回数だけ `hit` をインクリメントします。
 pub fn apply_replacements(text: &str, entries: &mut [WordEntry]) -> String {
-    for e in entries.iter_mut() {
+    for e in entries
+        .iter_mut()
+        .filter(|e| e.status == EntryStatus::Active)
+    {
         let count = text.matches(&e.surface).count();
         e.hit += count as u32;
     }
@@ -26,7 +55,7 @@ pub fn apply_replacements(text: &str, entries: &mut [WordEntry]) -> String {
     let chars: Vec<char> = text.chars().collect();
     while i < chars.len() {
         let mut replaced = false;
-        for e in entries.iter() {
+        for e in entries.iter().filter(|e| e.status == EntryStatus::Active) {
             let surface_chars: Vec<char> = e.surface.chars().collect();
             if i + surface_chars.len() <= chars.len()
                 && chars[i..i + surface_chars.len()] == surface_chars[..]
@@ -86,11 +115,13 @@ mod tests {
                 surface: "foo".into(),
                 replacement: "bar".into(),
                 hit: 0,
+                status: EntryStatus::Active,
             },
             WordEntry {
                 surface: "bar".into(),
                 replacement: "baz".into(),
                 hit: 1,
+                status: EntryStatus::Active,
             },
         ];
 
@@ -98,5 +129,29 @@ mod tests {
         assert_eq!(out, "bar baz bar");
         assert_eq!(entries[0].hit, 2); // foo replaced twice
         assert_eq!(entries[1].hit, 2); // bar appeared once, plus previous 1
+    }
+
+    #[test]
+    fn draft_entries_are_ignored() {
+        let mut entries = vec![
+            WordEntry {
+                surface: "foo".into(),
+                replacement: "bar".into(),
+                hit: 0,
+                status: EntryStatus::Draft,
+            },
+            WordEntry {
+                surface: "bar".into(),
+                replacement: "baz".into(),
+                hit: 0,
+                status: EntryStatus::Active,
+            },
+        ];
+
+        let out = apply_replacements("foo bar", &mut entries);
+        assert_eq!(out, "foo baz");
+        // foo should not count because entry is draft
+        assert_eq!(entries[0].hit, 0);
+        assert_eq!(entries[1].hit, 1);
     }
 }
