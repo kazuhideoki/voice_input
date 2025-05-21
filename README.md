@@ -94,6 +94,13 @@ voice_input health
 辞書は JSON 形式で `~/Library/Application Support/voice_input/dictionary.json` に保存され、
 CLI から編集できます。
 
+保存先を変更したい場合は次のコマンドを実行してください。設定は同ディレクトリの
+`config.json` に記録され、変更時には旧ファイルが `<旧パス>.bak` として残ります。
+
+```sh
+voice_input config set dict-path /path/to/shared/dictionary.json
+```
+
 ```sh
 # 単語登録または更新
 voice_input dict add "誤変換" "正しい語"

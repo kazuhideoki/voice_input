@@ -167,3 +167,31 @@ fn dict_add_list_remove() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+#[test]
+fn config_set_moves_dict() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = TempDir::new()?;
+
+    let data_home = tmp.path();
+    let default_dict = data_home.join("voice_input/dictionary.json");
+    let new_path = data_home.join("shared/dict.json");
+
+    // create dictionary at default location
+    let mut add = Command::cargo_bin("voice_input");
+    add.args(["dict", "add", "foo", "bar"])
+        .env("XDG_DATA_HOME", data_home);
+    add.assert().success();
+
+    assert!(default_dict.exists());
+
+    // change path
+    let mut set = Command::cargo_bin("voice_input");
+    set.args(["config", "set", "dict-path", new_path.to_str().unwrap()])
+        .env("XDG_DATA_HOME", data_home);
+    set.assert().success();
+
+    assert!(new_path.exists());
+    assert!(default_dict.with_extension("bak").exists());
+
+    Ok(())
+}
