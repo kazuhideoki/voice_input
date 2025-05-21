@@ -1,4 +1,6 @@
 //! JSON ファイル版 DictRepository 実装
+#[cfg(test)]
+use crate::domain::dict::EntryStatus;
 use crate::domain::dict::{DictRepository, WordEntry};
 use directories::ProjectDirs;
 use serde_json::{from_reader, to_writer_pretty};
@@ -69,6 +71,7 @@ mod tests {
             surface: "foo".into(),
             replacement: "bar".into(),
             hit: 1,
+            status: EntryStatus::Active,
         }];
         repo.save(&list).expect("save");
         let loaded = repo.load().expect("load");
@@ -85,6 +88,7 @@ mod tests {
             surface: "foo".into(),
             replacement: "bar".into(),
             hit: 0,
+            status: EntryStatus::Active,
         })
         .expect("upsert add");
 
@@ -92,6 +96,7 @@ mod tests {
             surface: "foo".into(),
             replacement: "baz".into(),
             hit: 2,
+            status: EntryStatus::Active,
         })
         .expect("upsert update");
 
@@ -109,6 +114,7 @@ mod tests {
             surface: "foo".into(),
             replacement: "bar".into(),
             hit: 0,
+            status: EntryStatus::Active,
         })
         .expect("upsert");
         assert!(repo.delete("foo").expect("delete existing"));

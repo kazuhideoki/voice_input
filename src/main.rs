@@ -2,9 +2,9 @@
 //! `Start` / `Stop` / `Toggle` / `Status` の各コマンドを `ipc::send_cmd` で送信します。
 use clap::{Parser, Subcommand};
 use voice_input::{
-    domain::dict::{DictRepository, WordEntry},
+    domain::dict::{DictRepository, EntryStatus, WordEntry},
     infrastructure::dict::JsonFileDictRepo,
-    ipc::{IpcCmd, send_cmd},
+    ipc::{send_cmd, IpcCmd},
     load_env,
 };
 
@@ -102,6 +102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         surface: surface.clone(),
                         replacement,
                         hit: 0,
+                        status: EntryStatus::Active,
                     })?;
                     println!("✅ Added/updated entry for “{surface}”");
                 }
@@ -119,7 +120,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         println!("─ Dictionary ───────────────");
                         for e in list {
-                            println!("• {:<20} → {}", e.surface, e.replacement);
+                            println!("• {:<20} → {} [{}]", e.surface, e.replacement, e.status);
                         }
                     }
                 }
