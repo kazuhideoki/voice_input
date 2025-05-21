@@ -31,14 +31,14 @@ use tokio::{
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 use voice_input::{
-    domain::dict::{DictRepository, apply_replacements},
+    domain::dict::{DictRepository, EntryStatus, WordEntry, apply_replacements},
     domain::recorder::Recorder,
     infrastructure::{
         audio::CpalAudioBackend,
         dict::JsonFileDictRepo,
         external::{
             clipboard::get_selected_text,
-            openai::transcribe_audio,
+            openai::{suggest_dict_candidates, transcribe_audio},
             sound::{pause_apple_music, play_start_sound, play_stop_sound, resume_apple_music},
         },
     },
@@ -352,8 +352,26 @@ async fn handle_transcription(
 
     // 転写に失敗してもクリップボード操作やペーストは試みない
     if let Ok(text) = text_result {
-        // 辞書を適用
         let repo = JsonFileDictRepo::new();
+
+        // --- dictionary suggestions -----------------------------------
+        match suggest_dict_candidates(&text).await {
+            Ok(cands) => {
+                for c in cands {
+                    let _ = repo.upsert(WordEntry {
+                        surface: c.surface,
+                        replacement: c.replacement,
+                        hit: 0,
+                        status: EntryStatus::Draft,
+                    });
+                }
+            }
+            Err(e) => {
+                eprintln!("suggestion error: {e}");
+            }
+        }
+
+        // 辞書を適用
         let mut entries = repo.load().unwrap_or_default();
         let replaced = apply_replacements(&text, &mut entries);
         if let Err(e) = repo.save(&entries) {

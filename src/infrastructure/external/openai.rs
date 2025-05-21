@@ -3,14 +3,21 @@
 use reqwest::multipart;
 use serde::Deserialize;
 use std::env;
+use std::path::Path;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
-use std::path::Path;
 
 /// STT API のレスポンス JSON。
 #[derive(Debug, Deserialize)]
 struct TranscriptionResponse {
     pub text: String,
+}
+
+/// Dictionary suggestion (surface -> replacement)
+#[derive(Debug, Deserialize)]
+pub struct WordSuggestion {
+    pub surface: String,
+    pub replacement: String,
 }
 
 /// WAV ファイルを STT API で文字起こしします。
@@ -80,6 +87,71 @@ pub async fn transcribe_audio(
 
     let transcription: TranscriptionResponse = serde_json::from_str(&body)?;
     Ok(transcription.text)
+}
+
+/// Suggest dictionary candidate entries using the ChatGPT API.
+///
+/// The model is taken from `OPENAI_DICT_MODEL` or defaults to `gpt-4o`.
+pub async fn suggest_dict_candidates(
+    text: &str,
+) -> Result<Vec<WordSuggestion>, Box<dyn std::error::Error>> {
+    let api_key =
+        env::var("OPENAI_API_KEY").map_err(|_| "OPENAI_API_KEY environment variable not set")?;
+
+    let model = env::var("OPENAI_DICT_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
+
+    #[derive(Deserialize)]
+    struct ChatResponse {
+        choices: Vec<Choice>,
+    }
+
+    #[derive(Deserialize)]
+    struct Choice {
+        message: Message,
+    }
+
+    #[derive(Deserialize)]
+    struct Message {
+        content: String,
+    }
+
+    let client = reqwest::Client::new();
+    let url = "https://api.openai.com/v1/chat/completions";
+
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "Extract dictionary candidates from the given text. Respond with a JSON array of objects each having surface and replacement fields. Use Japanese."},
+            {"role": "user", "content": text}
+        ],
+        "temperature": 0.0
+    });
+
+    let resp = client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&body)
+        .send()
+        .await?;
+
+    let status = resp.status();
+    let body = resp.text().await?;
+    if !status.is_success() {
+        return Err(format!("API request failed with status {}: {}", status, body).into());
+    }
+
+    let chat: ChatResponse = serde_json::from_str(&body)?;
+    let content = chat
+        .choices
+        .get(0)
+        .ok_or("no choices")?
+        .message
+        .content
+        .trim()
+        .to_string();
+
+    let suggestions: Vec<WordSuggestion> = serde_json::from_str(&content).unwrap_or_default();
+    Ok(suggestions)
 }
 
 // === Unit tests ==========================================================
