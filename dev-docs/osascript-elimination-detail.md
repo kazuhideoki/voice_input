@@ -315,17 +315,41 @@ fn benchmark_sound_latency() {
 
 ## 依存関係更新
 
-### Cargo.toml
+### Cargo.toml（現在の設定）
 ```toml
 [dependencies]
 # 既存
 cpal = "0.15"
 hound = "3.5.1"
 
-# 新規追加
+# Apple Music制御用（macOSのみ・段階的移行中のため現在は無効）
+# [target.'cfg(target_os = "macos")'.dependencies]
+# swift-bridge = { version = "0.1", optional = true }
+
+# [build-dependencies]
+# Apple Music制御用ビルド設定（macOSのみ・段階的移行中のため現在は無効）
+# [target.'cfg(target_os = "macos")'.build-dependencies]
+# swift-bridge-build = { version = "0.1", optional = true }
+
+# [features]
+# default = ["native-music"]
+# native-music = ["swift-bridge", "swift-bridge-build"]
+```
+
+### 将来の完全版Cargo.toml
+```toml
+[dependencies]
+# 既存
+cpal = "0.15"
+hound = "3.5.1"
+
+# Apple Music制御用（macOSのみ）
+[target.'cfg(target_os = "macos")'.dependencies]
 swift-bridge = { version = "0.1", optional = true }
 
 [build-dependencies]
+# Apple Music制御用ビルド設定（macOSのみ）
+[target.'cfg(target_os = "macos")'.build-dependencies]
 swift-bridge-build = { version = "0.1", optional = true }
 
 [features]
@@ -333,19 +357,126 @@ default = ["native-music"]
 native-music = ["swift-bridge", "swift-bridge-build"]
 ```
 
+## 実装状況（2025年12月更新）
+
+### Phase 1: 効果音のネイティブ実装 ✅ **完了**
+- ✅ NativeSoundPlayer実装完了 (`src/infrastructure/audio/sound_player.rs`)
+- ✅ フォールバック機構付き段階的移行完了 (`src/infrastructure/external/sound.rs`)
+- ✅ 全テスト通過確認済み (15/15 tests passed)
+- ✅ `cargo check`/`cargo build`で問題なし
+
+### Phase 2: Apple Music制御のswift-bridge実装 ✅ **基盤完了・一時無効化中**
+- ✅ ファイル構成完了
+  - `src/native/MusicController.swift`: Swift実装完了
+  - `src/native/bridge.rs`: Rustブリッジ完了
+  - `src/native/mod.rs`: モジュール統合完了
+  - `Info.plist`: 権限設定完了
+  - `build.rs`: ビルド設定完了（無効化中）
+- ✅ sound.rsに統合済み（フォールバック機構付き）
+- ⚠️ **段階的移行のため現在は無効化**
+  - swift-bridge依存関係はコメントアウト
+  - NativeMusicControllerは一時的にダミー実装
+  - osascriptフォールバックが正常動作中
+
+### Phase 2.1: 技術調査・準備 🔍 **未実施**
+
+#### 🤖 Claude実行可能（Web調査・文献調査）
+- [ ] swift-bridgeクレートの文献調査
+  - [ ] 最新バージョン確認（Crates.io）
+  - [ ] 公式ドキュメント・README調査
+  - [ ] GitHub issues/PRでの既知問題調査
+  - [ ] 依存関係とシステム要件の文献調査
+- [ ] 代替手段の技術調査
+  - [ ] Objective-C FFI（objc crate等）の調査
+  - [ ] bindgen + cc crateでのフレームワーク直接呼び出し調査
+  - [ ] 他のRust-Swift/Rust-ObjC連携手法調査
+  - [ ] 既存プロジェクトでの事例調査
+- [ ] Apple MediaPlayerフレームワーク調査
+  - [ ] 公式ドキュメントでのAPI仕様確認
+  - [ ] 権限要件・制限事項調査
+  - [ ] バージョン互換性情報調査
+- [ ] 技術比較・評価
+  - [ ] 各手法のメリット・デメリット整理
+  - [ ] 保守性・可読性の比較
+  - [ ] 学習コスト・導入コストの評価
+
+#### 👤 手動実行必要（ビルド・実行・環境確認）
+- [ ] 実際のビルド環境確認
+  - [ ] 現在のmacOS/Xcodeバージョン確認
+  - [ ] swift-bridgeクレートの実際のインストール試行
+  - [ ] ビルドエラーの確認と対処
+- [ ] 最小限のPoC作成・実行
+  - [ ] "Hello World"レベルのSwift-Rustブリッジ
+  - [ ] MediaPlayerフレームワークへの最小限アクセス
+  - [ ] 実際の権限ダイアログ動作確認
+- [ ] パフォーマンス測定
+  - [ ] 実際のレイテンシ測定
+  - [ ] メモリ使用量確認
+  - [ ] osascript vs ネイティブの性能比較
+- [ ] 開発環境セットアップ確認
+  - [ ] CI/CD環境での自動ビルド可能性確認
+  - [ ] 他の開発者環境での再現性確認
+
+#### 📋 協力作業（Claude調査 → 手動検証）
+- [ ] 技術選択の最終決定
+  - [ ] Claude調査結果の報告
+  - [ ] 手動検証結果との照合
+  - [ ] 実装方針の確定
+- [ ] 実装計画の詳細化
+  - [ ] Phase 2.5以降の具体的タスク定義
+  - [ ] リスク評価と対策計画
+  - [ ] スケジュール調整
+
+### Phase 2.5: swift-bridge有効化 🔄 **未実施**
+- [ ] Cargo.tomlでswift-bridge依存関係を有効化
+- [ ] build.rsでswift-bridgeビルドを有効化
+- [ ] NativeMusicControllerの実装を実際のSwift呼び出しに戻す
+- [ ] ビルド・テスト確認
+
+### Phase 3: 統合テスト・完全移行 📋 **計画中**
+- [ ] swift-bridge有効化後の動作確認
+- [ ] Apple Music権限テスト
+- [ ] パフォーマンステスト
+- [ ] osascriptフォールバック削除
+- [ ] CI/CD対応
+
+## 現在の動作状況
+
+### 効果音（Phase 1）
+- ✅ ネイティブ実装優先、afplayフォールバック
+- ✅ 完全に動作中
+
+### Apple Music制御（Phase 2）
+- ✅ osascript実装で完全動作中
+- ⚠️ swift-bridge実装は準備完了だが無効化中
+- 📋 将来のPhase 2.5で有効化予定
+
 ## マイルストーン
 
-### Week 1: Phase 1完了
-- [ ] NativeSoundPlayer実装
-- [ ] 段階的移行開始
-- [ ] 基本テスト実行
+### ✅ Phase 1完了
+- ✅ NativeSoundPlayer実装
+- ✅ 段階的移行開始
+- ✅ 基本テスト実行
 
-### Week 2: Phase 2完了  
-- [ ] swift-bridge設定
-- [ ] Apple Music制御実装
-- [ ] 権限処理実装
+### ✅ Phase 2基盤完了（一時無効化）
+- ✅ swift-bridge設定（無効化中）
+- ✅ Apple Music制御実装（ダミー化中）
+- ✅ 権限処理実装
 
-### Week 3: Phase 3完了
+### 📋 Phase 2.1: 技術調査（次回作業）
+- [ ] 🤖 Claude: swift-bridge文献調査
+- [ ] 🤖 Claude: 代替手段技術調査  
+- [ ] 🤖 Claude: 技術比較・評価
+- [ ] 👤 手動: 実際のビルド環境確認
+- [ ] 👤 手動: 最小限PoC作成・実行
+- [ ] 📋 協力: 技術選択の最終決定
+
+### 📋 Phase 2.5: 有効化（調査後）
+- [ ] swift-bridge依存関係有効化
+- [ ] 実装の有効化
+- [ ] 動作確認
+
+### 📋 Phase 3: 完全移行
 - [ ] 統合テスト
 - [ ] パフォーマンス最適化
-- [ ] 完全移行
+- [ ] osascriptフォールバック削除
