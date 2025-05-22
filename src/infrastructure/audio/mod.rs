@@ -14,4 +14,7 @@ pub trait AudioBackend {
 }
 
 pub mod cpal_backend;
+pub mod sound_player;
+
 pub use cpal_backend::CpalAudioBackend;
+pub use sound_player::NativeSoundPlayer;

@@ -1,22 +1,125 @@
 //! 効果音および Apple Music 制御ユーティリティ。
 use std::process::Command;
+use crate::infrastructure::audio::NativeSoundPlayer;
 
-/// 録音開始を示すサウンドを再生します。
+/// 音声再生バックエンド
+pub enum SoundBackend {
+    Native(NativeSoundPlayer),
+    Command, // 既存実装（フォールバック用）
+}
+
+/// 音声再生管理構造体
+pub struct SoundPlayer {
+    backend: SoundBackend,
+}
+
+impl SoundPlayer {
+    /// 新しいSoundPlayerインスタンスを作成します
+    pub fn new() -> Self {
+        match NativeSoundPlayer::new() {
+            Ok(native) => Self { backend: SoundBackend::Native(native) },
+            Err(e) => {
+                eprintln!("Failed to initialize native sound player, falling back to command: {}", e);
+                Self { backend: SoundBackend::Command }
+            },
+        }
+    }
+
+    /// 録音開始を示すサウンドを再生します
+    pub fn play_start_sound(&self) {
+        match &self.backend {
+            SoundBackend::Native(player) => {
+                if let Err(e) = player.play_ping() {
+                    eprintln!("Native ping sound failed, falling back to command: {}", e);
+                    play_start_sound_command();
+                }
+            },
+            SoundBackend::Command => play_start_sound_command(),
+        }
+    }
+
+    /// 録音停止を示すサウンドを再生します
+    pub fn play_stop_sound(&self) {
+        match &self.backend {
+            SoundBackend::Native(player) => {
+                if let Err(e) = player.play_purr() {
+                    eprintln!("Native purr sound failed, falling back to command: {}", e);
+                    play_stop_sound_command();
+                }
+            },
+            SoundBackend::Command => play_stop_sound_command(),
+        }
+    }
+
+    /// 転写完了を示すサウンドを再生します
+    pub fn play_transcription_complete_sound(&self) {
+        match &self.backend {
+            SoundBackend::Native(player) => {
+                if let Err(e) = player.play_glass() {
+                    eprintln!("Native glass sound failed, falling back to command: {}", e);
+                    play_transcription_complete_sound_command();
+                }
+            },
+            SoundBackend::Command => play_transcription_complete_sound_command(),
+        }
+    }
+}
+
+use std::sync::{Mutex, OnceLock};
+
+/// グローバル音声プレイヤーインスタンス（安全な初期化）
+static SOUND_PLAYER: OnceLock<Mutex<SoundPlayer>> = OnceLock::new();
+
+/// グローバル音声プレイヤーを取得します
+fn get_sound_player() -> &'static Mutex<SoundPlayer> {
+    SOUND_PLAYER.get_or_init(|| {
+        Mutex::new(SoundPlayer::new())
+    })
+}
+
+/// 録音開始を示すサウンドを再生します（新しいAPI）
 pub fn play_start_sound() {
+    if let Ok(player) = get_sound_player().lock() {
+        player.play_start_sound();
+    } else {
+        play_start_sound_command();
+    }
+}
+
+/// 録音停止を示すサウンドを再生します（新しいAPI）
+pub fn play_stop_sound() {
+    if let Ok(player) = get_sound_player().lock() {
+        player.play_stop_sound();
+    } else {
+        play_stop_sound_command();
+    }
+}
+
+/// 転写完了を示すサウンドを再生します（新しいAPI）
+pub fn play_transcription_complete_sound() {
+    if let Ok(player) = get_sound_player().lock() {
+        player.play_transcription_complete_sound();
+    } else {
+        play_transcription_complete_sound_command();
+    }
+}
+
+/// 録音開始を示すサウンドを再生します（コマンド版・フォールバック用）
+fn play_start_sound_command() {
     let _ = Command::new("afplay")
         .arg("/System/Library/Sounds/Ping.aiff")
         .spawn();
 }
 
-/// 録音停止を示すサウンドを再生します。
-pub fn play_stop_sound() {
+/// 録音停止を示すサウンドを再生します（コマンド版・フォールバック用）
+fn play_stop_sound_command() {
     let _ = Command::new("afplay")
         .arg("/System/Library/Sounds/Purr.aiff")
         .spawn();
 }
 
-/// 転写完了を示すサウンドを再生します。
-pub fn play_transcription_complete_sound() {
+/// 転写完了を示すサウンドを再生します（コマンド版・フォールバック用）
+fn play_transcription_complete_sound_command() {
     let _ = Command::new("afplay")
         .arg("/System/Library/Sounds/Glass.aiff")
         .spawn();
