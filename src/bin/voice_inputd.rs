@@ -38,7 +38,7 @@ use voice_input::{
         dict::JsonFileDictRepo,
         external::{
             clipboard::get_selected_text,
-            openai::{suggest_dict_candidates, transcribe_audio},
+            openai::transcribe_audio,
             sound::{pause_apple_music, play_start_sound, play_stop_sound, resume_apple_music},
         },
     },
@@ -322,28 +322,6 @@ async fn stop_recording(
 
 // ────────────────────── 転写 & ペースト ─────────────────────
 
-/// 辞書候補を非同期で取得してドラフトとして登録します。
-async fn register_dict_candidates(text: String) {
-    match suggest_dict_candidates(&text).await {
-        Ok(cands) => {
-            let repo = JsonFileDictRepo::new();
-            for c in cands {
-                if let Err(e) = repo.upsert(WordEntry {
-                    surface: c.surface,
-                    replacement: c.replacement,
-                    hit: 0,
-                    status: EntryStatus::Draft,
-                }) {
-                    eprintln!("dict upsert error: {e}");
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("suggestion error: {e}");
-        }
-    }
-}
-
 /// WAV ファイルを OpenAI STT API で文字起こしし、結果をクリップボードへ保存。
 /// `paste` フラグが `true` の場合は 80ms 後に ⌘V を送信して即貼り付けを行います。
 async fn handle_transcription(
@@ -382,7 +360,6 @@ async fn handle_transcription(
         if let Err(e) = repo.save(&entries) {
             eprintln!("dict save error: {e}");
         }
-        spawn_local(register_dict_candidates(text.clone()));
 
         // クリップボードへコピー
         if let Err(e) = set_clipboard(&replaced).await {
