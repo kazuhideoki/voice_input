@@ -8,6 +8,12 @@ pub struct AppConfig {
 }
 
 fn data_dir() -> PathBuf {
+    if let Ok(xdg_data_home) = std::env::var("XDG_DATA_HOME") {
+        let dir = PathBuf::from(xdg_data_home).join("voice_input");
+        fs::create_dir_all(&dir).expect("create data dir");
+        return dir;
+    }
+    
     let proj =
         ProjectDirs::from("com", "user", "voice_input").expect("cannot resolve platform dirs");
     let dir = proj.data_local_dir();
