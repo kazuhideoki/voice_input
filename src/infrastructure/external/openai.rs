@@ -118,13 +118,16 @@ pub async fn suggest_dict_candidates(
     let client = reqwest::Client::new();
     let url = "https://api.openai.com/v1/chat/completions";
 
+    // TODO: JSONスキーマを渡して、型を強制させる。(現在はプロンプトで指示しているだけ。)
+    // TODO: 辞書としてふさわしい組み合わせになるようにプロンプトを調整する。(現在は単に日本語変換される傾向にある。)
     let body = serde_json::json!({
         "model": model,
         "messages": [
-            {"role": "system", "content": "Extract dictionary candidates from the given text. Respond with a JSON array of objects each having surface and replacement fields. Use Japanese."},
+            {"role": "system", "content": "Extract dictionary candidates from the given text. Return a JSON object with a 'candidates' field containing an array of objects. Each object must have 'surface' and 'replacement' fields. Example: {\"candidates\":[{\"surface\":\"example\", \"replacement\":\"例\"}]}"},
             {"role": "user", "content": text}
         ],
-        "temperature": 0.0
+        "temperature": 0.0,
+        "response_format": {"type": "json_object"}
     });
 
     let resp = client
@@ -150,8 +153,18 @@ pub async fn suggest_dict_candidates(
         .trim()
         .to_string();
 
-    let suggestions: Vec<WordSuggestion> = serde_json::from_str(&content).unwrap_or_default();
-    Ok(suggestions)
+    #[derive(Deserialize)]
+    struct CandidatesResponse {
+        candidates: Vec<WordSuggestion>,
+    }
+
+    let response: CandidatesResponse = serde_json::from_str(&content).unwrap_or_else(|e| {
+        println!("JSON parse error: {}", e);
+        CandidatesResponse { candidates: vec![] }
+    });
+
+    println!("suggestions: {:?}", response.candidates);
+    Ok(response.candidates)
 }
 
 // === Unit tests ==========================================================
