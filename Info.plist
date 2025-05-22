@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" 
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- MediaPlayerフレームワークを使用してApple Musicにアクセスする権限 -->
+    <key>NSAppleMusicUsageDescription</key>
+    <string>音声入力中にApple Musicを一時停止・再開するために使用します</string>
+    
+    <!-- アプリケーション識別情報 -->
+    <key>CFBundleIdentifier</key>
+    <string>com.yourcompany.voice_input</string>
+    
+    <key>CFBundleName</key>
+    <string>Voice Input</string>
+    
+    <key>CFBundleDisplayName</key>
+    <string>Voice Input</string>
+    
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    
+    <!-- 実行ファイル名 -->
+    <key>CFBundleExecutable</key>
+    <string>voice_input</string>
+    
+    <!-- パッケージタイプ -->
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    
+    <!-- 最小システム要件 -->
+    <key>LSMinimumSystemVersion</key>
+    <string>10.15</string>
+    
+    <!-- UIタイプ（コマンドラインアプリケーション） -->
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>

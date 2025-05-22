@@ -5,4 +5,6 @@ pub mod utils {
 }
 
 pub mod ipc;
+pub mod native;
+
 pub use utils::env::load_env;

@@ -1,6 +1,7 @@
 //! 効果音および Apple Music 制御ユーティリティ。
 use std::process::Command;
 use crate::infrastructure::audio::NativeSoundPlayer;
+use crate::native::NativeMusicController;
 
 /// 音声再生バックエンド
 pub enum SoundBackend {
@@ -125,8 +126,23 @@ fn play_transcription_complete_sound_command() {
         .spawn();
 }
 
-/// Apple Music を一時停止し、元々再生中だったかを返します。
+/// Apple Music を一時停止し、元々再生中だったかを返します（新しいAPI）
 pub fn pause_apple_music() -> bool {
+    // ネイティブ実装を試行
+    match NativeMusicController::pause_apple_music() {
+        Ok(was_playing) => {
+            println!("Native music pause result: {}", was_playing);
+            was_playing
+        },
+        Err(e) => {
+            eprintln!("Native music pause failed, falling back to osascript: {}", e);
+            pause_apple_music_command()
+        }
+    }
+}
+
+/// Apple Music を一時停止します（コマンド版・フォールバック用）
+fn pause_apple_music_command() -> bool {
     // 直接 Music アプリを操作する - プロセスチェックをバイパス
     let playing_script = r#"
         try
@@ -172,8 +188,22 @@ pub fn pause_apple_music() -> bool {
     false
 }
 
-/// Apple Music を再開します。
+/// Apple Music を再開します（新しいAPI）
 pub fn resume_apple_music() {
+    // ネイティブ実装を試行
+    match NativeMusicController::resume_apple_music() {
+        Ok(success) => {
+            println!("Native music resume result: {}", success);
+        },
+        Err(e) => {
+            eprintln!("Native music resume failed, falling back to osascript: {}", e);
+            resume_apple_music_command();
+        }
+    }
+}
+
+/// Apple Music を再開します（コマンド版・フォールバック用）
+fn resume_apple_music_command() {
     // 直接 Music アプリを操作する - プロセスチェックをバイパス
     let play_script = r#"
         try
