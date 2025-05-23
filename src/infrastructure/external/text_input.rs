@@ -56,9 +56,9 @@ pub struct TextInputConfig {
 impl Default for TextInputConfig {
     fn default() -> Self {
         Self {
-            max_chunk_size: 200,  // 安全な初期値
-            chunk_delay_ms: 10,   // 最小遅延
-            timeout_seconds: 30,  // 十分な時間
+            max_chunk_size: 200, // 安全な初期値
+            chunk_delay_ms: 10,  // 最小遅延
+            timeout_seconds: 30, // 十分な時間
         }
     }
 }
@@ -84,15 +84,15 @@ fn escape_for_applescript(text: &str) -> Result<String, TextInputError> {
     // 最大文字数制限チェック (AppleScript の実際の制限)
     if text.len() > 32768 {
         return Err(TextInputError::InvalidInput(
-            "Text too long for AppleScript processing".to_string()
+            "Text too long for AppleScript processing".to_string(),
         ));
     }
 
     let escaped = text
-        .replace("\\", "\\\\")       // バックスラッシュエスケープ (最初に実行)
-        .replace("\"", "\\\"")       // ダブルクォートエスケープ
-        .replace("\n", "\r")         // 改行文字変換
-        .replace("\r\r", "\r");      // 重複回避
+        .replace("\\", "\\\\") // バックスラッシュエスケープ (最初に実行)
+        .replace("\"", "\\\"") // ダブルクォートエスケープ
+        .replace("\n", "\r") // 改行文字変換
+        .replace("\r\r", "\r"); // 重複回避
 
     Ok(escaped)
 }
@@ -157,9 +157,20 @@ mod escape_tests {
 /// # 分割送信
 /// 長いテキストは config.max_chunk_size で分割して送信
 /// 各分割間に config.chunk_delay_ms の遅延を挿入
+///
+/// # Example
+/// ```no_run
+/// # use voice_input::infrastructure::external::text_input::{type_text_directly, TextInputConfig};
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let config = TextInputConfig::default();
+/// type_text_directly("Hello, World!", &config).await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn type_text_directly(
     text: &str,
-    config: &TextInputConfig
+    config: &TextInputConfig,
 ) -> Result<(), TextInputError> {
     if text.is_empty() {
         return Ok(());
@@ -179,10 +190,7 @@ pub async fn type_text_directly(
 }
 
 /// 単一のkeystrokeコマンド実行
-async fn execute_keystroke(
-    escaped_text: &str,
-    timeout_seconds: u64
-) -> Result<(), TextInputError> {
+async fn execute_keystroke(escaped_text: &str, timeout_seconds: u64) -> Result<(), TextInputError> {
     let script = format!(
         r#"tell application "System Events" to keystroke "{}""#,
         escaped_text
@@ -190,11 +198,9 @@ async fn execute_keystroke(
 
     let output = tokio::time::timeout(
         Duration::from_secs(timeout_seconds),
-        Command::new("osascript")
-            .arg("-e")
-            .arg(script)
-            .output()
-    ).await
+        Command::new("osascript").arg("-e").arg(script).output(),
+    )
+    .await
     .map_err(|_| TextInputError::Timeout)?
     .map_err(|e| TextInputError::AppleScriptFailure(e.to_string()))?;
 
@@ -209,7 +215,7 @@ async fn execute_keystroke(
 /// 分割keystrokeコマンド実行
 async fn execute_chunked_keystroke(
     chars: &[char],
-    config: &TextInputConfig
+    config: &TextInputConfig,
 ) -> Result<(), TextInputError> {
     for chunk in chars.chunks(config.max_chunk_size) {
         let chunk_str: String = chunk.iter().collect();
@@ -228,33 +234,54 @@ async fn execute_chunked_keystroke(
 /// デフォルト設定でテキストを直接入力
 ///
 /// 最も簡単な使用方法。内部でデフォルト設定を使用
+///
+/// # Example
+/// ```no_run
+/// # use voice_input::infrastructure::external::text_input::type_text;
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// type_text("Hello, World!").await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn type_text(text: &str) -> Result<(), TextInputError> {
     type_text_directly(text, &TextInputConfig::default()).await
 }
 
 /// 設定のバリデーション
+///
+/// # Example
+/// ```
+/// use voice_input::infrastructure::external::text_input::{TextInputConfig, validate_config};
+/// 
+/// let mut config = TextInputConfig::default();
+/// assert!(validate_config(&config).is_ok());
+/// 
+/// config.max_chunk_size = 0;
+/// assert!(validate_config(&config).is_err());
+/// ```
 pub fn validate_config(config: &TextInputConfig) -> Result<(), TextInputError> {
     if config.max_chunk_size == 0 {
         return Err(TextInputError::InvalidInput(
-            "max_chunk_size must be greater than 0".to_string()
+            "max_chunk_size must be greater than 0".to_string(),
         ));
     }
 
     if config.max_chunk_size > 1000 {
         return Err(TextInputError::InvalidInput(
-            "max_chunk_size too large (max: 1000)".to_string()
+            "max_chunk_size too large (max: 1000)".to_string(),
         ));
     }
 
     if config.timeout_seconds == 0 {
         return Err(TextInputError::InvalidInput(
-            "timeout_seconds must be greater than 0".to_string()
+            "timeout_seconds must be greater than 0".to_string(),
         ));
     }
 
     if config.timeout_seconds > 300 {
         return Err(TextInputError::InvalidInput(
-            "timeout_seconds too large (max: 300)".to_string()
+            "timeout_seconds too large (max: 300)".to_string(),
         ));
     }
 
@@ -300,7 +327,7 @@ mod integration_tests {
         let large_text = "A".repeat(500);
         let config = TextInputConfig {
             max_chunk_size: 100,
-            chunk_delay_ms: 1,  // テスト用に短縮
+            chunk_delay_ms: 1, // テスト用に短縮
             timeout_seconds: 10,
         };
 
