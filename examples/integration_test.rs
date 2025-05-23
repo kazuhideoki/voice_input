@@ -1,9 +1,9 @@
 //! Integration test for text_input module
-//! 
+//!
 //! Verifies that the module can be imported and used from other parts of the codebase
 
 use voice_input::infrastructure::external::text_input::{
-    type_text, type_text_directly, validate_config, TextInputConfig, TextInputError,
+    TextInputConfig, TextInputError, type_text, type_text_directly, validate_config,
 };
 
 #[tokio::main]
@@ -19,16 +19,20 @@ async fn main() {
 
     // I3: Test error handling in upper layers
     println!("\nI3: Testing error handling in upper layers...");
-    let result = type_text_directly("Test", &TextInputConfig {
-        max_chunk_size: 0,
-        ..Default::default()
-    }).await;
+    let result = type_text_directly(
+        "Test",
+        &TextInputConfig {
+            max_chunk_size: 0,
+            ..Default::default()
+        },
+    )
+    .await;
 
     match result {
         Ok(_) => println!("❌ I3: Should have failed with invalid config"),
         Err(e) => {
             println!("✅ I3: Error properly propagated: {}", e);
-            
+
             // Demonstrate error type matching
             match e {
                 TextInputError::InvalidInput(msg) => {

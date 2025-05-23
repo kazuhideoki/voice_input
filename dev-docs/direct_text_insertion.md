@@ -160,8 +160,8 @@ enum Cmd {
 
 ### Phase 2: CLI拡張
 
-1. ⏳ IpcCmd構造体拡張
-2. ⏳ CLI引数追加
+1. ✅ IpcCmd構造体拡張 (P1-2完了)
+2. ⏳ CLI引数追加 (P1-4で実装予定)
 3. ⏳ エンドツーエンドテスト
 
 ### Phase 3: 最適化
@@ -339,7 +339,7 @@ fn escape_for_applescript(text: &str) -> Result<String, TextInputError>
 - [x] エラーハンドリング（TextInputError型定義）
 - [x] ドキュメントコメント
 
-### P1-2: IPC拡張（direct_inputフラグ）
+### P1-2: IPC拡張（direct_inputフラグ）✅ 完了
 
 **範囲:** 内部通信にdirect_inputオプション追加
 **ファイル:** `src/ipc.rs`
@@ -365,8 +365,8 @@ pub enum IpcCmd {
 
 **PR要件:**
 
-- [ ] シリアライゼーションテスト
-- [ ] 後方互換性確認
+- [x] シリアライゼーションテスト（tests/ipc_serialization_test.rs）
+- [x] 後方互換性確認（tests/ipc_compatibility_test.rs）
 
 ### P1-3: voice_inputd統合
 

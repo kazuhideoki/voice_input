@@ -172,6 +172,9 @@ pub async fn type_text_directly(
     text: &str,
     config: &TextInputConfig,
 ) -> Result<(), TextInputError> {
+    // 設定のバリデーション
+    validate_config(config)?;
+    
     if text.is_empty() {
         return Ok(());
     }
@@ -253,10 +256,10 @@ pub async fn type_text(text: &str) -> Result<(), TextInputError> {
 /// # Example
 /// ```
 /// use voice_input::infrastructure::external::text_input::{TextInputConfig, validate_config};
-/// 
+///
 /// let mut config = TextInputConfig::default();
 /// assert!(validate_config(&config).is_ok());
-/// 
+///
 /// config.max_chunk_size = 0;
 /// assert!(validate_config(&config).is_err());
 /// ```

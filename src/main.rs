@@ -106,9 +106,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         prompt: None,
     }) {
         /* 録音系 → IPC */
-        Cmd::Start { paste, prompt } => relay(IpcCmd::Start { paste, prompt })?,
+        Cmd::Start { paste, prompt } => {
+            // TODO(P1-4): direct_input引数を追加し、CLIから受け取れるようにする
+            relay(IpcCmd::Start {
+                paste,
+                prompt,
+                direct_input: false,
+            })?
+        }
         Cmd::Stop => relay(IpcCmd::Stop)?,
-        Cmd::Toggle { paste, prompt } => relay(IpcCmd::Toggle { paste, prompt })?,
+        Cmd::Toggle { paste, prompt } => {
+            // TODO(P1-4): direct_input引数を追加し、CLIから受け取れるようにする
+            relay(IpcCmd::Toggle {
+                paste,
+                prompt,
+                direct_input: false,
+            })?
+        }
         Cmd::Status => relay(IpcCmd::Status)?,
         Cmd::Health => relay(IpcCmd::Health)?,
 

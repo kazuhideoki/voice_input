@@ -1,5 +1,5 @@
 //! Security test for text input
-//! 
+//!
 //! Tests injection resistance and security aspects
 
 use voice_input::infrastructure::external::text_input;
