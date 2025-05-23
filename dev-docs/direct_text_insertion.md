@@ -161,8 +161,9 @@ enum Cmd {
 ### Phase 2: CLI拡張
 
 1. ✅ IpcCmd構造体拡張 (P1-2完了)
-2. ⏳ CLI引数追加 (P1-4で実装予定)
-3. ⏳ エンドツーエンドテスト
+2. ✅ voice_inputd統合 (P1-3完了)
+3. ⏳ CLI引数追加 (P1-4で実装予定)
+4. ⏳ エンドツーエンドテスト
 
 ### Phase 3: 最適化
 
@@ -368,7 +369,7 @@ pub enum IpcCmd {
 - [x] シリアライゼーションテスト（tests/ipc_serialization_test.rs）
 - [x] 後方互換性確認（tests/ipc_compatibility_test.rs）
 
-### P1-3: voice_inputd統合
+### P1-3: voice_inputd統合 ✅ 完了
 
 **範囲:** デーモンプロセスでの直接入力実装
 **ファイル:** `src/bin/voice_inputd.rs`
@@ -401,9 +402,9 @@ if paste {
 
 **PR要件:**
 
-- [ ] 既存ペースト機能の保持
-- [ ] エラー時の適切なフォールバック
-- [ ] 統合テスト
+- [x] 既存ペースト機能の保持
+- [x] エラー時の適切なフォールバック
+- [x] 統合テスト
 
 ### P1-4: CLI引数拡張
 

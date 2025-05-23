@@ -174,7 +174,7 @@ pub async fn type_text_directly(
 ) -> Result<(), TextInputError> {
     // 設定のバリデーション
     validate_config(config)?;
-    
+
     if text.is_empty() {
         return Ok(());
     }

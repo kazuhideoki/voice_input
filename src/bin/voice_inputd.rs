@@ -40,6 +40,7 @@ use voice_input::{
             clipboard::get_selected_text,
             openai::transcribe_audio,
             sound::{pause_apple_music, play_start_sound, play_stop_sound, resume_apple_music},
+            text_input,
         },
     },
     ipc::{IpcCmd, IpcResp, socket_path},
@@ -343,12 +344,12 @@ async fn stop_recording(
 
 /// WAV ファイルを OpenAI STT API で文字起こしし、結果をクリップボードへ保存。
 /// `paste` フラグが `true` の場合は 80ms 後に ⌘V を送信して即貼り付けを行います。
-/// `direct_input` フラグが `true` の場合は直接入力を使用します（P1-3で実装）。
+/// `direct_input` フラグが `true` の場合は直接入力を使用します。
 async fn handle_transcription(
     wav: &str,
     paste: bool,
     resume_music: bool,
-    _direct_input: bool,
+    direct_input: bool,
 ) -> Result<(), Box<dyn Error>> {
     // エラーが発生しても確実に音楽を再開するためにdeferパターンで実装
     let _defer_guard = scopeguard::guard(resume_music, |should_resume| {
@@ -390,13 +391,31 @@ async fn handle_transcription(
         // 即貼り付け
         if paste {
             tokio::time::sleep(Duration::from_millis(80)).await;
-            // TODO(P1-3): direct_inputがtrueの場合はtext_input::type_text()を使用
-            // 現時点では既存のペースト処理のみ
-            let _ = tokio::process::Command::new("osascript")
-                .arg("-e")
-                .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
-                .output()
-                .await;
+
+            if direct_input {
+                // 直接入力方式
+                match text_input::type_text(&replaced).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("Direct input failed: {}, falling back to paste", e);
+                        // 既存のペースト処理へフォールバック
+                        let _ = tokio::process::Command::new("osascript")
+                            .arg("-e")
+                            .arg(
+                                r#"tell app "System Events" to keystroke "v" using {command down}"#,
+                            )
+                            .output()
+                            .await;
+                    }
+                }
+            } else {
+                // 既存のペースト方式
+                let _ = tokio::process::Command::new("osascript")
+                    .arg("-e")
+                    .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
+                    .output()
+                    .await;
+            }
         }
     } else if let Err(e) = text_result {
         eprintln!("transcription error: {e}");
