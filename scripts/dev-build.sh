@@ -1,5 +1,5 @@
 #!/bin/bash
-# 開発用ビルドスクリプト
+# 開発用ビルドスクリプト（ラッパー使用版）
 
 echo "🔨 Building voice_input..."
 cargo build --release
@@ -9,12 +9,16 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "🔏 Signing binaries..."
-codesign -s - -f target/release/voice_input
-codesign -s - -f target/release/voice_inputd
-
 echo "🔄 Restarting voice_inputd daemon..."
-launchctl unload ~/Library/LaunchAgents/com.user.voiceinputd.plist 2>/dev/null || true
-launchctl load ~/Library/LaunchAgents/com.user.voiceinputd.plist
 
-echo "✅ Build complete! voice_inputd has been restarted."
+# 既存のサービスを強制再起動
+if launchctl kickstart -k user/$(id -u)/com.user.voiceinputd 2>/dev/null; then
+    echo "✅ Build complete! voice_inputd has been restarted."
+else
+    echo "⚠️  kickstart failed, trying manual restart..."
+    pkill -f voice_inputd 2>/dev/null
+    sleep 1
+    # 直接ラッパーを実行（バックグラウンド）
+    nohup /usr/local/bin/voice_inputd_wrapper > /tmp/voice_inputd.out 2> /tmp/voice_inputd.err &
+    echo "✅ Build complete! voice_inputd started manually."
+fi
