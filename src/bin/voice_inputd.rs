@@ -397,8 +397,7 @@ async fn handle_transcription(
             if direct_input {
                 // 直接入力方式（Enigo使用、日本語対応）
                 match text_input::type_text(&replaced).await {
-                    Ok(_) => {
-                    }
+                    Ok(_) => {}
                     Err(e) => {
                         eprintln!("Direct input failed: {}, falling back to paste", e);
                         // フォールバック時はクリップボードにコピー
