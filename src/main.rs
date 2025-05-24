@@ -24,39 +24,34 @@ struct Cli {
 enum Cmd {
     /// 録音開始
     Start {
-        /// 転写後に即ペースト
-        #[arg(long, default_value_t = false)]
-        paste: bool,
         /// Whisper へ追加のプロンプト
         #[arg(long)]
         prompt: Option<String>,
-        /// 直接入力方式を使用（クリップボードを汚染しない）
-        #[arg(long, help = "Use direct text input instead of clipboard paste")]
-        direct_input: bool,
-        /// 明示的にクリップボードペースト方式を使用
+        /// クリップボード経由でペースト（デフォルトの直接入力を無効化）
+        #[arg(long, help = "Use clipboard copy-and-paste method instead of direct input")]
+        copy_and_paste: bool,
+        /// クリップボードにコピーのみ（ペーストしない）
         #[arg(
             long,
-            help = "Explicitly use clipboard paste (conflicts with --direct-input)"
+            help = "Only copy to clipboard without pasting (conflicts with --copy-and-paste)"
         )]
-        no_direct_input: bool,
+        copy_only: bool,
     },
     /// 録音停止
     Stop,
     /// 録音開始 / 停止トグル
     Toggle {
-        #[arg(long, default_value_t = false)]
-        paste: bool,
         #[arg(long)]
         prompt: Option<String>,
-        /// 直接入力方式を使用（クリップボードを汚染しない）
-        #[arg(long, help = "Use direct text input instead of clipboard paste")]
-        direct_input: bool,
-        /// 明示的にクリップボードペースト方式を使用
+        /// クリップボード経由でペースト（デフォルトの直接入力を無効化）
+        #[arg(long, help = "Use clipboard copy-and-paste method instead of direct input")]
+        copy_and_paste: bool,
+        /// クリップボードにコピーのみ（ペーストしない）
         #[arg(
             long,
-            help = "Explicitly use clipboard paste (conflicts with --direct-input)"
+            help = "Only copy to clipboard without pasting (conflicts with --copy-and-paste)"
         )]
-        no_direct_input: bool,
+        copy_only: bool,
     },
     /// デーモン状態取得
     Status,
@@ -103,16 +98,23 @@ enum ConfigField {
     DictPath { path: String },
 }
 
-/// フラグの競合をチェックし、最終的なdirect_input値を決定
-fn resolve_direct_input_flag(
-    direct_input: bool,
-    no_direct_input: bool,
-) -> Result<bool, &'static str> {
-    match (direct_input, no_direct_input) {
-        (true, true) => Err("Cannot specify both --direct-input and --no-direct-input"),
-        (true, false) => Ok(true),
-        (false, true) => Ok(false),
-        (false, false) => Ok(false), // デフォルト
+/// フラグの競合をチェックし、入力モードを決定
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum InputMode {
+    Direct,        // デフォルト: 直接入力
+    CopyAndPaste,  // クリップボード経由でペースト
+    CopyOnly,      // クリップボードにコピーのみ
+}
+
+fn resolve_input_mode(
+    copy_and_paste: bool,
+    copy_only: bool,
+) -> Result<InputMode, &'static str> {
+    match (copy_and_paste, copy_only) {
+        (true, true) => Err("Cannot specify both --copy-and-paste and --copy-only"),
+        (true, false) => Ok(InputMode::CopyAndPaste),
+        (false, true) => Ok(InputMode::CopyOnly),
+        (false, false) => Ok(InputMode::Direct), // デフォルトは直接入力
     }
 }
 
@@ -133,37 +135,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     /* ───── コマンド解析 ──────────── */
     match cli.cmd.unwrap_or(Cmd::Toggle {
-        paste: false,
         prompt: None,
-        direct_input: false,
-        no_direct_input: false,
+        copy_and_paste: false,
+        copy_only: false,
     }) {
         /* 録音系 → IPC */
         Cmd::Start {
-            paste,
             prompt,
-            direct_input,
-            no_direct_input,
+            copy_and_paste,
+            copy_only,
         } => {
-            let direct_input_flag = resolve_direct_input_flag(direct_input, no_direct_input)?;
+            let input_mode = resolve_input_mode(copy_and_paste, copy_only)?;
+            let direct_input = input_mode == InputMode::Direct;
+            let paste = match input_mode {
+                InputMode::Direct => true,        // 直接入力の場合は常にペースト
+                InputMode::CopyAndPaste => true,  // copy-and-pasteの場合も常にペースト
+                InputMode::CopyOnly => false,     // copy_onlyの場合はペーストしない
+            };
             relay(IpcCmd::Start {
                 paste,
                 prompt,
-                direct_input: direct_input_flag,
+                direct_input,
             })?
         }
         Cmd::Stop => relay(IpcCmd::Stop)?,
         Cmd::Toggle {
-            paste,
             prompt,
-            direct_input,
-            no_direct_input,
+            copy_and_paste,
+            copy_only,
         } => {
-            let direct_input_flag = resolve_direct_input_flag(direct_input, no_direct_input)?;
+            let input_mode = resolve_input_mode(copy_and_paste, copy_only)?;
+            let direct_input = input_mode == InputMode::Direct;
+            let paste = match input_mode {
+                InputMode::Direct => true,        // 直接入力の場合は常にペースト
+                InputMode::CopyAndPaste => true,  // copy-and-pasteの場合も常にペースト
+                InputMode::CopyOnly => false,     // copy_onlyの場合はペーストしない
+            };
             relay(IpcCmd::Toggle {
                 paste,
                 prompt,
-                direct_input: direct_input_flag,
+                direct_input,
             })?
         }
         Cmd::Status => relay(IpcCmd::Status)?,
