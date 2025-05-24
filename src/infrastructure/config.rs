@@ -13,7 +13,7 @@ fn data_dir() -> PathBuf {
         fs::create_dir_all(&dir).expect("create data dir");
         return dir;
     }
-    
+
     let proj =
         ProjectDirs::from("com", "user", "voice_input").expect("cannot resolve platform dirs");
     let dir = proj.data_local_dir();

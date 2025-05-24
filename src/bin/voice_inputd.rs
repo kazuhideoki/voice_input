@@ -31,7 +31,7 @@ use tokio::{
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 use voice_input::{
-    domain::dict::{DictRepository, EntryStatus, WordEntry, apply_replacements},
+    domain::dict::{DictRepository, apply_replacements},
     domain::recorder::Recorder,
     infrastructure::{
         audio::CpalAudioBackend,
@@ -40,6 +40,7 @@ use voice_input::{
             clipboard::get_selected_text,
             openai::transcribe_audio,
             sound::{pause_apple_music, play_start_sound, play_stop_sound, resume_apple_music},
+            text_input,
         },
     },
     ipc::{IpcCmd, IpcResp, socket_path},
@@ -70,6 +71,10 @@ struct RecCtx {
     music_was_playing: bool,
     /// 録音開始時点で取得した選択テキストまたはCLIプロンプト
     start_prompt: Option<String>,
+    /// 転写完了後にペーストを行うか
+    paste: bool,
+    /// 直接入力を使用するか（クリップボードを使わない）
+    direct_input: bool,
 }
 
 // ────────────────────────────────────────────────────────
@@ -100,10 +105,12 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         cancel: None,
         music_was_playing: false,
         start_prompt: None,
+        paste: false,
+        direct_input: false,
     }));
 
     // 転写ジョブ用チャンネルと同時実行セマフォ
-    let (tx, rx) = mpsc::unbounded_channel::<(String, bool, bool)>();
+    let (tx, rx) = mpsc::unbounded_channel::<(String, bool, bool, bool)>();
     let sem = Arc::new(Semaphore::new(2));
 
     // ─── 転写ワーカー ─────────────────────────────
@@ -111,7 +118,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         let worker_sem = sem.clone();
         let mut rx = rx;
         spawn_local(async move {
-            while let Some((wav, paste, resume_music)) = rx.recv().await {
+            while let Some((wav, paste, resume_music, direct_input)) = rx.recv().await {
                 let permit = match worker_sem.clone().acquire_owned().await {
                     Ok(p) => p,
                     Err(e) => {
@@ -120,7 +127,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                     }
                 };
                 spawn_local(async move {
-                    let _ = handle_transcription(&wav, paste, resume_music).await;
+                    let _ = handle_transcription(&wav, paste, resume_music, direct_input).await;
                     drop(permit);
                 });
             }
@@ -150,7 +157,7 @@ async fn handle_client(
     stream: UnixStream,
     recorder: Arc<Recorder<CpalAudioBackend>>,
     ctx: Arc<Mutex<RecCtx>>,
-    tx: mpsc::UnboundedSender<(String, bool, bool)>,
+    tx: mpsc::UnboundedSender<(String, bool, bool, bool)>,
 ) -> Result<(), Box<dyn Error>> {
     let (r, w) = stream.into_split();
     let mut reader = FramedRead::new(r, LinesCodec::new());
@@ -159,15 +166,21 @@ async fn handle_client(
     if let Some(Ok(line)) = reader.next().await {
         let cmd: IpcCmd = serde_json::from_str(&line)?;
         let resp = match cmd {
-            IpcCmd::Start { paste, prompt } => {
-                start_recording(recorder.clone(), &ctx, &tx, paste, prompt).await
-            }
-            IpcCmd::Stop => stop_recording(recorder.clone(), &ctx, &tx, true, None).await,
-            IpcCmd::Toggle { paste, prompt } => {
+            IpcCmd::Start {
+                paste,
+                prompt,
+                direct_input,
+            } => start_recording(recorder.clone(), &ctx, &tx, paste, prompt, direct_input).await,
+            IpcCmd::Stop => stop_recording(recorder.clone(), &ctx, &tx, true, None, false).await,
+            IpcCmd::Toggle {
+                paste,
+                prompt,
+                direct_input,
+            } => {
                 if ctx.lock().map_err(|e| e.to_string())?.state == RecState::Idle {
-                    start_recording(recorder.clone(), &ctx, &tx, paste, prompt).await
+                    start_recording(recorder.clone(), &ctx, &tx, paste, prompt, direct_input).await
                 } else {
-                    stop_recording(recorder.clone(), &ctx, &tx, paste, prompt).await
+                    stop_recording(recorder.clone(), &ctx, &tx, paste, prompt, direct_input).await
                 }
             }
             IpcCmd::Status => Ok(IpcResp {
@@ -203,12 +216,14 @@ async fn handle_client(
 ///
 /// * `paste` – 転写完了後に ⌘V ペーストを行うか
 /// * `prompt` – 追加プロンプト。選択テキストより優先される
+/// * `direct_input` – 直接入力を使用するか（クリップボードを使わない）
 async fn start_recording(
     recorder: Arc<Recorder<CpalAudioBackend>>,
     ctx: &Arc<Mutex<RecCtx>>,
-    tx: &mpsc::UnboundedSender<(String, bool, bool)>,
+    tx: &mpsc::UnboundedSender<(String, bool, bool, bool)>,
     paste: bool,
     prompt: Option<String>,
+    direct_input: bool,
 ) -> Result<IpcResp, Box<dyn Error>> {
     let mut c = ctx.lock().map_err(|e| e.to_string())?;
     if c.state != RecState::Idle {
@@ -217,6 +232,10 @@ async fn start_recording(
 
     // 録音開始時点の選択テキストまたはCLI引数を保存
     c.start_prompt = prompt.or_else(|| get_selected_text().ok());
+
+    // paste/direct_input設定を保存
+    c.paste = paste;
+    c.direct_input = direct_input;
 
     // Apple Music を一時停止し、後で再開するかを記録
     c.music_was_playing = pause_apple_music();
@@ -243,7 +262,7 @@ async fn start_recording(
             _ = tokio::time::sleep(Duration::from_secs(max_secs)) => {
                 if recorder.is_recording() {
                     if let Ok(wav) = recorder.stop() {
-                        let was_playing = {
+                        let (was_playing, stored_paste, stored_direct_input) = {
                             let mut c = match ctx_clone.lock() {
                                 Ok(g) => g,
                                 Err(e) => {
@@ -260,9 +279,9 @@ async fn start_recording(
                             }
                             let w = c.music_was_playing;
                             c.music_was_playing = false;
-                            w
+                            (w, c.paste, c.direct_input)
                         };
-                        let _ = tx_clone.send((wav, paste, was_playing));
+                        let _ = tx_clone.send((wav, stored_paste, was_playing, stored_direct_input));
                         play_stop_sound();
                     }
                 }
@@ -284,9 +303,10 @@ async fn start_recording(
 async fn stop_recording(
     recorder: Arc<Recorder<CpalAudioBackend>>,
     ctx: &Arc<Mutex<RecCtx>>,
-    tx: &mpsc::UnboundedSender<(String, bool, bool)>,
+    tx: &mpsc::UnboundedSender<(String, bool, bool, bool)>,
     paste: bool,
     prompt: Option<String>,
+    direct_input: bool,
 ) -> Result<IpcResp, Box<dyn Error>> {
     let mut c = ctx.lock().map_err(|e| e.to_string())?;
     if c.state != RecState::Recording {
@@ -312,7 +332,7 @@ async fn stop_recording(
     }
     let was_playing = c.music_was_playing;
     c.music_was_playing = false;
-    tx.send((wav, paste, was_playing))?;
+    tx.send((wav, paste, was_playing, direct_input))?;
 
     Ok(IpcResp {
         ok: true,
@@ -324,10 +344,12 @@ async fn stop_recording(
 
 /// WAV ファイルを OpenAI STT API で文字起こしし、結果をクリップボードへ保存。
 /// `paste` フラグが `true` の場合は 80ms 後に ⌘V を送信して即貼り付けを行います。
+/// `direct_input` フラグが `true` の場合は直接入力を使用します。
 async fn handle_transcription(
     wav: &str,
     paste: bool,
     resume_music: bool,
+    direct_input: bool,
 ) -> Result<(), Box<dyn Error>> {
     // エラーが発生しても確実に音楽を再開するためにdeferパターンで実装
     let _defer_guard = scopeguard::guard(resume_music, |should_resume| {
@@ -361,19 +383,46 @@ async fn handle_transcription(
             eprintln!("dict save error: {e}");
         }
 
-        // クリップボードへコピー
-        if let Err(e) = set_clipboard(&replaced).await {
-            eprintln!("clipboard error: {e}");
+        // direct_inputでない場合のみクリップボードへコピー
+        if !direct_input {
+            if let Err(e) = set_clipboard(&replaced).await {
+                eprintln!("clipboard error: {e}");
+            }
         }
 
         // 即貼り付け
         if paste {
             tokio::time::sleep(Duration::from_millis(80)).await;
-            let _ = tokio::process::Command::new("osascript")
-                .arg("-e")
-                .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
-                .output()
-                .await;
+
+            if direct_input {
+                // 直接入力方式（Enigo使用、日本語対応）
+                match text_input::type_text(&replaced).await {
+                    Ok(_) => {
+                    }
+                    Err(e) => {
+                        eprintln!("Direct input failed: {}, falling back to paste", e);
+                        // フォールバック時はクリップボードにコピー
+                        if let Err(e) = set_clipboard(&replaced).await {
+                            eprintln!("clipboard error in fallback: {e}");
+                        }
+                        // 既存のペースト処理へフォールバック
+                        let _ = tokio::process::Command::new("osascript")
+                            .arg("-e")
+                            .arg(
+                                r#"tell app "System Events" to keystroke "v" using {command down}"#,
+                            )
+                            .output()
+                            .await;
+                    }
+                }
+            } else {
+                // 既存のペースト方式
+                let _ = tokio::process::Command::new("osascript")
+                    .arg("-e")
+                    .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
+                    .output()
+                    .await;
+            }
         }
     } else if let Err(e) = text_result {
         eprintln!("transcription error: {e}");
@@ -475,19 +524,28 @@ mod tests {
             cancel: None,
             music_was_playing: false,
             start_prompt: None,
+            paste: false,
+            direct_input: false,
         }));
-        let (tx, mut rx) = mpsc::unbounded_channel::<(String, bool, bool)>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<(String, bool, bool, bool)>();
 
-        if start_recording(recorder.clone(), &ctx, &tx, false, Some("hello".into()))
-            .await
-            .is_err()
+        if start_recording(
+            recorder.clone(),
+            &ctx,
+            &tx,
+            false,
+            Some("hello".into()),
+            false,
+        )
+        .await
+        .is_err()
         {
             eprintln!("⚠️  No audio device – prompt meta test skipped");
             return Ok(());
         }
-        stop_recording(recorder, &ctx, &tx, false, None).await?;
+        stop_recording(recorder, &ctx, &tx, false, None, false).await?;
 
-        let (wav, _, _) = rx.recv().await.expect("wav path not queued");
+        let (wav, _, _, _) = rx.recv().await.expect("wav path not queued");
         let meta = std::fs::read_to_string(format!("{wav}.json"))?;
         assert!(meta.contains("hello"));
         Ok(())
@@ -507,10 +565,12 @@ mod tests {
             cancel: None,
             music_was_playing: false,
             start_prompt: None,
+            paste: false,
+            direct_input: false,
         }));
-        let (tx, mut rx) = mpsc::unbounded_channel::<(String, bool, bool)>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<(String, bool, bool, bool)>();
 
-        if start_recording(recorder.clone(), &ctx, &tx, false, None)
+        if start_recording(recorder.clone(), &ctx, &tx, false, None, false)
             .await
             .is_err()
         {

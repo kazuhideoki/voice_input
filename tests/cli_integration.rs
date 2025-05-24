@@ -156,14 +156,19 @@ fn dict_add_list_remove() -> Result<(), Box<dyn std::error::Error>> {
     add_cmd.assert().success().stdout(str::contains("Added"));
 
     let mut list_cmd = Command::cargo_bin("voice_input");
-    list_cmd.args(["dict", "list"]).env("XDG_DATA_HOME", tmp.path());
+    list_cmd
+        .args(["dict", "list"])
+        .env("XDG_DATA_HOME", tmp.path());
     list_cmd.assert().success().stdout(str::contains("foo"));
 
     let mut remove_cmd = Command::cargo_bin("voice_input");
     remove_cmd
         .args(["dict", "remove", "foo"])
         .env("XDG_DATA_HOME", tmp.path());
-    remove_cmd.assert().success().stdout(str::contains("Removed"));
+    remove_cmd
+        .assert()
+        .success()
+        .stdout(str::contains("Removed"));
 
     Ok(())
 }

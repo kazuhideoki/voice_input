@@ -19,6 +19,7 @@ pub enum IpcCmd {
     Start {
         paste: bool,
         prompt: Option<String>,
+        direct_input: bool,
     },
     /// 録音停止
     Stop,
@@ -26,6 +27,7 @@ pub enum IpcCmd {
     Toggle {
         paste: bool,
         prompt: Option<String>,
+        direct_input: bool,
     },
     /// ステータス取得
     Status,

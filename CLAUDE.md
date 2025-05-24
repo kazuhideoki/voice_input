@@ -12,6 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Lint: `cargo clippy`
 - Test: `cargo test`
 - Test single file: `cargo test --test <test_name>` or `cargo test <test_module::test_name>`
+- Test with ignored tests (manual): `cargo test -- --ignored --nocapture`
+- Performance test: `cargo test --test performance_test -- --ignored --nocapture`
 
 ## Code Style Guidelines
 
