@@ -39,26 +39,59 @@ cargo build --release
 # - target/release/voice_inputd … デーモン
 ```
 
-## MacOS での権限設定
+## macOS での権限設定
 
-以下、ペーストできるようにする
+### 初回セットアップ
 
-- `設定` -> `プライバシーとセキュリティ` -> `アクセシビリティ`
-  - **メインで使うターミナル** に許可を与える
-  - `/Users/kazuhideoki/voice_input/target/release/voice_inputd` **再ビルド時再設定**
+1. **開発環境セットアップ（ラッパースクリプト方式）**
+   ```sh
+   ./scripts/setup-dev-env.sh
+   ```
+   このスクリプトは以下を自動で行います：
+   - `/usr/local/bin/voice_inputd_wrapper` にラッパースクリプトを作成
+   - LaunchAgentをラッパー経由で起動するよう設定
+   - デーモンを再起動
 
-**再ビルド時は `voiceinputd` のデーモンの再起動**
+2. **権限の付与**
+   - システム設定 → プライバシーとセキュリティ → アクセシビリティ
+   - 以下を追加して有効化：
+     - **使用中のターミナル**（Terminal.app、iTerm2など）
+     - `/usr/local/bin/voice_inputd_wrapper`
+
+### 開発時の再ビルド
+
+ラッパースクリプト方式により、再ビルド時の権限再設定が不要になりました：
 
 ```sh
-launchctl unload ~/Library/LaunchAgents/com.user.voiceinputd.plist
-launchctl load ~/Library/LaunchAgents/com.user.voiceinputd.plist
+./scripts/dev-build.sh
 ```
+
+これだけで：
+- リリースビルドを実行
+- デーモンを自動的に再起動
+- **権限の再設定は不要**
+
+### 仕組み
+
+macOSのTCCシステムは実行ファイルのハッシュ値で権限を管理するため、再ビルドすると権限が失われます。
+ラッパースクリプト方式では：
+
+1. 変更されないラッパースクリプト（`/usr/local/bin/voice_inputd_wrapper`）に権限を付与
+2. ラッパーが実際のバイナリ（`target/release/voice_inputd`）を実行
+3. 再ビルドしてもラッパーのハッシュ値は変わらないため、権限が維持される
+
+### トラブルシューティング
+
+権限関連のエラーが発生した場合：
 
 ```sh
-osascript -e 'tell app "System Events" to keystroke "v" using {command down}'
-```
+# エラーログを確認
+tail -f /tmp/voice_inputd.err
 
-また、初回実行時にはいくつか権限のリクエストが来る。
+# 手動でデーモンを再起動
+pkill -f voice_inputd
+nohup /usr/local/bin/voice_inputd_wrapper > /tmp/voice_inputd.out 2> /tmp/voice_inputd.err &
+```
 
 ## 使い方（基本）
 
