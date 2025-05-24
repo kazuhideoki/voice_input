@@ -155,15 +155,15 @@ enum Cmd {
 
 1. ✅ 設計文書作成
 2. ✅ AppleScript keystroke関数実装 (P1-1完了)
-3. ⏳ voice_inputd.rsへの統合
+3. ✅ voice_inputd.rsへの統合 (P1-3完了)
 4. ✅ 基本テスト (P1-1完了)
 
 ### Phase 2: CLI拡張
 
 1. ✅ IpcCmd構造体拡張 (P1-2完了)
 2. ✅ voice_inputd統合 (P1-3完了)
-3. ⏳ CLI引数追加 (P1-4で実装予定)
-4. ⏳ エンドツーエンドテスト
+3. ✅ CLI引数追加 (P1-4完了)
+4. ⏳ エンドツーエンドテスト (P1-5で実装予定)
 
 ### Phase 3: 最適化
 
@@ -406,22 +406,21 @@ if paste {
 - [x] エラー時の適切なフォールバック
 - [x] 統合テスト
 
-### P1-4: CLI引数拡張
+### P1-4: CLI引数拡張 ✅ 完了
 
 **範囲:** ユーザーインターフェース拡張
 **ファイル:** `src/main.rs`
 
-**新フラグ:**
+**実装内容:**
 
 - `--direct-input`: 直接入力使用（将来的にデフォルト化を検討）
 - `--no-direct-input`: 明示的にペースト方式使用
-
-**注意:** P1-1で実装したtext_inputモジュールはアクセシビリティ権限が必要
+- `resolve_direct_input_flag`関数でフラグ競合チェック
 
 **動作:**
 
 ```bash
-# デフォルト（将来的に直接入力がデフォルト）
+# デフォルト（現在はペースト方式）
 voice_input start --paste
 
 # 明示的に直接入力
@@ -431,14 +430,16 @@ voice_input start --paste --direct-input
 voice_input start --paste --no-direct-input
 
 # 競合時はエラー
-voice_input start --paste --direct-input --no-direct-input  # エラー
+voice_input start --paste --direct-input --no-direct-input  
+# Error: "Cannot specify both --direct-input and --no-direct-input"
 ```
 
 **PR要件:**
 
-- [ ] 引数競合チェック
-- [ ] ヘルプテキスト更新
-- [ ] CLIテスト
+- [x] 引数競合チェック
+- [x] ヘルプテキスト更新
+- [x] CLIテスト（tests/cli_args_test.rs）
+- [x] エンドツーエンドテスト（tests/e2e_direct_input_test.rs）
 
 ### P1-5: モジュール統合・テスト
 

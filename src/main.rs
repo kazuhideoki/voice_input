@@ -30,6 +30,15 @@ enum Cmd {
         /// Whisper へ追加のプロンプト
         #[arg(long)]
         prompt: Option<String>,
+        /// 直接入力方式を使用（クリップボードを汚染しない）
+        #[arg(long, help = "Use direct text input instead of clipboard paste")]
+        direct_input: bool,
+        /// 明示的にクリップボードペースト方式を使用
+        #[arg(
+            long,
+            help = "Explicitly use clipboard paste (conflicts with --direct-input)"
+        )]
+        no_direct_input: bool,
     },
     /// 録音停止
     Stop,
@@ -39,6 +48,15 @@ enum Cmd {
         paste: bool,
         #[arg(long)]
         prompt: Option<String>,
+        /// 直接入力方式を使用（クリップボードを汚染しない）
+        #[arg(long, help = "Use direct text input instead of clipboard paste")]
+        direct_input: bool,
+        /// 明示的にクリップボードペースト方式を使用
+        #[arg(
+            long,
+            help = "Explicitly use clipboard paste (conflicts with --direct-input)"
+        )]
+        no_direct_input: bool,
     },
     /// デーモン状態取得
     Status,
@@ -85,6 +103,19 @@ enum ConfigField {
     DictPath { path: String },
 }
 
+/// フラグの競合をチェックし、最終的なdirect_input値を決定
+fn resolve_direct_input_flag(
+    direct_input: bool,
+    no_direct_input: bool,
+) -> Result<bool, &'static str> {
+    match (direct_input, no_direct_input) {
+        (true, true) => Err("Cannot specify both --direct-input and --no-direct-input"),
+        (true, false) => Ok(true),
+        (false, true) => Ok(false),
+        (false, false) => Ok(false), // デフォルト
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     load_env();
 
@@ -104,23 +135,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.cmd.unwrap_or(Cmd::Toggle {
         paste: false,
         prompt: None,
+        direct_input: false,
+        no_direct_input: false,
     }) {
         /* 録音系 → IPC */
-        Cmd::Start { paste, prompt } => {
-            // TODO(P1-4): direct_input引数を追加し、CLIから受け取れるようにする
+        Cmd::Start {
+            paste,
+            prompt,
+            direct_input,
+            no_direct_input,
+        } => {
+            let direct_input_flag = resolve_direct_input_flag(direct_input, no_direct_input)?;
             relay(IpcCmd::Start {
                 paste,
                 prompt,
-                direct_input: false,
+                direct_input: direct_input_flag,
             })?
         }
         Cmd::Stop => relay(IpcCmd::Stop)?,
-        Cmd::Toggle { paste, prompt } => {
-            // TODO(P1-4): direct_input引数を追加し、CLIから受け取れるようにする
+        Cmd::Toggle {
+            paste,
+            prompt,
+            direct_input,
+            no_direct_input,
+        } => {
+            let direct_input_flag = resolve_direct_input_flag(direct_input, no_direct_input)?;
             relay(IpcCmd::Toggle {
                 paste,
                 prompt,
-                direct_input: false,
+                direct_input: direct_input_flag,
             })?
         }
         Cmd::Status => relay(IpcCmd::Status)?,
