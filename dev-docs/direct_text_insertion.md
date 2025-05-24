@@ -1,4 +1,10 @@
-# カーソル位置直接テキスト挿入：AppleScript keystrokeアプローチ
+# カーソル位置直接テキスト挿入：Enigoアプローチ
+
+## 重要：実装方針変更
+
+当初はAppleScript keystrokeアプローチで実装を進めていましたが、テスト中にAppleScriptの`keystroke`命令が**非ASCII文字（日本語、絵文字など）をサポートしていない**ことが判明しました。
+
+そのため、**Enigoライブラリ（CGEventPostベース）**に切り替え、日本語を含むすべての文字を正しく入力できるようにしました。
 
 ## 概要
 
@@ -21,67 +27,53 @@ let _ = tokio::process::Command::new("osascript")
 - クリップボードの汚染（元の内容が失われる）
 - ⌘V操作はクリップボード全体を対象とする
 
-## 解決策：AppleScript keystroke直接入力
+## 解決策：Enigoライブラリを使用した直接入力
 
 ### 実装方針
 
-AppleScriptの`keystroke`機能を使用してテキストを直接入力します。
+Enigoライブラリ（macOSではCGEventPost APIを使用）を使用してテキストを直接入力します。
 
 **メリット：**
 
 - ✅ クリップボードを使わない
-- ✅ 既存のosascript基盤を活用
+- ✅ 日本語・特殊文字・絵文字完全対応
 - ✅ アプリケーション非依存
-- ✅ 日本語・特殊文字対応
-- ✅ 実装が簡単
+- ✅ クロスプラットフォーム対応可能
+- ✅ アクティブに開発されている
 
 **デメリット：**
 
-- ⚠️ 長いテキストは分割送信が必要
-- ⚠️ 文字単位入力のため速度がやや遅い
+- ⚠️ 外部依存の追加
+- ⚠️ バイナリサイズの若干の増加
 
 ### 技術実装
 
-#### 1. エスケープ関数
+#### 1. Enigoライブラリの統合
 
 ```rust
-fn escape_for_applescript(text: &str) -> String {
-    text.replace("\\", "\\\\")
-        .replace("\"", "\\\"")
-        .replace("\n", "\r")  // AppleScriptは\rを改行として認識
-        .replace("\r\r", "\r") // 重複回避
+// src/infrastructure/external/text_input_enigo.rs
+use enigo::{Enigo, Settings, Keyboard};
+
+pub async fn type_text_with_enigo(text: &str) -> Result<(), EnigoInputError> {
+    let text_owned = text.to_string();
+    
+    tokio::task::spawn_blocking(move || {
+        let mut enigo = Enigo::new(&Settings::default())?;
+        enigo.text(&text_owned)?;
+        Ok(())
+    }).await?
 }
 ```
 
-#### 2. 直接入力関数
+#### 2. シンプルなAPI
 
 ```rust
-async fn type_text_directly(text: &str) -> Result<(), Box<dyn std::error::Error>> {
-    const MAX_CHUNK_SIZE: usize = 200; // AppleScript文字数制限対策
-
-    let escaped = escape_for_applescript(text);
-
-    // 長いテキストは分割して送信
-    for chunk in escaped.chars().collect::<Vec<_>>().chunks(MAX_CHUNK_SIZE) {
-        let chunk_str: String = chunk.iter().collect();
-        let script = format!(
-            r#"tell application "System Events" to keystroke "{}""#,
-            chunk_str
-        );
-
-        tokio::process::Command::new("osascript")
-            .arg("-e")
-            .arg(script)
-            .output()
-            .await?;
-
-        // 分割送信時の小さな遅延
-        if escaped.len() > MAX_CHUNK_SIZE {
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-        }
-    }
-
-    Ok(())
+// src/infrastructure/external/text_input.rs
+pub async fn type_text(text: &str) -> Result<(), TextInputError> {
+    // Enigoを使用して日本語を含むすべてのテキストを入力
+    text_input_enigo::type_text_default(text)
+        .await
+        .map_err(|e| TextInputError::AppleScriptFailure(e.to_string()))
 }
 ```
 
@@ -208,12 +200,6 @@ pub struct AppConfig {
     /// デフォルトで直接入力を使用するか
     pub use_direct_input_by_default: bool,
 
-    /// 直接入力の分割サイズ
-    pub direct_input_chunk_size: usize,
-
-    /// 分割送信時の遅延（ミリ秒）
-    pub direct_input_chunk_delay_ms: u64,
-
     /// 直接入力失敗時にペーストにフォールバックするか
     pub fallback_to_paste: bool,
 }
@@ -221,83 +207,14 @@ pub struct AppConfig {
 
 ## 既知の制限事項
 
-1. **AppleScript文字数制限**
+1. **アプリケーション固有の挙動**
 
-   - 対策: 文字列分割送信
-
-2. **入力速度**
-
-   - keystrokeは文字単位送信のため、ペーストより遅い
-   - 体感的には問題ないレベルと予想
-
-3. **アプリケーション固有の挙動**
-
-   - 一部のアプリでkeystrokeが期待通りに動作しない可能性
+   - 一部のアプリで直接入力が期待通りに動作しない可能性
    - フォールバック機能で対応
 
-4. **アクセシビリティ権限**
+2. **アクセシビリティ権限**
    - System Eventsの使用にはアクセシビリティ権限が必要（既存と同じ）
 
-## 事前テスト：AppleScript keystroke文字数制限調査
-
-実装前に文字数制限を調査するテストスクリプト：
-
-```python
-#!/usr/bin/env python3
-"""
-AppleScript keystrokeの文字数制限テストスクリプト
-
-使用方法:
-1. TextEditを開いて新規文書を作成
-2. カーソルをテキスト入力エリアに置く
-3. python3 keystroke_limit_test.py を実行
-
-テスト内容: 50, 100, 200, 500, 1000, 2000文字での動作確認
-"""
-
-import subprocess
-import time
-
-def escape_for_applescript(text):
-    return text.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\r')
-
-def test_keystroke(text, description):
-    print(f"\n=== {description} ===")
-    print(f"文字数: {len(text)}")
-
-    try:
-        escaped = escape_for_applescript(text)
-        script = f'tell application "System Events" to keystroke "{escaped}"'
-
-        start_time = time.time()
-        result = subprocess.run(["osascript", "-e", script],
-                              capture_output=True, text=True, timeout=30)
-        end_time = time.time()
-
-        if result.returncode == 0:
-            print(f"✅ 成功 (実行時間: {end_time - start_time:.2f}秒)")
-            return True
-        else:
-            print(f"❌ 失敗: {result.stderr.strip()}")
-            return False
-    except Exception as e:
-        print(f"❌ エラー: {e}")
-        return False
-
-def generate_test_text(length):
-    base = "Mixed text: Hello 世界！Special @#$% chars. 日本語と英語のミックス。123456789. "
-    repetitions = (length // len(base)) + 1
-    return (base * repetitions)[:length]
-
-# テスト実行
-test_cases = [50, 100, 200, 500, 1000, 2000]
-for length in test_cases:
-    text = generate_test_text(length)
-    test_keystroke(text, f"{length}文字テスト")
-    time.sleep(2)
-```
-
-**このテスト結果を基にMAX_CHUNK_SIZEを決定してください。**
 
 ## 実装状況
 

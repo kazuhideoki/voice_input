@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tokio::io::AsyncWriteExt;
-use voice_input::infrastructure::external::text_input::{TextInputConfig, type_text_directly};
+use voice_input::infrastructure::external::text_input::type_text;
 
 /// パフォーマンステスト結果
 #[derive(Debug)]
@@ -51,14 +51,8 @@ async fn paste_text(text: &str) -> Result<Duration, Box<dyn std::error::Error>> 
 
 /// 直接入力方式でテキストを入力
 async fn direct_input_text(text: &str) -> Result<Duration, Box<dyn std::error::Error>> {
-    let config = TextInputConfig {
-        max_chunk_size: 200,
-        chunk_delay_ms: 10,
-        timeout_seconds: 60,
-    };
-
     let start = Instant::now();
-    type_text_directly(text, &config).await?;
+    type_text(text).await?;
     Ok(start.elapsed())
 }
 
@@ -250,32 +244,3 @@ async fn benchmark_direct_vs_paste() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_chunk_performance() -> Result<(), Box<dyn std::error::Error>> {
-    // チャンクサイズによるパフォーマンステスト
-    let test_text = "Lorem ipsum dolor sit amet. ".repeat(50); // 約1450文字
-    
-    let chunk_sizes = vec![50, 100, 200, 500];
-    
-    println!("Testing different chunk sizes...");
-    for chunk_size in chunk_sizes {
-        let config = TextInputConfig {
-            max_chunk_size: chunk_size,
-            chunk_delay_ms: 10,
-            timeout_seconds: 60,
-        };
-
-        let start = Instant::now();
-        match type_text_directly(&test_text, &config).await {
-            Ok(_) => {
-                let duration = start.elapsed();
-                println!("Chunk size {}: {:.3}s", chunk_size, duration.as_secs_f64());
-            }
-            Err(e) => {
-                println!("Chunk size {} failed: {}", chunk_size, e);
-            }
-        }
-    }
-
-    Ok(())
-}
