@@ -92,8 +92,6 @@ async fn test_voice_input_direct_mode_preserves_clipboard() -> Result<(), Box<dy
             "voice_input",
             "--",
             "start",
-            "--paste",
-            "--direct-input",
         ])
         .output()
         .await?;
@@ -138,7 +136,7 @@ async fn test_voice_input_paste_mode_uses_clipboard() -> Result<(), Box<dyn std:
     // 2. デーモンを起動
     let daemon = DaemonProcess::start().await?;
 
-    // 3. ペーストモードで音声入力を開始（明示的に--no-direct-input）
+    // 3. ペーストモードで音声入力を開始（明示的に--copy-and-paste）
     let output = Command::new("cargo")
         .args([
             "run",
@@ -146,8 +144,7 @@ async fn test_voice_input_paste_mode_uses_clipboard() -> Result<(), Box<dyn std:
             "voice_input",
             "--",
             "start",
-            "--paste",
-            "--no-direct-input",
+            "--copy-and-paste",
         ])
         .output()
         .await?;
@@ -182,8 +179,8 @@ async fn test_conflicting_flags_error() -> Result<(), Box<dyn std::error::Error>
             "voice_input",
             "--",
             "start",
-            "--direct-input",
-            "--no-direct-input",
+            "--copy-and-paste",
+            "--copy-only",
         ])
         .output()
         .await?;
@@ -195,7 +192,7 @@ async fn test_conflicting_flags_error() -> Result<(), Box<dyn std::error::Error>
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(error_output.contains("Cannot specify both --direct-input and --no-direct-input"));
+    assert!(error_output.contains("Cannot specify both --copy-and-paste and --copy-only"));
 
     Ok(())
 }
@@ -208,9 +205,9 @@ async fn test_daemon_ipc_communication() -> Result<(), Box<dyn std::error::Error
 
     // 2. 各種コマンドを送信してIPCが正常に動作することを確認
     let commands = vec![
-        vec!["start", "--paste", "--direct-input"],
+        vec!["start"],
         vec!["stop"],
-        vec!["toggle", "--paste", "--no-direct-input"],
+        vec!["toggle", "--copy-and-paste"],
         vec!["stop"],
     ];
 

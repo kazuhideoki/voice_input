@@ -14,7 +14,7 @@ Rust 製の **音声録音・文字起こし CLI / デーモン** です。
 | **Apple Music 自動ポーズ/再開** | 録音中は BGM を一時停止、終了後に自動再生 |
 | **単語リスト置換**         | 転写テキストを辞書で自動置換            |
 | **録音→転写まで自動**      | 1 コマンドで録音開始から文字起こしまで |
-| **直接テキスト入力**       | クリップボードを汚染せずにカーソル位置に直接入力 |
+| **直接テキスト入力（デフォルト）** | クリップボードを汚染せずにカーソル位置に直接入力 |
 | **IPC Unix Socket**        | CLI ↔ デーモン間通信は JSON over UDS |
 
 ## 環境変数準備
@@ -110,26 +110,24 @@ voice_input --list-devices
 入力デバイス名とインデックスを表示します。環境変数 `INPUT_DEVICE_PRIORITY` を
 設定する際の参考にしてください。
 
-録音開始,停止の切り替え+ペースト。
+録音開始,停止の切り替え+直接入力。
 
 ```sh
-voice_input toggle --paste
+voice_input toggle
 ```
 
-## 直接テキスト入力
+## テキスト入力方式
 
-従来の⌘Vによるペースト方式に加えて、クリップボードを汚染せずにカーソル位置に直接テキストを入力するモードが利用できます。
+voice_inputは2つのテキスト入力方式をサポートしています。デフォルトは直接入力方式です。
+
+### 直接入力（デフォルト）
+
+クリップボードを汚染せずにカーソル位置に直接テキストを入力します。
 
 ```sh
-# 直接入力モード（クリップボードを汚染しない）
-voice_input start --paste --direct-input
-voice_input toggle --paste --direct-input
-
-# 明示的にペースト方式を使用
-voice_input start --paste --no-direct-input
-
-# デフォルト（ペースト方式）
-voice_input start --paste
+# デフォルト動作（直接入力）
+voice_input start
+voice_input toggle
 ```
 
 **直接入力の特徴:**
@@ -137,6 +135,20 @@ voice_input start --paste
 - ✅ 日本語・絵文字を含むすべての文字に対応
 - ✅ 既存のアクセシビリティ権限で動作
 - ✅ ペースト方式より約85%高速（平均: 0.02秒 vs 0.15秒）
+
+### クリップボード方式（オプション）
+
+従来の⌘Vによるペースト方式を使用したい場合：
+
+```sh
+# クリップボード経由でペースト
+voice_input start --copy-and-paste
+voice_input toggle --copy-and-paste
+
+# クリップボードにコピーのみ（ペーストしない）
+voice_input start --copy-only
+voice_input toggle --copy-only
+```
 
 デーモンと外部依存の状態をまとめて確認:
 
@@ -171,6 +183,6 @@ voice_input dict list
 ## 録音から転写までの一括実行
 
 `voice_input start` / `stop` を明示的に使わなくても、
-`voice_input toggle` 1 回で録音開始→停止→文字起こし→クリップボード保存まで
-完結します。`--paste` を付ければ自動で ⌘V が送信されます。
+`voice_input toggle` 1 回で録音開始→停止→文字起こし→直接入力まで
+完結します。デフォルトではカーソル位置に直接テキストが入力されます。
 
