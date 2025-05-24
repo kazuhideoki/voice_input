@@ -163,7 +163,7 @@ enum Cmd {
 1. ✅ IpcCmd構造体拡張 (P1-2完了)
 2. ✅ voice_inputd統合 (P1-3完了)
 3. ✅ CLI引数追加 (P1-4完了)
-4. ⏳ エンドツーエンドテスト (P1-5で実装予定)
+4. ✅ エンドツーエンドテスト (P1-5完了)
 
 ### Phase 3: 最適化
 
@@ -441,16 +441,24 @@ voice_input start --paste --direct-input --no-direct-input
 - [x] CLIテスト（tests/cli_args_test.rs）
 - [x] エンドツーエンドテスト（tests/e2e_direct_input_test.rs）
 
-### P1-5: モジュール統合・テスト
+### P1-5: モジュール統合・テスト ✅ 完了
 
 **範囲:** 全体統合とテスト強化
-**ファイル:** `src/infrastructure/external/mod.rs`等
+**ファイル:** `tests/integration_test.rs`, `tests/voice_inputd_direct_input_test.rs`, `tests/performance_test.rs`
 
 **実装内容:**
 
-- text_inputモジュールのexport
-- エンドツーエンドテスト
-- パフォーマンステスト
+- text_inputモジュールのexport（既に完了済みを確認）
+- 統合テスト実装（4個）
+- voice_inputd統合テスト実装（6個）
+- パフォーマンステスト実装（2個）
+
+**PR要件:**
+
+- [x] モジュール公開設定
+- [x] 統合テスト実装
+- [x] パフォーマンス比較機能
+- [x] ドキュメント作成（p1-5-handover.md）
 
 ## 各PRの依存関係
 

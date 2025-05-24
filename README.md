@@ -14,6 +14,7 @@ Rust 製の **音声録音・文字起こし CLI / デーモン** です。
 | **Apple Music 自動ポーズ/再開** | 録音中は BGM を一時停止、終了後に自動再生 |
 | **単語リスト置換**         | 転写テキストを辞書で自動置換            |
 | **録音→転写まで自動**      | 1 コマンドで録音開始から文字起こしまで |
+| **直接テキスト入力**       | クリップボードを汚染せずにカーソル位置に直接入力 |
 | **IPC Unix Socket**        | CLI ↔ デーモン間通信は JSON over UDS |
 
 ## 環境変数準備
@@ -81,6 +82,27 @@ voice_input --list-devices
 ```sh
 voice_input toggle --paste
 ```
+
+## 直接テキスト入力
+
+従来の⌘Vによるペースト方式に加えて、クリップボードを汚染せずにカーソル位置に直接テキストを入力するモードが利用できます。
+
+```sh
+# 直接入力モード（クリップボードを汚染しない）
+voice_input start --paste --direct-input
+voice_input toggle --paste --direct-input
+
+# 明示的にペースト方式を使用
+voice_input start --paste --no-direct-input
+
+# デフォルト（ペースト方式）
+voice_input start --paste
+```
+
+**直接入力の特徴:**
+- ✅ クリップボードの内容を保持
+- ✅ 既存のアクセシビリティ権限で動作
+- ⚠️ 長文では少し時間がかかる場合があります
 
 デーモンと外部依存の状態をまとめて確認:
 
