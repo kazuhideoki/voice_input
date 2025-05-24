@@ -383,9 +383,11 @@ async fn handle_transcription(
             eprintln!("dict save error: {e}");
         }
 
-        // クリップボードへコピー
-        if let Err(e) = set_clipboard(&replaced).await {
-            eprintln!("clipboard error: {e}");
+        // direct_inputでない場合のみクリップボードへコピー
+        if !direct_input {
+            if let Err(e) = set_clipboard(&replaced).await {
+                eprintln!("clipboard error: {e}");
+            }
         }
 
         // 即貼り付け
@@ -393,11 +395,16 @@ async fn handle_transcription(
             tokio::time::sleep(Duration::from_millis(80)).await;
 
             if direct_input {
-                // 直接入力方式
+                // 直接入力方式（Enigo使用、日本語対応）
                 match text_input::type_text(&replaced).await {
-                    Ok(_) => {}
+                    Ok(_) => {
+                    }
                     Err(e) => {
                         eprintln!("Direct input failed: {}, falling back to paste", e);
+                        // フォールバック時はクリップボードにコピー
+                        if let Err(e) = set_clipboard(&replaced).await {
+                            eprintln!("clipboard error in fallback: {e}");
+                        }
                         // 既存のペースト処理へフォールバック
                         let _ = tokio::process::Command::new("osascript")
                             .arg("-e")

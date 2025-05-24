@@ -7,6 +7,7 @@ use std::error::Error;
 use std::fmt;
 use tokio::process::Command;
 use tokio::time::{Duration, sleep};
+use crate::infrastructure::external::text_input_enigo;
 
 /// テキスト入力に関するエラー
 #[derive(Debug)]
@@ -194,6 +195,13 @@ pub async fn type_text_directly(
 
 /// 単一のkeystrokeコマンド実行
 async fn execute_keystroke(escaped_text: &str, timeout_seconds: u64) -> Result<(), TextInputError> {
+    // 日本語や特殊文字が含まれているかチェック
+    if !escaped_text.chars().all(|c| c.is_ascii() && c != '\r' && c != '\n') {
+        return Err(TextInputError::InvalidInput(
+            "Direct input does not support non-ASCII characters. Please use paste mode instead.".to_string()
+        ));
+    }
+    
     let script = format!(
         r#"tell application "System Events" to keystroke "{}""#,
         escaped_text
@@ -248,7 +256,10 @@ async fn execute_chunked_keystroke(
 /// # }
 /// ```
 pub async fn type_text(text: &str) -> Result<(), TextInputError> {
-    type_text_directly(text, &TextInputConfig::default()).await
+    // Enigoを使用して日本語を含むすべてのテキストを入力
+    text_input_enigo::type_text_default(text)
+        .await
+        .map_err(|e| TextInputError::AppleScriptFailure(e.to_string()))
 }
 
 /// 設定のバリデーション
