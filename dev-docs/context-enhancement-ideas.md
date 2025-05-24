@@ -5,344 +5,64 @@
 現在の実装では、録音開始時の選択範囲をプロンプトに含めることで文字起こしの精度向上を図っています。
 より豊かなコンテキストを提供することで、さらなる精度向上が期待できます。
 
-## 現状の評価
+## 現状分析
 
 **現在の実装**
 - 録音開始時の選択テキストをWhisper APIのプロンプトとして使用
 - 単一のコンテキスト情報のみを利用
 
-## 提案されたアイデアの評価
+## 改善アイデア一覧
 
-### 1. 時間ベースでの過去入力の利用
-**利点**
-- 最近の文脈は関連性が高い
-- 実装がシンプル
+| アイデア | 概要 | 実現方法/設計 | メリット | デメリット | 開発工数 | 想定精度向上 |
+|---------|------|-------------|---------|-----------|---------|------------|
+| **1. セッションベースコンテキスト管理** | 30分間の非アクティブ期間でセッションを区切り、同一セッション内の過去の音声入力履歴を文脈として利用 | - セッションIDで履歴を管理<br>- タイムアウトで自動セッション切り替え<br>- 最新N件の履歴をプロンプトに含める | - 関連性の高い文脈を自動選択<br>- 実装がシンプル<br>- メモリ効率が良い | - 長時間作業での文脈喪失<br>- セッション境界の判定が難しい | 小（1-2日） | **+10-15%**<br>特に連続した作業での効果大 |
+| **2. スマートコンテキスト選択** | 時間的近接性、同一アプリ、テキスト類似度などの重み付けで動的に最適なコンテキストを選択 | - 複数要因のスコアリング<br>- 指数関数的時間減衰<br>- コサイン類似度計算<br>- トークン数制限内で最適化 | - 高精度なコンテキスト選択<br>- 無関係な情報の除外<br>- 柔軟な調整が可能 | - 計算コストが高い<br>- パラメータ調整が必要<br>- 実装が複雑 | 中（3-5日） | **+15-25%**<br>コンテキストの質が大幅改善 |
+| **3. 専門用語・固有名詞の自動学習** | 頻出する専門用語や固有名詞を自動検出し、辞書に追加して認識精度を向上 | - 形態素解析で候補抽出<br>- 出現頻度カウント<br>- 閾値超えで自動登録<br>- カタカナ語/英数字混在を優先 | - 手動辞書登録が不要<br>- ユーザー固有の語彙に対応<br>- 継続的な精度向上 | - 誤登録の可能性<br>- 辞書肥大化のリスク<br>- 日本語処理が複雑 | 中（3-4日） | **+20-30%**<br>専門用語認識で劇的改善 |
+| **4. アプリケーション別テンプレート** | 使用中のアプリケーションに応じて最適化されたプロンプトテンプレートを自動選択 | - アプリ名取得API利用<br>- テンプレート定義ファイル<br>- 文体・語彙ヒント設定<br>- カスタマイズ可能 | - アプリ特有の文脈に対応<br>- 即座に効果を実感<br>- ユーザーカスタマイズ可能 | - アプリ検出の信頼性<br>- テンプレート管理の手間<br>- 未対応アプリの扱い | 小（1-2日） | **+5-15%**<br>特定アプリで高効果 |
+| **5. マルチモーダルコンテキスト** | カーソル周辺テキスト、画面OCR、UI要素情報など視覚的情報も含めた文脈提供 | - アクセシビリティAPI利用<br>- 部分スクリーンショット<br>- OCR処理<br>- カーソル位置追跡 | - 圧倒的に豊富な文脈<br>- 画面上の情報を考慮<br>- 革新的なUX | - 実装が非常に複雑<br>- プライバシー懸念<br>- パフォーマンス影響大 | 大（1-2週間） | **+25-40%**<br>画面情報活用で大幅改善 |
+| **6. 時間ベース履歴活用** | 直近X分間の全音声入力履歴をコンテキストとして利用 | - 時間窓での履歴管理<br>- 古い履歴の自動削除<br>- シンプルな連結 | - 実装が最も簡単<br>- 即座に導入可能 | - 無関係な情報混入<br>- コンテキスト肥大化<br>- 精度向上効果が限定的 | 極小（数時間） | **+3-8%**<br>基本的な文脈提供のみ |
+| **7. 履歴サマリー生成** | 過去の入力履歴をLLMでサマリー化し、コンパクトで関連性の高いコンテキストを生成 | - 定期的なサマリー生成<br>- LLM API呼び出し<br>- キーワード抽出 | - コンテキストサイズ最適化<br>- 高品質な文脈生成 | - 追加APIコスト<br>- レイテンシ増加<br>- 外部依存性 | 中（2-3日） | **+10-20%**<br>文脈の質は高いがコスト増 |
 
-**課題**
-- 最適な時間幅の判断が困難
-- 無関係な情報も含まれる可能性
+## 実装優先度の推奨
 
-### 2. 時間＋アプリケーションベースでの分類
-**利点**
-- アプリケーション別に適切な文脈を保持
-- より精度の高いコンテキスト提供
+### 費用対効果マトリックス
 
-**課題**
-- 実装の複雑性が増す
-- メモリ使用量の増加
+| アイデア | 開発工数 | 想定精度向上 | ROI評価 |
+|---------|---------|------------|---------|
+| 専門用語・固有名詞の自動学習 | 中 | +20-30% | ★★★★★ |
+| セッションベースコンテキスト管理 | 小 | +10-15% | ★★★★☆ |
+| アプリケーション別テンプレート | 小 | +5-15% | ★★★★☆ |
+| スマートコンテキスト選択 | 中 | +15-25% | ★★★☆☆ |
+| マルチモーダルコンテキスト | 大 | +25-40% | ★★★☆☆ |
+| 履歴サマリー生成 | 中 | +10-20% | ★★☆☆☆ |
+| 時間ベース履歴活用 | 極小 | +3-8% | ★★☆☆☆ |
 
-## 改善案
+### 短期（すぐに効果が見込める）
+1. **セッションベースコンテキスト管理** - 工数小、精度+10-15%
+2. **アプリケーション別テンプレート** - 工数小、精度+5-15%
+3. **時間ベース履歴活用** - 工数極小、精度+3-8%（プロトタイプとして）
 
-### 1. セッションベースコンテキスト管理
+### 中期（より高度な精度向上）
+4. **専門用語・固有名詞の自動学習** - 工数中、精度+20-30%（最もROIが高い）
+5. **スマートコンテキスト選択** - 工数中、精度+15-25%
 
-30分間の非アクティブ期間でセッションを区切り、関連性の高い文脈を維持します。
+### 長期（革新的機能）
+6. **マルチモーダルコンテキスト** - 工数大、精度+25-40%（技術的チャレンジ）
+7. **履歴サマリー生成** - 工数中、精度+10-20%（コスト考慮要）
 
-```rust
-struct TranscriptionSession {
-    entries: Vec<TranscriptionEntry>,
-    last_activity: Instant,
-    session_id: Uuid,
-}
+## 組み合わせ効果
 
-struct TranscriptionEntry {
-    text: String,
-    app_name: String,
-    timestamp: SystemTime,
-    confidence: f32,
-    used_words: HashSet<String>,
-}
+複数のアイデアを組み合わせることで相乗効果が期待できます：
 
-impl TranscriptionSession {
-    const SESSION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-    
-    fn is_active(&self) -> bool {
-        self.last_activity.elapsed() < Self::SESSION_TIMEOUT
-    }
-    
-    fn get_context(&self, limit: usize) -> String {
-        // 最新のN件のエントリーから文脈を生成
-        self.entries
-            .iter()
-            .rev()
-            .take(limit)
-            .map(|e| &e.text)
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-}
-```
+| 組み合わせ | 想定精度向上 | 備考 |
+|-----------|------------|------|
+| セッション管理 + アプリ別テンプレート | +15-25% | 基本的な改善の組み合わせ |
+| スマート選択 + 専門用語学習 | +30-45% | 高度な文脈理解 |
+| セッション + スマート選択 + 専門用語 | +40-55% | 包括的なアプローチ |
+| すべての機能 | +50-70% | 最大効果（ただし複雑性も最大）|
 
-### 2. スマートコンテキスト選択（重み付けアルゴリズム）
+## 精度評価の前提条件
 
-関連性に基づいて動的にコンテキストを選択し、より適切な文脈を提供します。
-
-```rust
-struct ContextSelector {
-    weight_time_decay: f32,     // 時間減衰係数
-    weight_same_app: f32,       // 同一アプリ重み
-    weight_text_similarity: f32, // テキスト類似度重み
-}
-
-impl ContextSelector {
-    fn calculate_relevance_score(
-        &self,
-        entry: &TranscriptionEntry,
-        current_app: &str,
-        current_time: SystemTime,
-    ) -> f32 {
-        let mut score = 0.0;
-        
-        // 時間的近接性（指数関数的減衰）
-        let time_diff = current_time.duration_since(entry.timestamp)
-            .unwrap_or_default()
-            .as_secs() as f32;
-        score += (-time_diff / 3600.0).exp() * self.weight_time_decay;
-        
-        // 同一アプリケーション
-        if entry.app_name == current_app {
-            score += self.weight_same_app;
-        }
-        
-        // TODO: テキスト類似度の計算
-        
-        score
-    }
-    
-    fn select_context(
-        &self,
-        entries: &[TranscriptionEntry],
-        current_app: &str,
-        max_tokens: usize,
-    ) -> String {
-        let current_time = SystemTime::now();
-        let mut scored_entries: Vec<_> = entries
-            .iter()
-            .map(|e| (
-                self.calculate_relevance_score(e, current_app, current_time),
-                e
-            ))
-            .collect();
-        
-        scored_entries.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-        
-        // トークン数制限内で最も関連性の高いエントリーを選択
-        let mut context = String::new();
-        let mut token_count = 0;
-        
-        for (_, entry) in scored_entries {
-            let entry_tokens = entry.text.split_whitespace().count();
-            if token_count + entry_tokens > max_tokens {
-                break;
-            }
-            context.push_str(&entry.text);
-            context.push(' ');
-            token_count += entry_tokens;
-        }
-        
-        context.trim().to_string()
-    }
-}
-```
-
-### 3. 専門用語・固有名詞の自動学習
-
-繰り返し使用される単語を自動的に検出し、辞書に追加します。
-
-```rust
-struct AdaptiveDictionary {
-    term_frequency: HashMap<String, TermInfo>,
-    auto_entries: Vec<WordEntry>,
-    min_frequency: usize,
-    min_confidence: f32,
-}
-
-struct TermInfo {
-    count: usize,
-    first_seen: SystemTime,
-    contexts: Vec<String>,
-}
-
-impl AdaptiveDictionary {
-    fn update_term_frequency(&mut self, text: &str) {
-        // 固有名詞や専門用語の可能性が高い単語を抽出
-        let words = extract_potential_terms(text);
-        
-        for word in words {
-            self.term_frequency
-                .entry(word.clone())
-                .and_modify(|info| info.count += 1)
-                .or_insert_with(|| TermInfo {
-                    count: 1,
-                    first_seen: SystemTime::now(),
-                    contexts: vec![text.to_string()],
-                });
-        }
-    }
-    
-    fn promote_to_dictionary(&mut self) {
-        let candidates: Vec<_> = self.term_frequency
-            .iter()
-            .filter(|(_, info)| info.count >= self.min_frequency)
-            .map(|(term, _)| term.clone())
-            .collect();
-        
-        for term in candidates {
-            // 既存の辞書にない場合のみ追加
-            if !self.auto_entries.iter().any(|e| e.surface == term) {
-                self.auto_entries.push(WordEntry {
-                    surface: term.clone(),
-                    replacement: term, // そのまま
-                    status: EntryStatus::AutoGenerated,
-                    created_at: SystemTime::now(),
-                });
-            }
-        }
-    }
-}
-
-fn extract_potential_terms(text: &str) -> Vec<String> {
-    // カタカナ語、英数字混じり、大文字始まりなどを抽出
-    text.split_whitespace()
-        .filter(|word| {
-            is_katakana(word) || 
-            is_mixed_alphanumeric(word) ||
-            is_capitalized(word)
-        })
-        .map(|s| s.to_string())
-        .collect()
-}
-```
-
-### 4. アプリケーション別コンテキストテンプレート
-
-アプリケーションごとに最適化されたプロンプトテンプレートを提供します。
-
-```rust
-struct AppContextTemplate {
-    templates: HashMap<String, ContextTemplate>,
-}
-
-struct ContextTemplate {
-    app_name: String,
-    base_prompt: String,
-    vocabulary_hints: Vec<String>,
-    style_hints: String,
-}
-
-impl AppContextTemplate {
-    fn new() -> Self {
-        let mut templates = HashMap::new();
-        
-        templates.insert("Slack".to_string(), ContextTemplate {
-            app_name: "Slack".to_string(),
-            base_prompt: "カジュアルなチャットメッセージ。".to_string(),
-            vocabulary_hints: vec!["絵文字", "スレッド", "メンション", "チャンネル"],
-            style_hints: "口語的、フレンドリー、絵文字使用可".to_string(),
-        });
-        
-        templates.insert("Code".to_string(), ContextTemplate {
-            app_name: "Code".to_string(),
-            base_prompt: "プログラミングコード、コメント。".to_string(),
-            vocabulary_hints: vec!["function", "variable", "class", "import"],
-            style_hints: "技術用語、変数名はキャメルケース、スネークケース".to_string(),
-        });
-        
-        templates.insert("Mail".to_string(), ContextTemplate {
-            app_name: "Mail".to_string(),
-            base_prompt: "ビジネスメール。".to_string(),
-            vocabulary_hints: vec!["お世話になっております", "よろしくお願いします"],
-            style_hints: "丁寧語、敬語、ビジネス文書".to_string(),
-        });
-        
-        Self { templates }
-    }
-    
-    fn get_prompt(&self, app_name: &str, base_context: &str) -> String {
-        if let Some(template) = self.templates.get(app_name) {
-            format!(
-                "{} {} 文体: {} 関連用語: {:?}",
-                template.base_prompt,
-                base_context,
-                template.style_hints,
-                template.vocabulary_hints
-            )
-        } else {
-            base_context.to_string()
-        }
-    }
-}
-```
-
-### 5. マルチモーダルコンテキスト（将来的な拡張）
-
-視覚的な情報も含めた、より豊富なコンテキストを提供します。
-
-```rust
-struct MultiModalContext {
-    text_context: String,
-    visual_context: Option<VisualContext>,
-    cursor_context: Option<CursorContext>,
-}
-
-struct VisualContext {
-    screenshot_ocr_text: String,
-    ui_elements: Vec<UIElement>,
-}
-
-struct CursorContext {
-    surrounding_text: String,
-    position: (i32, i32),
-    active_element_type: String,
-}
-
-impl MultiModalContext {
-    async fn capture_full_context(&mut self) -> Result<(), Box<dyn Error>> {
-        // カーソル周辺のテキストを取得
-        self.cursor_context = Some(self.capture_cursor_context().await?);
-        
-        // 必要に応じて画面の一部をOCR
-        if self.should_capture_visual() {
-            self.visual_context = Some(self.capture_visual_context().await?);
-        }
-        
-        Ok(())
-    }
-}
-```
-
-## 実装優先順位
-
-1. **フェーズ1: セッションベース管理**
-   - 実装が比較的簡単
-   - 即座に効果が期待できる
-   - 既存システムへの影響が小さい
-
-2. **フェーズ2: スマートコンテキスト選択**
-   - 中程度の実装難易度
-   - 大幅な精度向上が期待できる
-
-3. **フェーズ3: 専門用語の自動学習**
-   - 長期的な精度向上
-   - ユーザー体験の継続的改善
-
-4. **フェーズ4: アプリケーション別テンプレート**
-   - 特定用途での精度向上
-   - カスタマイズ性の向上
-
-5. **フェーズ5: マルチモーダルコンテキスト**
-   - 最も複雑な実装
-   - 革新的な機能拡張
-
-## 期待される効果
-
-- **精度向上**: 15-30%の認識精度向上
-- **ユーザビリティ**: 専門用語の自動学習により手動辞書登録の手間を削減
-- **適応性**: 使用パターンに応じた自動最適化
-- **拡張性**: 将来的な機能追加の基盤構築
-
-## 技術的考慮事項
-
-- **メモリ管理**: セッション情報の適切な管理とクリーンアップ
-- **プライバシー**: センシティブな情報の適切な処理
-- **パフォーマンス**: コンテキスト生成のオーバーヘッドを最小限に
-- **互換性**: 既存のAPIとの後方互換性の維持
+- **ベースライン**: 現在の実装（選択テキストのみ）を100%とした場合の相対的な改善率
+- **評価方法**: 専門用語、固有名詞、文脈依存語句の認識率で測定
+- **対象シナリオ**: プログラミング、ビジネス文書、チャットなど多様な用途での平均値
