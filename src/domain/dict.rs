@@ -14,18 +14,13 @@ pub struct WordEntry {
 }
 
 /// 単語エントリの状態
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum EntryStatus {
     /// 置換に利用される
+    #[default]
     Active,
     /// 無効状態
     Draft,
-}
-
-impl Default for EntryStatus {
-    fn default() -> Self {
-        EntryStatus::Active
-    }
 }
 
 impl std::fmt::Display for EntryStatus {

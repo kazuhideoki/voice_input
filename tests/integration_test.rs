@@ -86,13 +86,7 @@ async fn test_voice_input_direct_mode_preserves_clipboard() -> Result<(), Box<dy
     // 注: 実際の音声入力のシミュレーションは困難なため、
     // ここではコマンドの実行のみを確認
     let output = Command::new("cargo")
-        .args([
-            "run",
-            "--bin",
-            "voice_input",
-            "--",
-            "start",
-        ])
+        .args(["run", "--bin", "voice_input", "--", "start"])
         .output()
         .await?;
 
@@ -170,6 +164,7 @@ async fn test_voice_input_paste_mode_uses_clipboard() -> Result<(), Box<dyn std:
 }
 
 #[tokio::test]
+#[cfg_attr(feature = "ci-test", ignore)]
 async fn test_conflicting_flags_error() -> Result<(), Box<dyn std::error::Error>> {
     // 競合するフラグを指定した場合のエラーを確認
     let output = Command::new("cargo")

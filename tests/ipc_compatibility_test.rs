@@ -30,9 +30,9 @@ fn test_backward_compatibility_with_default() {
             prompt,
             direct_input,
         } => {
-            assert_eq!(paste, true);
+            assert!(paste);
             assert_eq!(prompt, Some("test".to_string()));
-            assert_eq!(direct_input, false);
+            assert!(!direct_input);
         }
         _ => panic!("Expected Start command"),
     }

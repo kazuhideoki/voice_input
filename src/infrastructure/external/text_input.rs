@@ -3,9 +3,9 @@
 //! Enigoライブラリを使用してクリップボードを使わずに
 //! カーソル位置に直接テキストを入力する機能を提供
 
+use crate::infrastructure::external::text_input_enigo;
 use std::error::Error;
 use std::fmt;
-use crate::infrastructure::external::text_input_enigo;
 
 /// テキスト入力に関するエラー
 #[derive(Debug)]

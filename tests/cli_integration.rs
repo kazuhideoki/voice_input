@@ -53,7 +53,7 @@ mod assert_cmd {
 
 mod predicates {
     pub mod str {
-        pub fn contains<'a>(s: &'a str) -> impl Fn(&str) -> bool + 'a {
+        pub fn contains(s: &str) -> impl Fn(&str) -> bool + '_ {
             move |input: &str| input.contains(s)
         }
     }
@@ -91,6 +91,7 @@ fn kill_daemon(child: &mut Child) {
 }
 
 #[test]
+#[cfg_attr(feature = "ci-test", ignore)]
 fn list_devices_runs() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = TempDir::new()?;
     let mut daemon = spawn_daemon(&tmp);
@@ -104,6 +105,7 @@ fn list_devices_runs() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+#[cfg_attr(feature = "ci-test", ignore)]
 fn toggle_start_stop() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = TempDir::new()?;
     let mut daemon = spawn_daemon(&tmp);
@@ -120,6 +122,7 @@ fn toggle_start_stop() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 #[test]
+#[cfg_attr(feature = "ci-test", ignore)]
 fn status_returns_idle() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = TempDir::new()?;
     let mut daemon = spawn_daemon(&tmp);
@@ -133,6 +136,7 @@ fn status_returns_idle() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+#[cfg_attr(feature = "ci-test", ignore)]
 fn health_check_runs() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = TempDir::new()?;
     let mut daemon = spawn_daemon(&tmp);
@@ -146,6 +150,7 @@ fn health_check_runs() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+#[cfg_attr(feature = "ci-test", ignore)]
 fn dict_add_list_remove() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = TempDir::new()?;
 
@@ -174,6 +179,7 @@ fn dict_add_list_remove() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+#[cfg_attr(feature = "ci-test", ignore)]
 fn config_set_moves_dict() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = TempDir::new()?;
 

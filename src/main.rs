@@ -28,7 +28,10 @@ enum Cmd {
         #[arg(long)]
         prompt: Option<String>,
         /// クリップボード経由でペースト（デフォルトの直接入力を無効化）
-        #[arg(long, help = "Use clipboard copy-and-paste method instead of direct input")]
+        #[arg(
+            long,
+            help = "Use clipboard copy-and-paste method instead of direct input"
+        )]
         copy_and_paste: bool,
         /// クリップボードにコピーのみ（ペーストしない）
         #[arg(
@@ -44,7 +47,10 @@ enum Cmd {
         #[arg(long)]
         prompt: Option<String>,
         /// クリップボード経由でペースト（デフォルトの直接入力を無効化）
-        #[arg(long, help = "Use clipboard copy-and-paste method instead of direct input")]
+        #[arg(
+            long,
+            help = "Use clipboard copy-and-paste method instead of direct input"
+        )]
         copy_and_paste: bool,
         /// クリップボードにコピーのみ（ペーストしない）
         #[arg(
@@ -101,15 +107,12 @@ enum ConfigField {
 /// フラグの競合をチェックし、入力モードを決定
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum InputMode {
-    Direct,        // デフォルト: 直接入力
-    CopyAndPaste,  // クリップボード経由でペースト
-    CopyOnly,      // クリップボードにコピーのみ
+    Direct,       // デフォルト: 直接入力
+    CopyAndPaste, // クリップボード経由でペースト
+    CopyOnly,     // クリップボードにコピーのみ
 }
 
-fn resolve_input_mode(
-    copy_and_paste: bool,
-    copy_only: bool,
-) -> Result<InputMode, &'static str> {
+fn resolve_input_mode(copy_and_paste: bool, copy_only: bool) -> Result<InputMode, &'static str> {
     match (copy_and_paste, copy_only) {
         (true, true) => Err("Cannot specify both --copy-and-paste and --copy-only"),
         (true, false) => Ok(InputMode::CopyAndPaste),
@@ -148,9 +151,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let input_mode = resolve_input_mode(copy_and_paste, copy_only)?;
             let direct_input = input_mode == InputMode::Direct;
             let paste = match input_mode {
-                InputMode::Direct => true,        // 直接入力の場合は常にペースト
-                InputMode::CopyAndPaste => true,  // copy-and-pasteの場合も常にペースト
-                InputMode::CopyOnly => false,     // copy_onlyの場合はペーストしない
+                InputMode::Direct => true,       // 直接入力の場合は常にペースト
+                InputMode::CopyAndPaste => true, // copy-and-pasteの場合も常にペースト
+                InputMode::CopyOnly => false,    // copy_onlyの場合はペーストしない
             };
             relay(IpcCmd::Start {
                 paste,
@@ -167,9 +170,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let input_mode = resolve_input_mode(copy_and_paste, copy_only)?;
             let direct_input = input_mode == InputMode::Direct;
             let paste = match input_mode {
-                InputMode::Direct => true,        // 直接入力の場合は常にペースト
-                InputMode::CopyAndPaste => true,  // copy-and-pasteの場合も常にペースト
-                InputMode::CopyOnly => false,     // copy_onlyの場合はペーストしない
+                InputMode::Direct => true,       // 直接入力の場合は常にペースト
+                InputMode::CopyAndPaste => true, // copy-and-pasteの場合も常にペースト
+                InputMode::CopyOnly => false,    // copy_onlyの場合はペーストしない
             };
             relay(IpcCmd::Toggle {
                 paste,

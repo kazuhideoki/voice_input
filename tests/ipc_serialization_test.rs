@@ -18,9 +18,9 @@ fn test_ipccmd_serialization_with_direct_input() {
             prompt,
             direct_input,
         } => {
-            assert_eq!(paste, true);
+            assert!(paste);
             assert_eq!(prompt, Some("test prompt".to_string()));
-            assert_eq!(direct_input, true);
+            assert!(direct_input);
         }
         _ => panic!("Expected Start command"),
     }
@@ -44,9 +44,9 @@ fn test_ipccmd_serialization_toggle() {
             prompt,
             direct_input,
         } => {
-            assert_eq!(paste, false);
+            assert!(!paste);
             assert_eq!(prompt, None);
-            assert_eq!(direct_input, false);
+            assert!(!direct_input);
         }
         _ => panic!("Expected Toggle command"),
     }

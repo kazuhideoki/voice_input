@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Run: `cargo run`
 - Release build: `cargo build --release`
 - Check: `cargo check`
-- Format code: `rustfmt src/*.rs`
+- Format code: `cargo fmt`
 - Lint: `cargo clippy`
 - Test: `cargo test`
 - Test single file: `cargo test --test <test_name>` or `cargo test <test_module::test_name>`
@@ -26,7 +26,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Use proper error propagation with ? operator
 - Use async/await for async operations with tokio
 - Keep functions focused and small when possible
-- Format code with rustfmt
+- Format code with cargo fmt
 
 ## Crate
 

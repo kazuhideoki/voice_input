@@ -4,7 +4,7 @@ use std::process::Command;
 fn test_copy_and_paste_flag() {
     // --copy-and-pasteフラグのテスト
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "voice_input",
@@ -24,14 +24,7 @@ fn test_copy_and_paste_flag() {
 fn test_copy_only_flag() {
     // --copy-onlyフラグのテスト
     let output = Command::new("cargo")
-        .args(&[
-            "run",
-            "--bin",
-            "voice_input",
-            "--",
-            "start",
-            "--copy-only",
-        ])
+        .args(["run", "--bin", "voice_input", "--", "start", "--copy-only"])
         .output()
         .expect("Failed to run command");
 
@@ -43,7 +36,7 @@ fn test_copy_only_flag() {
 fn test_conflicting_flags() {
     // 両方のフラグを指定した場合のエラーテスト
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "voice_input",
@@ -68,7 +61,7 @@ fn test_conflicting_flags() {
 fn test_toggle_copy_and_paste_flag() {
     // toggleコマンドでも--copy-and-pasteが使えることを確認
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "voice_input",
@@ -87,7 +80,7 @@ fn test_toggle_copy_and_paste_flag() {
 fn test_toggle_conflicting_flags() {
     // toggleコマンドでもフラグ競合エラーが発生することを確認
     let output = Command::new("cargo")
-        .args(&[
+        .args([
             "run",
             "--bin",
             "voice_input",
@@ -112,7 +105,7 @@ fn test_toggle_conflicting_flags() {
 fn test_help_shows_new_flags() {
     // ヘルプに新しいフラグが表示されることを確認
     let output = Command::new("cargo")
-        .args(&["run", "--bin", "voice_input", "--", "start", "--help"])
+        .args(["run", "--bin", "voice_input", "--", "start", "--help"])
         .output()
         .expect("Failed to run command");
 
@@ -127,7 +120,7 @@ fn test_help_shows_new_flags() {
 fn test_default_behavior() {
     // フラグを指定しない場合のデフォルト動作（直接入力）
     let output = Command::new("cargo")
-        .args(&["run", "--bin", "voice_input", "--", "start"])
+        .args(["run", "--bin", "voice_input", "--", "start"])
         .output()
         .expect("Failed to run command");
 
