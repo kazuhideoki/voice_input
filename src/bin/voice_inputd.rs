@@ -35,16 +35,16 @@ use voice_input::{
     domain::dict::{DictRepository, apply_replacements},
     domain::recorder::Recorder,
     infrastructure::{
-        audio::CpalAudioBackend,
+        audio::{CpalAudioBackend, cpal_backend::AudioData},
         dict::JsonFileDictRepo,
         external::{
             clipboard::get_selected_text,
-            openai::transcribe_audio,
+            openai::OpenAiClient,
             sound::{pause_apple_music, play_start_sound, play_stop_sound, resume_apple_music},
             text_input,
         },
     },
-    ipc::{IpcCmd, IpcResp, socket_path},
+    ipc::{IpcCmd, IpcResp, RecordingResult, AudioDataDto, socket_path},
     load_env,
 };
 
@@ -111,7 +111,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     }));
 
     // 転写ジョブ用チャンネルと同時実行セマフォ
-    let (tx, rx) = mpsc::unbounded_channel::<(String, bool, bool, bool)>();
+    let (tx, rx) = mpsc::unbounded_channel::<(RecordingResult, bool, bool, bool)>();
     let sem = Arc::new(Semaphore::new(2));
 
     // ─── 転写ワーカー ─────────────────────────────
@@ -119,7 +119,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         let worker_sem = sem.clone();
         let mut rx = rx;
         spawn_local(async move {
-            while let Some((wav, paste, resume_music, direct_input)) = rx.recv().await {
+            while let Some((result, paste, resume_music, direct_input)) = rx.recv().await {
                 let permit = match worker_sem.clone().acquire_owned().await {
                     Ok(p) => p,
                     Err(e) => {
@@ -128,7 +128,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                     }
                 };
                 spawn_local(async move {
-                    let _ = handle_transcription(&wav, paste, resume_music, direct_input).await;
+                    let _ = handle_transcription(result, paste, resume_music, direct_input).await;
                     drop(permit);
                 });
             }
@@ -158,7 +158,7 @@ async fn handle_client(
     stream: UnixStream,
     recorder: Rc<Recorder<CpalAudioBackend>>,
     ctx: Arc<Mutex<RecCtx>>,
-    tx: mpsc::UnboundedSender<(String, bool, bool, bool)>,
+    tx: mpsc::UnboundedSender<(RecordingResult, bool, bool, bool)>,
 ) -> Result<(), Box<dyn Error>> {
     let (r, w) = stream.into_split();
     let mut reader = FramedRead::new(r, LinesCodec::new());
@@ -221,7 +221,7 @@ async fn handle_client(
 async fn start_recording(
     recorder: Rc<Recorder<CpalAudioBackend>>,
     ctx: &Arc<Mutex<RecCtx>>,
-    tx: &mpsc::UnboundedSender<(String, bool, bool, bool)>,
+    tx: &mpsc::UnboundedSender<(RecordingResult, bool, bool, bool)>,
     paste: bool,
     prompt: Option<String>,
     direct_input: bool,
@@ -262,8 +262,13 @@ async fn start_recording(
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(max_secs)) => {
                 if recorder.is_recording() {
-                    if let Ok(wav) = recorder.stop() {
-                        let (was_playing, stored_paste, stored_direct_input) = {
+                    if let Ok(audio_data) = recorder.stop_raw() {
+                        let result = RecordingResult {
+                            audio_data: audio_data.into(),
+                            duration_ms: 0, // Duration tracking not implemented yet
+                        };
+                        
+                        let (was_playing, stored_paste, stored_direct_input, prompt_to_save) = {
                             let mut c = match ctx_clone.lock() {
                                 Ok(g) => g,
                                 Err(e) => {
@@ -274,15 +279,21 @@ async fn start_recording(
                             c.state = RecState::Idle;
                             c.cancel = None;
                             let stored = c.start_prompt.take();
-                            if let Some(p) = stored.or_else(|| get_selected_text().ok()) {
-                                let meta = format!("{wav}.json");
-                                let _ = fs::write(&meta, json!({ "prompt": p }).to_string());
-                            }
+                            let prompt = stored.or_else(|| get_selected_text().ok());
                             let w = c.music_was_playing;
                             c.music_was_playing = false;
-                            (w, c.paste, c.direct_input)
+                            (w, c.paste, c.direct_input, prompt)
                         };
-                        let _ = tx_clone.send((wav, stored_paste, was_playing, stored_direct_input));
+                        
+                        // Save prompt metadata if using file mode
+                        if let AudioDataDto::File(ref path) = result.audio_data {
+                            if let Some(p) = prompt_to_save {
+                                let meta = format!("{}.json", path);
+                                let _ = fs::write(&meta, json!({ "prompt": p }).to_string());
+                            }
+                        }
+                        
+                        let _ = tx_clone.send((result, stored_paste, was_playing, stored_direct_input));
                         play_stop_sound();
                     }
                 }
@@ -304,7 +315,7 @@ async fn start_recording(
 async fn stop_recording(
     recorder: Rc<Recorder<CpalAudioBackend>>,
     ctx: &Arc<Mutex<RecCtx>>,
-    tx: &mpsc::UnboundedSender<(String, bool, bool, bool)>,
+    tx: &mpsc::UnboundedSender<(RecordingResult, bool, bool, bool)>,
     paste: bool,
     prompt: Option<String>,
     direct_input: bool,
@@ -320,20 +331,29 @@ async fn stop_recording(
     }
 
     play_stop_sound();
-    let wav = recorder.stop()?;
+    let audio_data = recorder.stop_raw()?;
     c.state = RecState::Idle;
 
     // 開始時の保存値→引数→現在の選択の順でプロンプトを決定
     let stored = c.start_prompt.take();
     let final_prompt = prompt.or(stored).or_else(|| get_selected_text().ok());
 
-    if let Some(p) = final_prompt {
-        let meta = format!("{wav}.json");
-        fs::write(&meta, json!({ "prompt": p }).to_string())?;
+    let result = RecordingResult {
+        audio_data: audio_data.into(),
+        duration_ms: 0, // Duration tracking not implemented yet
+    };
+
+    // Save prompt metadata if using file mode
+    if let AudioDataDto::File(ref path) = result.audio_data {
+        if let Some(p) = final_prompt {
+            let meta = format!("{}.json", path);
+            fs::write(&meta, json!({ "prompt": p }).to_string())?;
+        }
     }
+    
     let was_playing = c.music_was_playing;
     c.music_was_playing = false;
-    tx.send((wav, paste, was_playing, direct_input))?;
+    tx.send((result, paste, was_playing, direct_input))?;
 
     Ok(IpcResp {
         ok: true,
@@ -343,11 +363,11 @@ async fn stop_recording(
 
 // ────────────────────── 転写 & ペースト ─────────────────────
 
-/// WAV ファイルを OpenAI STT API で文字起こしし、結果をクリップボードへ保存。
+/// WAV データを OpenAI STT API で文字起こしし、結果をクリップボードへ保存。
 /// `paste` フラグが `true` の場合は 80ms 後に ⌘V を送信して即貼り付けを行います。
 /// `direct_input` フラグが `true` の場合は直接入力を使用します。
 async fn handle_transcription(
-    wav: &str,
+    result: RecordingResult,
     paste: bool,
     resume_music: bool,
     direct_input: bool,
@@ -361,20 +381,38 @@ async fn handle_transcription(
         }
     });
 
-    // メタJSONが存在すれば prompt を読み込む
-    let prompt = fs::read_to_string(format!("{wav}.json"))
-        .ok()
-        .and_then(|s| {
-            serde_json::from_str::<Value>(&s).ok().and_then(|v| {
-                v.get("prompt")
-                    .and_then(|p| p.as_str().map(|s| s.to_string()))
-            })
-        });
+    // Create OpenAI client
+    let openai_client = match OpenAiClient::new() {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("Failed to create OpenAI client: {e}");
+            return Err(e.into());
+        }
+    };
 
-    let text_result = transcribe_audio(wav, prompt.as_deref()).await;
+    // メタJSONが存在すれば prompt を読み込む (file mode only)
+    // Note: The new OpenAI client doesn't support prompt in transcribe_audio yet
+    let _prompt = if let AudioDataDto::File(ref path) = result.audio_data {
+        fs::read_to_string(format!("{}.json", path))
+            .ok()
+            .and_then(|s| {
+                serde_json::from_str::<Value>(&s).ok().and_then(|v| {
+                    v.get("prompt")
+                        .and_then(|p| p.as_str().map(|s| s.to_string()))
+                })
+            })
+    } else {
+        None
+    };
+
+    // Convert AudioDataDto back to AudioData
+    let audio_data: AudioData = result.audio_data.into();
+    
+    let text_result = openai_client.transcribe_audio(audio_data).await;
 
     // 転写に失敗してもクリップボード操作やペーストは試みない
-    if let Ok(text) = text_result {
+    match text_result {
+        Ok(text) => {
         let repo = JsonFileDictRepo::new();
 
         // 辞書を適用
@@ -424,9 +462,11 @@ async fn handle_transcription(
                     .await;
             }
         }
-    } else if let Err(e) = text_result {
-        eprintln!("transcription error: {e}");
-        return Err(e);
+        }
+        Err(e) => {
+            eprintln!("transcription error: {e}");
+            return Err(e.into());
+        }
     }
 
     Ok(())
@@ -528,7 +568,7 @@ mod tests {
             paste: false,
             direct_input: false,
         }));
-        let (tx, mut rx) = mpsc::unbounded_channel::<(String, bool, bool, bool)>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<(RecordingResult, bool, bool, bool)>();
 
         if start_recording(
             recorder.clone(),
@@ -546,9 +586,13 @@ mod tests {
         }
         stop_recording(recorder, &ctx, &tx, false, None, false).await?;
 
-        let (wav, _, _, _) = rx.recv().await.expect("wav path not queued");
-        let meta = std::fs::read_to_string(format!("{wav}.json"))?;
-        assert!(meta.contains("hello"));
+        let (result, _, _, _) = rx.recv().await.expect("result not queued");
+        if let AudioDataDto::File(path) = result.audio_data {
+            let meta = std::fs::read_to_string(format!("{}.json", path))?;
+            assert!(meta.contains("hello"));
+        } else {
+            panic!("Expected file mode");
+        }
         Ok(())
     }
 
@@ -570,7 +614,7 @@ mod tests {
             paste: false,
             direct_input: false,
         }));
-        let (tx, mut rx) = mpsc::unbounded_channel::<(String, bool, bool, bool)>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<(RecordingResult, bool, bool, bool)>();
 
         if start_recording(recorder.clone(), &ctx, &tx, false, None, false)
             .await
@@ -584,7 +628,7 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(2)).await; // wait > 1 s
         assert!(!recorder.is_recording(), "recording did not auto‑stop");
         assert_eq!(ctx.lock().map_err(|e| e.to_string())?.state, RecState::Idle);
-        assert!(rx.try_recv().is_ok(), "WAV not queued after timeout");
+        assert!(rx.try_recv().is_ok(), "Result not queued after timeout");
         Ok(())
     }
 }
