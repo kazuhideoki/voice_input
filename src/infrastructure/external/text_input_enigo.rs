@@ -3,7 +3,7 @@
 //! enigoライブラリを使用して、日本語を含む全ての文字を
 //! カーソル位置に直接入力する機能を提供
 
-use enigo::{Enigo, Settings, Keyboard};
+use enigo::{Enigo, Keyboard, Settings};
 use std::error::Error;
 use std::fmt;
 
@@ -39,35 +39,25 @@ impl Error for EnigoInputError {}
 /// # Returns
 /// 成功時は Ok(()), 失敗時は EnigoInputError
 pub async fn type_text_with_enigo(text: &str) -> Result<(), EnigoInputError> {
-    
     // String型にクローンして所有権を移動
     let text_owned = text.to_string();
-    
+
     // tokioの非同期環境からブロッキング処理を実行
-    let result = tokio::task::spawn_blocking(move || {
-        
+    tokio::task::spawn_blocking(move || {
         // Enigoインスタンスを作成
         let mut enigo = Enigo::new(&Settings::default())
-            .map_err(|e| {
-                EnigoInputError::InitError(e.to_string())
-            })?;
-        
-        
+            .map_err(|e| EnigoInputError::InitError(e.to_string()))?;
+
         // テキストを入力
         // enigoのtext()メソッドは、Unicode文字を含む全ての文字を正しく処理
-        enigo.text(&text_owned)
-            .map_err(|e| {
-                EnigoInputError::InputError(e.to_string())
-            })?;
-        
+        enigo
+            .text(&text_owned)
+            .map_err(|e| EnigoInputError::InputError(e.to_string()))?;
+
         Ok(())
     })
     .await
-    .map_err(|e| {
-        EnigoInputError::InitError(format!("Task join error: {}", e))
-    })?;
-    
-    result
+    .map_err(|e| EnigoInputError::InitError(format!("Task join error: {}", e)))?
 }
 
 /// デフォルト設定でテキストを入力

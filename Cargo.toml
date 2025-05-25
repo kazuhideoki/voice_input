@@ -40,5 +40,9 @@ directories = "6.0.0"
 scopeguard = "1.2.0"
 enigo = "0.2.0"
 
+[features]
+default = []
+ci-test = []  # CI環境で安全に実行できるテストのみを有効化
+
 [dev-dependencies]
 tempfile = "3.8"

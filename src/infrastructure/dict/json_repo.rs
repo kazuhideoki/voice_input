@@ -21,6 +21,12 @@ impl JsonFileDictRepo {
     }
 }
 
+impl Default for JsonFileDictRepo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DictRepository for JsonFileDictRepo {
     fn load(&self) -> Result<Vec<WordEntry>> {
         if !self.path.exists() {

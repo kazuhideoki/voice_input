@@ -7,15 +7,15 @@ Rust 製の **音声録音・文字起こし CLI / デーモン** です。
 
 ## 特徴
 
-| 機能                       | 説明                                  |
-| -------------------------- | ------------------------------------- |
-| **高速録音トグル**         | 1 コマンドで録音開始 / 停止を切替     |
-| **OpenAI API 対応**        | 日本語・英語を自動認識                |
-| **Apple Music 自動ポーズ/再開** | 録音中は BGM を一時停止、終了後に自動再生 |
-| **単語リスト置換**         | 転写テキストを辞書で自動置換            |
-| **録音→転写まで自動**      | 1 コマンドで録音開始から文字起こしまで |
+| 機能                               | 説明                                             |
+| ---------------------------------- | ------------------------------------------------ |
+| **高速録音トグル**                 | 1 コマンドで録音開始 / 停止を切替                |
+| **OpenAI API 対応**                | 日本語・英語を自動認識                           |
+| **Apple Music 自動ポーズ/再開**    | 録音中は BGM を一時停止、終了後に自動再生        |
+| **単語リスト置換**                 | 転写テキストを辞書で自動置換                     |
+| **録音→転写まで自動**              | 1 コマンドで録音開始から文字起こしまで           |
 | **直接テキスト入力（デフォルト）** | クリップボードを汚染せずにカーソル位置に直接入力 |
-| **IPC Unix Socket**        | CLI ↔ デーモン間通信は JSON over UDS |
+| **IPC Unix Socket**                | CLI ↔ デーモン間通信は JSON over UDS            |
 
 ## 環境変数準備
 
@@ -25,7 +25,7 @@ cp .env.example .env
 
 - OPENAI_API_KEY=your_openai_api_key_here
 - OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe # デフォルト
- - INPUT_DEVICE_PRIORITY="device1,device2,device3"
+- INPUT_DEVICE_PRIORITY="device1,device2,device3"
 
 ## ビルド
 
@@ -44,10 +44,13 @@ cargo build --release
 ### 初回セットアップ
 
 1. **開発環境セットアップ（ラッパースクリプト方式）**
+
    ```sh
    ./scripts/setup-dev-env.sh
    ```
+
    このスクリプトは以下を自動で行います：
+
    - `/usr/local/bin/voice_inputd_wrapper` にラッパースクリプトを作成
    - LaunchAgentをラッパー経由で起動するよう設定
    - デーモンを再起動
@@ -67,6 +70,7 @@ cargo build --release
 ```
 
 これだけで：
+
 - リリースビルドを実行
 - デーモンを自動的に再起動
 - **権限の再設定は不要**
@@ -107,6 +111,7 @@ voice_input stop
 ```sh
 voice_input --list-devices
 ```
+
 入力デバイス名とインデックスを表示します。環境変数 `INPUT_DEVICE_PRIORITY` を
 設定する際の参考にしてください。
 
@@ -131,6 +136,7 @@ voice_input toggle
 ```
 
 **直接入力の特徴:**
+
 - ✅ クリップボードの内容を保持
 - ✅ 日本語・絵文字を含むすべての文字に対応
 - ✅ 既存のアクセシビリティ権限で動作
@@ -186,3 +192,57 @@ voice_input dict list
 `voice_input toggle` 1 回で録音開始→停止→文字起こし→直接入力まで
 完結します。デフォルトではカーソル位置に直接テキストが入力されます。
 
+## 開発
+
+### ビルドとテスト
+
+```bash
+# 開発ビルド
+cargo build
+
+# リリースビルド
+cargo build --release
+
+# すべてのテストを実行（ローカル環境）
+cargo test
+
+# CI環境向けテスト（音声デバイスが不要なテストのみ）
+cargo test --features ci-test
+
+# フォーマットチェック
+cargo fmt -- --check
+
+# Lintチェック
+cargo clippy -- -D warnings
+```
+
+### CI/CD
+
+GitHub Actionsで自動テストが実行されます。CIでは以下が実行されます：
+
+1. **コードフォーマットチェック** - `cargo fmt`
+2. **Clippy静的解析** - すべての警告をエラーとして扱う
+3. **テスト実行** - 音声デバイスやデーモンが不要なテストのみ
+
+### Rustバージョン管理
+
+プロジェクトルートの `rust-toolchain.toml` により、ローカル環境とCI環境で同じRustバージョンが使用されます：
+
+```toml
+[toolchain]
+channel = "1.86.0"
+components = ["rustfmt", "clippy"]
+```
+
+これにより、開発者間およびCI環境でのビルド再現性が保証されます。
+
+### テスト戦略
+
+- **ローカル環境**: `cargo test` ですべてのテストを実行
+- **CI環境**: `cargo test --features ci-test` で環境依存のテストをスキップ
+- **無視されるテスト**: 音声デバイス、デーモンプロセス、GUI操作が必要なテスト
+
+### エージェント向けドキュメント連携
+
+- [CLAUDE.md](./CLAUDE.md)
+- [AGENTS.md](./AGENTS.md) を参照してください。

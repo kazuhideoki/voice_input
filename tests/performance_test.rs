@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
-use tokio::process::Command;
 use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 use voice_input::infrastructure::external::text_input::type_text;
 
 /// パフォーマンステスト結果
@@ -30,10 +30,10 @@ async fn set_clipboard(text: &str) -> Result<(), Box<dyn std::error::Error>> {
 /// ペースト方式でテキストを入力（シミュレーション）
 async fn paste_text(text: &str) -> Result<Duration, Box<dyn std::error::Error>> {
     let start = Instant::now();
-    
+
     // クリップボードに設定
     set_clipboard(text).await?;
-    
+
     // Cmd+Vをシミュレート
     let output = Command::new("osascript")
         .arg("-e")
@@ -42,8 +42,11 @@ async fn paste_text(text: &str) -> Result<Duration, Box<dyn std::error::Error>> 
         .await?;
 
     if !output.status.success() {
-        return Err(format!("Paste command failed: {}", 
-            String::from_utf8_lossy(&output.stderr)).into());
+        return Err(format!(
+            "Paste command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
     }
 
     Ok(start.elapsed())
@@ -109,16 +112,25 @@ async fn benchmark_direct_vs_paste() -> Result<(), Box<dyn std::error::Error>> {
     println!("Comparing direct input vs paste method");
     println!("\nNOTE: Open a text editor and place cursor in a text field before running!");
     println!("Waiting 5 seconds...");
-    
+
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     let long_text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(20);
     let test_cases = vec![
         ("Short text", "Hello, World!"),
-        ("Medium text", "The quick brown fox jumps over the lazy dog. This is a test of the voice input system."),
+        (
+            "Medium text",
+            "The quick brown fox jumps over the lazy dog. This is a test of the voice input system.",
+        ),
         ("Long text", long_text.as_str()),
-        ("Japanese text", "こんにちは、世界！日本語のテキスト入力テストです。"),
-        ("Mixed content", "Test 123! 特殊文字 @#$% と絵文字 🎉 を含むテキスト。\n改行も\nテストします。"),
+        (
+            "Japanese text",
+            "こんにちは、世界！日本語のテキスト入力テストです。",
+        ),
+        (
+            "Mixed content",
+            "Test 123! 特殊文字 @#$% と絵文字 🎉 を含むテキスト。\n改行も\nテストします。",
+        ),
     ];
 
     let mut results = Vec::new();
@@ -131,7 +143,10 @@ async fn benchmark_direct_vs_paste() -> Result<(), Box<dyn std::error::Error>> {
 
     // レポート生成
     println!("\n\n=== Performance Report ===");
-    println!("{:<15} {:<10} {:<15} {:<15} {:<10}", "Test", "Length", "Direct (s)", "Paste (s)", "Diff");
+    println!(
+        "{:<15} {:<10} {:<15} {:<15} {:<10}",
+        "Test", "Length", "Direct (s)", "Paste (s)", "Diff"
+    );
     println!("{}", "-".repeat(70));
 
     for (i, result) in results.iter().enumerate() {
@@ -144,11 +159,13 @@ async fn benchmark_direct_vs_paste() -> Result<(), Box<dyn std::error::Error>> {
             _ => "Unknown",
         };
 
-        let direct_time = result.direct_input_time
+        let direct_time = result
+            .direct_input_time
             .map(|d| format!("{:.3}", d.as_secs_f64()))
             .unwrap_or_else(|| "Error".to_string());
 
-        let paste_time = result.paste_time
+        let paste_time = result
+            .paste_time
             .map(|d| format!("{:.3}", d.as_secs_f64()))
             .unwrap_or_else(|| "Error".to_string());
 
@@ -164,37 +181,34 @@ async fn benchmark_direct_vs_paste() -> Result<(), Box<dyn std::error::Error>> {
             _ => "N/A".to_string(),
         };
 
-        println!("{:<15} {:<10} {:<15} {:<15} {:<10}", 
-            test_name, result.text_length, direct_time, paste_time, diff);
+        println!(
+            "{:<15} {:<10} {:<15} {:<15} {:<10}",
+            test_name, result.text_length, direct_time, paste_time, diff
+        );
     }
 
     println!("\n=== Summary ===");
-    
+
     // 平均時間の計算
-    let direct_times: Vec<_> = results.iter()
-        .filter_map(|r| r.direct_input_time)
-        .collect();
-    
-    let paste_times: Vec<_> = results.iter()
-        .filter_map(|r| r.paste_time)
-        .collect();
+    let direct_times: Vec<_> = results.iter().filter_map(|r| r.direct_input_time).collect();
+
+    let paste_times: Vec<_> = results.iter().filter_map(|r| r.paste_time).collect();
 
     if !direct_times.is_empty() {
-        let avg_direct = direct_times.iter()
-            .map(|d| d.as_secs_f64())
-            .sum::<f64>() / direct_times.len() as f64;
+        let avg_direct =
+            direct_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / direct_times.len() as f64;
         println!("Average direct input time: {:.3}s", avg_direct);
     }
 
     if !paste_times.is_empty() {
-        let avg_paste = paste_times.iter()
-            .map(|d| d.as_secs_f64())
-            .sum::<f64>() / paste_times.len() as f64;
+        let avg_paste =
+            paste_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / paste_times.len() as f64;
         println!("Average paste time: {:.3}s", avg_paste);
     }
 
     // エラー報告
-    let errors: Vec<_> = results.iter()
+    let errors: Vec<_> = results
+        .iter()
         .enumerate()
         .filter_map(|(i, r)| {
             if r.direct_input_error.is_some() || r.paste_error.is_some() {
@@ -219,28 +233,31 @@ async fn benchmark_direct_vs_paste() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== Recommendations ===");
     if direct_times.len() == paste_times.len() && !direct_times.is_empty() {
-        let avg_direct = direct_times.iter()
-            .map(|d| d.as_secs_f64())
-            .sum::<f64>() / direct_times.len() as f64;
-        let avg_paste = paste_times.iter()
-            .map(|d| d.as_secs_f64())
-            .sum::<f64>() / paste_times.len() as f64;
+        let avg_direct =
+            direct_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / direct_times.len() as f64;
+        let avg_paste =
+            paste_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / paste_times.len() as f64;
 
         let diff_percent = ((avg_direct - avg_paste) / avg_paste * 100.0).abs();
 
         if avg_direct < avg_paste {
-            println!("✓ Direct input is {:.1}% faster than paste method", diff_percent);
+            println!(
+                "✓ Direct input is {:.1}% faster than paste method",
+                diff_percent
+            );
             println!("✓ Recommend using direct input as default");
         } else if diff_percent < 20.0 {
             println!("✓ Performance difference is minimal ({:.1}%)", diff_percent);
             println!("✓ Direct input provides clipboard preservation benefit");
             println!("✓ Recommend using direct input as default");
         } else {
-            println!("⚠ Direct input is {:.1}% slower than paste method", diff_percent);
+            println!(
+                "⚠ Direct input is {:.1}% slower than paste method",
+                diff_percent
+            );
             println!("⚠ Consider performance vs clipboard preservation trade-off");
         }
     }
 
     Ok(())
 }
-

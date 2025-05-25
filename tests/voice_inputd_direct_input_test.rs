@@ -3,6 +3,7 @@ use tokio::time::sleep;
 use voice_input::infrastructure::external::text_input::type_text;
 
 #[tokio::test]
+#[cfg_attr(feature = "ci-test", ignore)]
 async fn test_direct_input_basic_functionality() -> Result<(), Box<dyn std::error::Error>> {
     // 基本的な直接入力機能のテスト
     // 短いテキストの入力テスト
@@ -21,6 +22,7 @@ async fn test_direct_input_basic_functionality() -> Result<(), Box<dyn std::erro
 }
 
 #[tokio::test]
+#[cfg_attr(feature = "ci-test", ignore)]
 async fn test_direct_input_with_special_characters() -> Result<(), Box<dyn std::error::Error>> {
     // 特殊文字を含むテキスト
     let test_cases = vec![
@@ -47,10 +49,11 @@ async fn test_direct_input_with_special_characters() -> Result<(), Box<dyn std::
 }
 
 #[tokio::test]
+#[cfg_attr(feature = "ci-test", ignore)]
 async fn test_direct_input_long_text() -> Result<(), Box<dyn std::error::Error>> {
     // 長いテキスト
     let long_text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(10);
-    
+
     match type_text(&long_text).await {
         Ok(_) => println!("Successfully typed long text ({} chars)", long_text.len()),
         Err(e) => {
@@ -62,6 +65,7 @@ async fn test_direct_input_long_text() -> Result<(), Box<dyn std::error::Error>>
 }
 
 #[tokio::test]
+#[cfg_attr(feature = "ci-test", ignore)]
 async fn test_direct_input_empty_text() -> Result<(), Box<dyn std::error::Error>> {
     // 空文字列のテスト
     match type_text("").await {
@@ -80,9 +84,9 @@ async fn test_direct_input_empty_text() -> Result<(), Box<dyn std::error::Error>
 async fn test_direct_input_fallback_simulation() -> Result<(), Box<dyn std::error::Error>> {
     // フォールバック動作のシミュレーション
     // 実際のvoice_inputdでの実装を想定
-    
+
     let test_text = "Testing fallback mechanism";
-    
+
     // 直接入力を試行
     match type_text(test_text).await {
         Ok(_) => {

@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  test:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        # rust-toolchain.tomlが自動的に使用される
+
+      - name: Cache cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          # ターゲットディレクトリを含めてキャッシュ
+          cache-targets: true
+          # 依存関係のキャッシュキーを共有
+          shared-key: "macos-stable"
+
+      - name: Check format
+        run: cargo fmt -- --check
+
+      - name: Check and build with Clippy
+        run: cargo clippy --all-targets --features ci-test -- -D warnings
+
+      - name: Run tests
+        run: cargo test --features ci-test --jobs 4

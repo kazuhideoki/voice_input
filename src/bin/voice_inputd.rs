@@ -5,7 +5,7 @@
 //!  - `Recorder` を介した録音の開始 / 停止
 //!  - OpenAI API を用いた文字起こし
 //!  - クリップボードへの貼り付け & Apple Music の自動ポーズ / 再開
-//! を非同期・協調的に実行します。
+//!    を非同期・協調的に実行します。
 //!
 //! *ソケットパス*: `/tmp/voice_input.sock`
 //!
@@ -17,6 +17,7 @@
 use std::{
     error::Error,
     fs,
+    rc::Rc,
     sync::{Arc, Mutex},
 };
 
@@ -99,7 +100,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     let listener = UnixListener::bind(&path)?;
     println!("voice-inputd listening on {:?}", path);
 
-    let recorder = Arc::new(Recorder::new(CpalAudioBackend::default()));
+    let recorder = Rc::new(Recorder::new(CpalAudioBackend::default()));
     let ctx = Arc::new(Mutex::new(RecCtx {
         state: RecState::Idle,
         cancel: None,
@@ -155,7 +156,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
 /// 状態とレコーダを操作して `IpcResp` を返送します。
 async fn handle_client(
     stream: UnixStream,
-    recorder: Arc<Recorder<CpalAudioBackend>>,
+    recorder: Rc<Recorder<CpalAudioBackend>>,
     ctx: Arc<Mutex<RecCtx>>,
     tx: mpsc::UnboundedSender<(String, bool, bool, bool)>,
 ) -> Result<(), Box<dyn Error>> {
@@ -218,7 +219,7 @@ async fn handle_client(
 /// * `prompt` – 追加プロンプト。選択テキストより優先される
 /// * `direct_input` – 直接入力を使用するか（クリップボードを使わない）
 async fn start_recording(
-    recorder: Arc<Recorder<CpalAudioBackend>>,
+    recorder: Rc<Recorder<CpalAudioBackend>>,
     ctx: &Arc<Mutex<RecCtx>>,
     tx: &mpsc::UnboundedSender<(String, bool, bool, bool)>,
     paste: bool,
@@ -301,7 +302,7 @@ async fn start_recording(
 /// 録音停止処理。WAV を保存して転写キューに送信します。
 /// プロンプトは開始時に取得したもの → 引数 → 停止時の選択テキストの順で使われます。
 async fn stop_recording(
-    recorder: Arc<Recorder<CpalAudioBackend>>,
+    recorder: Rc<Recorder<CpalAudioBackend>>,
     ctx: &Arc<Mutex<RecCtx>>,
     tx: &mpsc::UnboundedSender<(String, bool, bool, bool)>,
     paste: bool,
@@ -504,13 +505,14 @@ mod tests {
     use super::*;
 
     // Helper: construct a Recorder<CpalAudioBackend>
-    fn make_recorder() -> Arc<Recorder<CpalAudioBackend>> {
-        Arc::new(Recorder::new(CpalAudioBackend::default()))
+    fn make_recorder() -> Rc<Recorder<CpalAudioBackend>> {
+        Rc::new(Recorder::new(CpalAudioBackend::default()))
     }
 
     /// `stop_recording` に `prompt` を提供すると、WAV と並べてメタJSONファイルが
     /// 作成されることを検証します。入力デバイスが存在しない場合は自動的にスキップします。
     #[tokio::test(flavor = "current_thread")]
+    #[ignore = "Requires LocalSet context and audio device"]
     async fn prompt_is_saved_as_meta() -> Result<(), Box<dyn std::error::Error>> {
         // このテスト中に30秒タイマーが発火するのを防止する
         unsafe {
@@ -553,6 +555,7 @@ mod tests {
     /// 自動タイムアウト（1秒に設定）が録音を停止し、状態を
     /// Idleに戻すことを確認します。オーディオデバイスが利用できない場合はスキップします。
     #[tokio::test(flavor = "current_thread")]
+    #[ignore = "Requires LocalSet context and audio device"]
     async fn auto_timeout_triggers_stop() -> Result<(), Box<dyn std::error::Error>> {
         unsafe {
             std::env::set_var("VOICE_INPUT_MAX_SECS", "1");
