@@ -1,45 +1,141 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides development guidelines and best practices for AI agents and developers working on this project.
 
-## Build and Run Commands
+## Development Philosophy
 
-- Build: `cargo build`
-- Run: `cargo run`
-- Release build: `cargo build --release`
-- Check: `cargo check`
-- Format code: `cargo fmt`
-- Lint: `cargo clippy`
-- Test: `cargo test`
-- Test single file: `cargo test --test <test_name>` or `cargo test <test_module::test_name>`
-- Test with ignored tests (manual): `cargo test -- --ignored --nocapture`
-- Performance test: `cargo test --test performance_test -- --ignored --nocapture`
+### 1. Test-Driven Development
+- Write tests before implementing features when possible
+- Ensure all tests pass locally before pushing
+- Use `cargo test` for full test suite, `cargo test --features ci-test` for CI-safe tests
 
-## Code Style Guidelines
+### 2. Code Quality Standards
+- **Zero Warnings Policy**: All clippy warnings must be fixed
+- **Format Consistency**: Run `cargo fmt` before every commit
+- **Type Safety**: Run `cargo check` after code changes
+- **Documentation**: Add doc comments for public APIs
 
-- Use Rust 2024 edition
-- Follow Rust naming conventions: snake_case for variables/functions, CamelCase for types/structs
-- Error handling: Use Result type for functions that can fail, with descriptive error messages
-- Comments: Use doc comments (///) for public API and regular comments (//) for implementation details
-- Organize imports: std first, then external crates, then local modules
-- Prefer Arc/Mutex for shared state in multithreaded contexts
-- Use proper error propagation with ? operator
-- Use async/await for async operations with tokio
-- Keep functions focused and small when possible
-- Format code with cargo fmt
+### 3. CI/CD Best Practices
 
-## Crate
+#### Environment Parity
+- Use `rust-toolchain.toml` to ensure version consistency
+- Local development should mirror CI environment
+- Test with same flags as CI: `--features ci-test`
 
-- **MUST NOT USE** anyhow
+#### Test Strategy
+```bash
+# Local: Run all tests including those requiring hardware/permissions
+cargo test
 
-## Workflows
+# CI: Run only environment-independent tests
+cargo test --features ci-test
+```
 
-- After Edit, MUST run `cargo check` for type checking unless otherwise instructed
+#### Common Issues Resolution
 
-## Communication
+1. **"Works on my machine" syndrome**:
+   - Always verify with `rust-toolchain.toml` version
+   - Run clippy with `-D warnings` flag
+   - Test with CI feature flags
 
-- If the user prefers to communicate in Japanese, respond in Japanese.
+2. **Audio device tests**:
+   - Mark with `#[cfg_attr(feature = "ci-test", ignore)]`
+   - Provide mock implementations where possible
 
-## git
+3. **Daemon process tests**:
+   - Use `#[cfg_attr(feature = "ci-test", ignore)]`
+   - Consider unit testing individual components
 
-- Branch names must be in English.
+### 4. Architecture Principles
+
+#### Single-threaded Tokio Runtime (voice_inputd)
+- Use `Rc` instead of `Arc` for single-threaded contexts
+- Leverage `spawn_local` for local tasks
+- Avoid unnecessary synchronization overhead
+
+#### Error Handling
+- Use custom error types, avoid `anyhow`
+- Provide descriptive error messages
+- Proper error propagation with `?` operator
+
+#### Performance Considerations
+- Direct input is default (85% faster than clipboard)
+- Minimize clipboard operations
+- Use efficient data structures
+
+### 5. Feature Development Workflow
+
+1. **Planning**:
+   - Document feature in issue/PR
+   - Consider CI limitations early
+   - Plan test strategy
+
+2. **Implementation**:
+   - Follow existing code patterns
+   - Add appropriate tests
+   - Document public APIs
+
+3. **Testing**:
+   ```bash
+   # Full local test
+   cargo test
+   
+   # CI simulation
+   cargo test --features ci-test
+   
+   # Clippy check
+   cargo clippy -- -D warnings
+   
+   # Format check
+   cargo fmt -- --check
+   ```
+
+4. **Pre-commit Checklist**:
+   - [ ] All tests pass locally
+   - [ ] CI tests pass with `--features ci-test`
+   - [ ] No clippy warnings
+   - [ ] Code is formatted
+   - [ ] Documentation updated
+
+### 6. Debugging CI Failures
+
+1. **Version mismatch**:
+   - Check `rust-toolchain.toml`
+   - Update local Rust: `rustup update`
+
+2. **Test failures**:
+   - Run with CI flags: `cargo test --features ci-test`
+   - Check test output in Actions logs
+
+3. **Clippy failures**:
+   - Run exact CI command: `cargo clippy --all-targets --features ci-test -- -D warnings`
+   - Fix all warnings, even minor ones
+
+### 7. Contributing Guidelines
+
+- Keep PRs focused and small
+- Write descriptive commit messages
+- Update tests for bug fixes
+- Add tests for new features
+- Document breaking changes
+
+## Quick Reference
+
+```bash
+# Development commands
+cargo build                    # Debug build
+cargo build --release          # Release build
+cargo test                     # All tests
+cargo test --features ci-test  # CI-safe tests
+cargo clippy -- -D warnings    # Lint with warnings as errors
+cargo fmt                      # Format code
+
+# CI simulation
+./scripts/ci-local.sh          # Run full CI pipeline locally (if available)
+```
+
+## Related Documentation
+
+- [README.md](./README.md) - User documentation and setup
+- [CLAUDE.md](./CLAUDE.md) - AI agent specific guidelines
+- [dev-docs/](./dev-docs/) - Detailed development documentation

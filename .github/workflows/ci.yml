@@ -40,8 +40,3 @@ jobs:
 
       - name: Run tests
         run: cargo test --features ci-test --jobs 4
-
-      - name: Show skipped tests count
-        run: |
-          echo "Environment-dependent tests were skipped in CI"
-          cargo test --features ci-test -- --list | grep -c "ignored" || true
