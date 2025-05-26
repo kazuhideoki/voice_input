@@ -35,7 +35,9 @@ struct PerformanceMetrics {
     recording_time: Duration,
     transcription_time: Duration,
     total_time: Duration,
+    #[allow(dead_code)]
     memory_usage_mb: f64,
+    #[allow(dead_code)]
     mode: String,
 }
 
