@@ -100,7 +100,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     let listener = UnixListener::bind(&path)?;
     println!("voice-inputd listening on {:?}", path);
 
-    let recorder = Rc::new(Recorder::new(CpalAudioBackend::default()));
+    let recorder = Rc::new(std::cell::RefCell::new(Recorder::new(CpalAudioBackend::default())));
     let ctx = Arc::new(Mutex::new(RecCtx {
         state: RecState::Idle,
         cancel: None,
@@ -156,7 +156,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
 /// 状態とレコーダを操作して `IpcResp` を返送します。
 async fn handle_client(
     stream: UnixStream,
-    recorder: Rc<Recorder<CpalAudioBackend>>,
+    recorder: Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>>,
     ctx: Arc<Mutex<RecCtx>>,
     tx: mpsc::UnboundedSender<(RecordingResult, bool, bool, bool)>,
 ) -> Result<(), Box<dyn Error>> {
@@ -219,7 +219,7 @@ async fn handle_client(
 /// * `prompt` – 追加プロンプト。選択テキストより優先される
 /// * `direct_input` – 直接入力を使用するか（クリップボードを使わない）
 async fn start_recording(
-    recorder: Rc<Recorder<CpalAudioBackend>>,
+    recorder: Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>>,
     ctx: &Arc<Mutex<RecCtx>>,
     tx: &mpsc::UnboundedSender<(RecordingResult, bool, bool, bool)>,
     paste: bool,
@@ -243,7 +243,7 @@ async fn start_recording(
     // 録音開始 SE
     play_start_sound();
 
-    recorder.start()?;
+    recorder.borrow_mut().start()?;
     c.state = RecState::Recording;
 
     // ---- 自動停止タイマー -----------------------------
@@ -261,8 +261,8 @@ async fn start_recording(
     spawn_local(async move {
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(max_secs)) => {
-                if recorder.is_recording() {
-                    if let Ok(audio_data) = recorder.stop_raw() {
+                if recorder.borrow().is_recording() {
+                    if let Ok(audio_data) = recorder.borrow_mut().stop_raw() {
                         let result = RecordingResult {
                             audio_data: audio_data.into(),
                             duration_ms: 0, // Duration tracking not implemented yet
@@ -313,7 +313,7 @@ async fn start_recording(
 /// 録音停止処理。WAV を保存して転写キューに送信します。
 /// プロンプトは開始時に取得したもの → 引数 → 停止時の選択テキストの順で使われます。
 async fn stop_recording(
-    recorder: Rc<Recorder<CpalAudioBackend>>,
+    recorder: Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>>,
     ctx: &Arc<Mutex<RecCtx>>,
     tx: &mpsc::UnboundedSender<(RecordingResult, bool, bool, bool)>,
     paste: bool,
@@ -331,7 +331,7 @@ async fn stop_recording(
     }
 
     play_stop_sound();
-    let audio_data = recorder.stop_raw()?;
+    let audio_data = recorder.borrow_mut().stop_raw()?;
     c.state = RecState::Idle;
 
     // 開始時の保存値→引数→現在の選択の順でプロンプトを決定
@@ -545,8 +545,8 @@ mod tests {
     use super::*;
 
     // Helper: construct a Recorder<CpalAudioBackend>
-    fn make_recorder() -> Rc<Recorder<CpalAudioBackend>> {
-        Rc::new(Recorder::new(CpalAudioBackend::default()))
+    fn make_recorder() -> Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>> {
+        Rc::new(std::cell::RefCell::new(Recorder::new(CpalAudioBackend::default())))
     }
 
     /// `stop_recording` に `prompt` を提供すると、WAV と並べてメタJSONファイルが
@@ -623,10 +623,10 @@ mod tests {
             eprintln!("⚠️  No audio device – timeout test skipped");
             return Ok(());
         }
-        assert!(recorder.is_recording(), "recording did not start");
+        assert!(recorder.borrow().is_recording(), "recording did not start");
 
         tokio::time::sleep(Duration::from_secs(2)).await; // wait > 1 s
-        assert!(!recorder.is_recording(), "recording did not auto‑stop");
+        assert!(!recorder.borrow().is_recording(), "recording did not auto‑stop");
         assert_eq!(ctx.lock().map_err(|e| e.to_string())?.state, RecState::Idle);
         assert!(rx.try_recv().is_ok(), "Result not queued after timeout");
         Ok(())

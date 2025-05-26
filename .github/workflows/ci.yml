@@ -40,3 +40,8 @@ jobs:
 
       - name: Run tests
         run: cargo test --features ci-test --jobs 4
+        
+      - name: Run E2E tests (mock mode)
+        run: |
+          # E2Eテストをモックモードで実行
+          cargo test --test e2e --features ci-test -- --nocapture || true

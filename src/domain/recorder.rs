@@ -1,26 +1,58 @@
 use crate::infrastructure::audio::{AudioBackend, AudioData};
+use crate::monitoring::{MemoryMonitor, metrics::{MetricsCollector, RecordingMode}};
 use std::error::Error;
+use std::sync::Arc;
 
 /// `AudioBackend` の薄いラッパ。バックエンド選択を抽象化し、ドメイン層に録音 I/F を提供する。
 pub struct Recorder<T: AudioBackend> {
     backend: T,
+    memory_monitor: Option<Arc<MemoryMonitor>>,
+    metrics_collector: Option<MetricsCollector>,
 }
 
 impl<T: AudioBackend> Recorder<T> {
     /// バックエンドを注入して新しい `Recorder` を作成。
     pub fn new(backend: T) -> Self {
-        Self { backend }
+        Self { 
+            backend,
+            memory_monitor: None,
+            metrics_collector: None,
+        }
+    }
+
+    /// メモリモニターを設定する
+    pub fn with_memory_monitor(mut self, monitor: Arc<MemoryMonitor>) -> Self {
+        self.memory_monitor = Some(monitor);
+        self
+    }
+
+    /// メモリモードかどうかを判定
+    fn is_memory_mode(&self) -> bool {
+        // 環境変数で判定する簡易実装
+        std::env::var("LEGACY_TMP_WAV_FILE").unwrap_or_default() != "true"
     }
 
     /// 録音を開始します。
-    pub fn start(&self) -> Result<(), Box<dyn Error>> {
+    pub fn start(&mut self) -> Result<(), Box<dyn Error>> {
+        // メトリクス収集開始
+        let mode = if self.is_memory_mode() {
+            RecordingMode::Memory
+        } else {
+            RecordingMode::File
+        };
+        self.metrics_collector = Some(MetricsCollector::new(mode));
+        
+        if let Some(ref mut collector) = self.metrics_collector {
+            collector.start_recording();
+        }
+        
         self.backend.start_recording()
     }
 
     /// 録音を停止し、保存された WAV ファイルのパスを返します。
     /// 注意: このメソッドは廃止予定です。代わりに stop_raw() を使用してください。
     /// メモリモードでは一時ファイルを作成しません。
-    pub fn stop(&self) -> Result<String, Box<dyn Error>> {
+    pub fn stop(&mut self) -> Result<String, Box<dyn Error>> {
         match self.backend.stop_recording()? {
             AudioData::File(path) => Ok(path.to_string_lossy().into_owned()),
             AudioData::Memory(_) => {
@@ -32,8 +64,32 @@ impl<T: AudioBackend> Recorder<T> {
 
     /// 録音を停止し、音声データを返します。
     /// 新しいAPIで、AudioData型を直接返します。
-    pub fn stop_raw(&self) -> Result<AudioData, Box<dyn Error>> {
-        self.backend.stop_recording()
+    pub fn stop_raw(&mut self) -> Result<AudioData, Box<dyn Error>> {
+        if let Some(ref mut collector) = self.metrics_collector {
+            collector.start_processing();
+        }
+        
+        let result = self.backend.stop_recording()?;
+        
+        // メモリ使用量の更新
+        if let AudioData::Memory(ref data) = result {
+            if let Some(ref monitor) = self.memory_monitor {
+                monitor.update_usage(data.len());
+            }
+        }
+        
+        // メトリクスの完了
+        if let (Some(collector), Some(monitor)) = (self.metrics_collector.take(), &self.memory_monitor) {
+            let audio_bytes = match &result {
+                AudioData::Memory(data) => data.len(),
+                AudioData::File(_) => 0, // ファイルモードではサイズ不明
+            };
+            
+            let metrics = collector.finish(audio_bytes, monitor.get_metrics());
+            metrics.log_summary();
+        }
+        
+        Ok(result)
     }
 
     /// 録音中かどうかを返します。
@@ -88,7 +144,7 @@ mod tests {
     #[test]
     fn test_recorder_with_file_backend() {
         let backend = MockAudioBackend::new(false);
-        let recorder = Recorder::new(backend);
+        let mut recorder = Recorder::new(backend);
 
         // 録音開始
         assert!(recorder.start().is_ok());
@@ -103,7 +159,7 @@ mod tests {
     #[test]
     fn test_recorder_with_memory_backend() {
         let backend = MockAudioBackend::new(true);
-        let recorder = Recorder::new(backend);
+        let mut recorder = Recorder::new(backend);
 
         // 録音開始
         assert!(recorder.start().is_ok());
@@ -119,7 +175,7 @@ mod tests {
     #[test]
     fn test_recorder_stop_raw() {
         let backend = MockAudioBackend::new(true);
-        let recorder = Recorder::new(backend);
+        let mut recorder = Recorder::new(backend);
 
         recorder.start().unwrap();
 

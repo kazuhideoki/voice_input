@@ -20,6 +20,8 @@
 //! cargo test --test performance_test -- --ignored --nocapture
 //! ```
 
+mod benchmarks;
+
 use std::env;
 use std::error::Error;
 use std::thread;
@@ -59,7 +61,7 @@ async fn measure_performance(use_legacy: bool) -> Result<PerformanceMetrics, Box
 
     // 録音開始
     let backend = CpalAudioBackend::default();
-    let recorder = Recorder::new(backend);
+    let mut recorder = Recorder::new(backend);
     recorder.start()?;
 
     // 5秒間録音
@@ -200,7 +202,7 @@ async fn test_memory_usage() {
 
     let backend = CpalAudioBackend::default();
 
-    let recorder = Recorder::new(backend);
+    let mut recorder = Recorder::new(backend);
 
     println!("🎙️  Recording for 30 seconds...");
     if let Err(e) = recorder.start() {
