@@ -838,14 +838,12 @@ mod tests {
 
         // ファイルモードの状態作成
         let file_state = RecordingState::File {
-            writer: Arc::new(Mutex::new(None)),
             path: PathBuf::from("/tmp/test.wav"),
         };
 
         match file_state {
-            RecordingState::File { writer, path } => {
+            RecordingState::File { path } => {
                 assert_eq!(path, PathBuf::from("/tmp/test.wav"));
-                assert!(writer.lock().unwrap().is_none());
             }
             _ => panic!("Expected File state"),
         }
@@ -951,7 +949,6 @@ mod tests {
         // テスト用のRecordingState::Fileを設定
         let test_path = PathBuf::from("/tmp/test.wav");
         *backend.recording_state.lock().unwrap() = Some(RecordingState::File {
-            writer: Arc::new(Mutex::new(None)),
             path: test_path.clone(),
         });
 
