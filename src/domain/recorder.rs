@@ -18,24 +18,14 @@ impl<T: AudioBackend> Recorder<T> {
     }
 
     /// 録音を停止し、保存された WAV ファイルのパスを返します。
-    /// 後方互換性のため、メモリモードの場合は一時ファイルに書き出してパスを返します。
+    /// 注意: このメソッドは廃止予定です。代わりに stop_raw() を使用してください。
+    /// メモリモードでは一時ファイルを作成しません。
     pub fn stop(&self) -> Result<String, Box<dyn Error>> {
         match self.backend.stop_recording()? {
             AudioData::File(path) => Ok(path.to_string_lossy().into_owned()),
-            AudioData::Memory(wav_data) => {
-                // メモリモードの場合、一時ファイルに書き出す
-                use std::io::Write;
-                let timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
-                let mut temp_path = std::env::temp_dir();
-                temp_path.push(format!("voice_input_{}.wav", timestamp));
-                
-                let mut file = std::fs::File::create(&temp_path)?;
-                file.write_all(&wav_data)?;
-                
-                Ok(temp_path.to_string_lossy().into_owned())
+            AudioData::Memory(_) => {
+                // メモリモードでは一時ファイルを作成しない
+                Err("Memory mode is not supported by stop(). Use stop_raw() instead.".into())
             }
         }
     }
@@ -99,11 +89,11 @@ mod tests {
     fn test_recorder_with_file_backend() {
         let backend = MockAudioBackend::new(false);
         let recorder = Recorder::new(backend);
-        
+
         // 録音開始
         assert!(recorder.start().is_ok());
         assert!(recorder.is_recording());
-        
+
         // 録音停止（ファイルモード）
         let result = recorder.stop().unwrap();
         assert_eq!(result, "/tmp/test.wav");
@@ -114,31 +104,25 @@ mod tests {
     fn test_recorder_with_memory_backend() {
         let backend = MockAudioBackend::new(true);
         let recorder = Recorder::new(backend);
-        
+
         // 録音開始
         assert!(recorder.start().is_ok());
         assert!(recorder.is_recording());
-        
+
         // 録音停止（メモリモード）
-        let result = recorder.stop().unwrap();
-        assert!(result.contains("voice_input_"));
-        assert!(result.ends_with(".wav"));
+        // Note: stop()メソッドは廃止予定。メモリモードでは一時ファイルを作成しない
+        let result = recorder.stop();
+        assert!(result.is_err() || result.unwrap().is_empty());
         assert!(!recorder.is_recording());
-        
-        // ファイルが作成されたことを確認
-        assert!(std::path::Path::new(&result).exists());
-        
-        // クリーンアップ
-        let _ = std::fs::remove_file(&result);
     }
 
     #[test]
     fn test_recorder_stop_raw() {
         let backend = MockAudioBackend::new(true);
         let recorder = Recorder::new(backend);
-        
+
         recorder.start().unwrap();
-        
+
         // stop_rawは直接AudioDataを返す
         let result = recorder.stop_raw().unwrap();
         match result {

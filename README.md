@@ -16,6 +16,7 @@ Rust 製の **音声録音・文字起こし CLI / デーモン** です。
 | **録音→転写まで自動**              | 1 コマンドで録音開始から文字起こしまで           |
 | **直接テキスト入力（デフォルト）** | クリップボードを汚染せずにカーソル位置に直接入力 |
 | **IPC Unix Socket**                | CLI ↔ デーモン間通信は JSON over UDS            |
+| **高速メモリモード（デフォルト）** | 一時ファイルを作成せず、メモリ上で音声処理       |
 
 ## 環境変数準備
 
@@ -26,6 +27,7 @@ cp .env.example .env
 - OPENAI_API_KEY=your_openai_api_key_here
 - OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe # デフォルト
 - INPUT_DEVICE_PRIORITY="device1,device2,device3"
+- LEGACY_TMP_WAV_FILE=true # レガシーファイルモードを使用する場合のみ設定
 
 ## ビルド
 
@@ -215,6 +217,31 @@ cargo fmt -- --check
 # Lintチェック
 cargo clippy -- -D warnings
 ```
+
+### パフォーマンス
+
+メモリモード（デフォルト）とファイルモードのパフォーマンス比較：
+
+```bash
+# パフォーマンステストの実行
+# 1. OpenAI APIキーを設定
+export OPENAI_API_KEY="your_api_key_here"
+export INPUT_DEVICE_PRIORITY="device1,device2,device3"
+
+# 2. 音声デバイスの確認
+cargo run --bin voice_inputd &
+cargo run --bin voice_input -- --list-devices
+pkill voice_inputd
+
+# 3. テスト実行
+cargo test --test performance_test -- --ignored --nocapture
+```
+
+メモリモードの利点：
+
+- ディスクI/Oの削除による高速化
+- 一時ファイル作成・削除のオーバーヘッド排除
+- システムコールの削減
 
 ### CI/CD
 

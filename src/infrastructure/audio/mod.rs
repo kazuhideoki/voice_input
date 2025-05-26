@@ -17,4 +17,3 @@ pub trait AudioBackend {
     /// 現在録音中であれば `true`。
     fn is_recording(&self) -> bool;
 }
-

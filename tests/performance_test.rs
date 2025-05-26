@@ -1,263 +1,239 @@
+//! パフォーマンステスト
+//! メモリモードとファイルモードの性能比較を行います。
+//!
+//! ## 実行前要件
+//! 1. OpenAI APIキーの設定:
+//!    ```bash
+//!    export OPENAI_API_KEY="your_api_key_here"
+//!    ```
+//! 2. 音声入力デバイスが利用可能であること
+//!    ```bash
+//!    cargo run --bin voice_inputd &
+//!    cargo run --bin voice_input -- --list-devices
+//!    pkill voice_inputd
+//!    ```
+//!
+//! ## 実行方法
+//! ```bash
+//! # 環境変数を設定してからテスト実行
+//! export OPENAI_API_KEY="your_api_key_here"
+//! cargo test --test performance_test -- --ignored --nocapture
+//! ```
+
+use std::env;
+use std::error::Error;
+use std::thread;
 use std::time::{Duration, Instant};
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
-use voice_input::infrastructure::external::text_input::type_text;
+use voice_input::domain::recorder::Recorder;
+use voice_input::infrastructure::audio::cpal_backend::CpalAudioBackend;
+use voice_input::infrastructure::external::openai::OpenAiClient;
 
-/// パフォーマンステスト結果
 #[derive(Debug)]
-struct PerformanceResult {
-    text_length: usize,
-    direct_input_time: Option<Duration>,
-    paste_time: Option<Duration>,
-    direct_input_error: Option<String>,
-    paste_error: Option<String>,
+struct PerformanceMetrics {
+    recording_time: Duration,
+    transcription_time: Duration,
+    total_time: Duration,
+    memory_usage_mb: f64,
+    mode: String,
 }
 
-/// クリップボードにテキストを設定
-async fn set_clipboard(text: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut child = Command::new("pbcopy")
-        .stdin(std::process::Stdio::piped())
-        .spawn()?;
+/// 現在のメモリ使用量を取得（簡易実装）
+fn get_current_memory_usage_mb() -> f64 {
+    // macOSでは正確なメモリ使用量の取得は困難なため、ダミー値を返す
+    // 実際の実装では、システムコールやプロセス情報を使用
+    0.0
+}
 
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin.write_all(text.as_bytes()).await?;
+/// パフォーマンスを測定
+async fn measure_performance(use_legacy: bool) -> Result<PerformanceMetrics, Box<dyn Error>> {
+    // 環境変数設定
+    unsafe {
+        if use_legacy {
+            env::set_var("LEGACY_TMP_WAV_FILE", "true");
+        } else {
+            env::remove_var("LEGACY_TMP_WAV_FILE");
+        }
     }
 
-    child.wait().await?;
-    Ok(())
-}
-
-/// ペースト方式でテキストを入力（シミュレーション）
-async fn paste_text(text: &str) -> Result<Duration, Box<dyn std::error::Error>> {
     let start = Instant::now();
 
-    // クリップボードに設定
-    set_clipboard(text).await?;
+    // 録音開始
+    let backend = CpalAudioBackend::default();
+    let recorder = Recorder::new(backend);
+    recorder.start()?;
 
-    // Cmd+Vをシミュレート
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(r#"tell application "System Events" to keystroke "v" using {command down}"#)
-        .output()
-        .await?;
+    // 5秒間録音
+    thread::sleep(Duration::from_secs(5));
 
-    if !output.status.success() {
-        return Err(format!(
-            "Paste command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
-    }
+    let recording_end = Instant::now();
+    let audio_data = recorder.stop_raw()?;
 
-    Ok(start.elapsed())
+    // OpenAI API呼び出し
+    let client = OpenAiClient::new()?;
+    let transcription_start = Instant::now();
+    let _result = client.transcribe_audio(audio_data).await?;
+
+    let total_end = Instant::now();
+
+    Ok(PerformanceMetrics {
+        recording_time: recording_end - start,
+        transcription_time: total_end - transcription_start,
+        total_time: total_end - start,
+        memory_usage_mb: get_current_memory_usage_mb(),
+        mode: if use_legacy {
+            "File".to_string()
+        } else {
+            "Memory".to_string()
+        },
+    })
 }
 
-/// 直接入力方式でテキストを入力
-async fn direct_input_text(text: &str) -> Result<Duration, Box<dyn std::error::Error>> {
-    let start = Instant::now();
-    type_text(text).await?;
-    Ok(start.elapsed())
-}
+/// 結果を表形式で出力
+fn print_results(memory_metrics: &PerformanceMetrics, file_metrics: &PerformanceMetrics) {
+    println!("\n🎯 Performance Comparison Results");
+    println!("═══════════════════════════════════════════════════════════════");
+    println!(
+        "{:<20} │ {:>15} │ {:>15} │ {:>10}",
+        "Metric", "Memory Mode", "File Mode", "Difference"
+    );
+    println!("───────────────────────────────────────────────────────────────");
 
-/// パフォーマンステストを実行
-async fn run_performance_test(text: &str, description: &str) -> PerformanceResult {
-    println!("\n=== {} ===", description);
-    println!("Text length: {} characters", text.len());
+    // 録音時間
+    println!(
+        "{:<20} │ {:>13.2}ms │ {:>13.2}ms │ {:>8.2}ms",
+        "Recording Time",
+        memory_metrics.recording_time.as_millis(),
+        file_metrics.recording_time.as_millis(),
+        memory_metrics.recording_time.as_millis() as f64
+            - file_metrics.recording_time.as_millis() as f64
+    );
 
-    let mut result = PerformanceResult {
-        text_length: text.len(),
-        direct_input_time: None,
-        paste_time: None,
-        direct_input_error: None,
-        paste_error: None,
-    };
+    // 転写時間
+    println!(
+        "{:<20} │ {:>13.2}ms │ {:>13.2}ms │ {:>8.2}ms",
+        "Transcription Time",
+        memory_metrics.transcription_time.as_millis(),
+        file_metrics.transcription_time.as_millis(),
+        memory_metrics.transcription_time.as_millis() as f64
+            - file_metrics.transcription_time.as_millis() as f64
+    );
 
-    // 直接入力のテスト
-    print!("Testing direct input... ");
-    match direct_input_text(text).await {
-        Ok(duration) => {
-            println!("✓ {:.2}s", duration.as_secs_f64());
-            result.direct_input_time = Some(duration);
-        }
-        Err(e) => {
-            println!("✗ Error: {}", e);
-            result.direct_input_error = Some(e.to_string());
-        }
+    // 合計時間
+    println!(
+        "{:<20} │ {:>13.2}ms │ {:>13.2}ms │ {:>8.2}ms",
+        "Total Time",
+        memory_metrics.total_time.as_millis(),
+        file_metrics.total_time.as_millis(),
+        memory_metrics.total_time.as_millis() as f64 - file_metrics.total_time.as_millis() as f64
+    );
+
+    println!("═══════════════════════════════════════════════════════════════");
+
+    // パフォーマンス改善率
+    let improvement = ((file_metrics.total_time.as_millis() as f64
+        - memory_metrics.total_time.as_millis() as f64)
+        / file_metrics.total_time.as_millis() as f64)
+        * 100.0;
+
+    if improvement > 0.0 {
+        println!(
+            "\n✅ Performance Improvement: {:.1}% faster in Memory mode",
+            improvement
+        );
+    } else {
+        println!(
+            "\n⚠️  Performance Degradation: {:.1}% slower in Memory mode",
+            -improvement
+        );
     }
-
-    // 少し待つ
-    tokio::time::sleep(Duration::from_secs(1)).await;
-
-    // ペースト方式のテスト
-    print!("Testing paste method... ");
-    match paste_text(text).await {
-        Ok(duration) => {
-            println!("✓ {:.2}s", duration.as_secs_f64());
-            result.paste_time = Some(duration);
-        }
-        Err(e) => {
-            println!("✗ Error: {}", e);
-            result.paste_error = Some(e.to_string());
-        }
-    }
-
-    result
 }
 
 #[tokio::test]
-#[ignore] // 手動実行用：cargo test --test performance_test -- --ignored --nocapture
-async fn benchmark_direct_vs_paste() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Voice Input Performance Benchmark");
-    println!("=================================");
-    println!("Comparing direct input vs paste method");
-    println!("\nNOTE: Open a text editor and place cursor in a text field before running!");
-    println!("Waiting 5 seconds...");
-
-    tokio::time::sleep(Duration::from_secs(5)).await;
-
-    let long_text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(20);
-    let test_cases = vec![
-        ("Short text", "Hello, World!"),
-        (
-            "Medium text",
-            "The quick brown fox jumps over the lazy dog. This is a test of the voice input system.",
-        ),
-        ("Long text", long_text.as_str()),
-        (
-            "Japanese text",
-            "こんにちは、世界！日本語のテキスト入力テストです。",
-        ),
-        (
-            "Mixed content",
-            "Test 123! 特殊文字 @#$% と絵文字 🎉 を含むテキスト。\n改行も\nテストします。",
-        ),
-    ];
-
-    let mut results = Vec::new();
-
-    for (description, text) in test_cases {
-        let result = run_performance_test(text, description).await;
-        results.push(result);
-        tokio::time::sleep(Duration::from_secs(2)).await;
+#[ignore]
+async fn test_performance_comparison() {
+    // OpenAI APIキーが設定されているか確認
+    if env::var("OPENAI_API_KEY").is_err() {
+        eprintln!("⚠️  OPENAI_API_KEY not set. Skipping performance test.");
+        return;
     }
 
-    // レポート生成
-    println!("\n\n=== Performance Report ===");
-    println!(
-        "{:<15} {:<10} {:<15} {:<15} {:<10}",
-        "Test", "Length", "Direct (s)", "Paste (s)", "Diff"
-    );
-    println!("{}", "-".repeat(70));
+    println!("🚀 Starting performance comparison test...");
+    println!("This test will record 5 seconds of audio in each mode.\n");
 
-    for (i, result) in results.iter().enumerate() {
-        let test_name = match i {
-            0 => "Short",
-            1 => "Medium",
-            2 => "Long",
-            3 => "Japanese",
-            4 => "Mixed",
-            _ => "Unknown",
-        };
+    // メモリモードでの測定
+    println!("📊 Testing Memory mode...");
+    let memory_metrics = match measure_performance(false).await {
+        Ok(metrics) => metrics,
+        Err(e) => {
+            eprintln!("❌ Memory mode test failed: {}", e);
+            return;
+        }
+    };
 
-        let direct_time = result
-            .direct_input_time
-            .map(|d| format!("{:.3}", d.as_secs_f64()))
-            .unwrap_or_else(|| "Error".to_string());
+    // 少し待機
+    thread::sleep(Duration::from_secs(2));
 
-        let paste_time = result
-            .paste_time
-            .map(|d| format!("{:.3}", d.as_secs_f64()))
-            .unwrap_or_else(|| "Error".to_string());
+    // ファイルモードでの測定
+    println!("📊 Testing File mode...");
+    let file_metrics = match measure_performance(true).await {
+        Ok(metrics) => metrics,
+        Err(e) => {
+            eprintln!("❌ File mode test failed: {}", e);
+            return;
+        }
+    };
 
-        let diff = match (result.direct_input_time, result.paste_time) {
-            (Some(d), Some(p)) => {
-                let diff_ms = d.as_millis() as i64 - p.as_millis() as i64;
-                if diff_ms > 0 {
-                    format!("+{:.3}s", diff_ms as f64 / 1000.0)
-                } else {
-                    format!("{:.3}s", diff_ms as f64 / 1000.0)
+    // 結果を表示
+    print_results(&memory_metrics, &file_metrics);
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_memory_usage() {
+    println!("\n🧪 Memory Usage Test");
+    println!("Testing memory consumption with longer recording...\n");
+
+    // 30秒録音でのメモリ使用量を確認
+    unsafe {
+        env::remove_var("LEGACY_TMP_WAV_FILE");
+    }
+
+    let backend = CpalAudioBackend::default();
+
+    let recorder = Recorder::new(backend);
+
+    println!("🎙️  Recording for 30 seconds...");
+    if let Err(e) = recorder.start() {
+        eprintln!("❌ Failed to start recording: {}", e);
+        return;
+    }
+
+    // 30秒録音
+    thread::sleep(Duration::from_secs(30));
+
+    match recorder.stop_raw() {
+        Ok(audio_data) => {
+            match audio_data {
+                voice_input::infrastructure::audio::cpal_backend::AudioData::Memory(data) => {
+                    let size_mb = data.len() as f64 / (1024.0 * 1024.0);
+                    println!("✅ Memory mode - WAV data size: {:.2} MB", size_mb);
+
+                    // 理論値との比較
+                    // 48kHz * 2ch * 2bytes * 30sec = 5.76MB
+                    let expected_mb = 48000.0 * 2.0 * 2.0 * 30.0 / (1024.0 * 1024.0);
+                    println!("📐 Expected size (theoretical): {:.2} MB", expected_mb);
+                    println!(
+                        "📊 Actual vs Expected: {:.1}%",
+                        (size_mb / expected_mb) * 100.0
+                    );
+                }
+                voice_input::infrastructure::audio::cpal_backend::AudioData::File(path) => {
+                    println!("📁 File mode - saved to: {:?}", path);
                 }
             }
-            _ => "N/A".to_string(),
-        };
-
-        println!(
-            "{:<15} {:<10} {:<15} {:<15} {:<10}",
-            test_name, result.text_length, direct_time, paste_time, diff
-        );
-    }
-
-    println!("\n=== Summary ===");
-
-    // 平均時間の計算
-    let direct_times: Vec<_> = results.iter().filter_map(|r| r.direct_input_time).collect();
-
-    let paste_times: Vec<_> = results.iter().filter_map(|r| r.paste_time).collect();
-
-    if !direct_times.is_empty() {
-        let avg_direct =
-            direct_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / direct_times.len() as f64;
-        println!("Average direct input time: {:.3}s", avg_direct);
-    }
-
-    if !paste_times.is_empty() {
-        let avg_paste =
-            paste_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / paste_times.len() as f64;
-        println!("Average paste time: {:.3}s", avg_paste);
-    }
-
-    // エラー報告
-    let errors: Vec<_> = results
-        .iter()
-        .enumerate()
-        .filter_map(|(i, r)| {
-            if r.direct_input_error.is_some() || r.paste_error.is_some() {
-                Some((i, r))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    if !errors.is_empty() {
-        println!("\n=== Errors ===");
-        for (i, result) in errors {
-            if let Some(err) = &result.direct_input_error {
-                println!("Test {}: Direct input error: {}", i + 1, err);
-            }
-            if let Some(err) = &result.paste_error {
-                println!("Test {}: Paste error: {}", i + 1, err);
-            }
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to stop recording: {}", e);
         }
     }
-
-    println!("\n=== Recommendations ===");
-    if direct_times.len() == paste_times.len() && !direct_times.is_empty() {
-        let avg_direct =
-            direct_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / direct_times.len() as f64;
-        let avg_paste =
-            paste_times.iter().map(|d| d.as_secs_f64()).sum::<f64>() / paste_times.len() as f64;
-
-        let diff_percent = ((avg_direct - avg_paste) / avg_paste * 100.0).abs();
-
-        if avg_direct < avg_paste {
-            println!(
-                "✓ Direct input is {:.1}% faster than paste method",
-                diff_percent
-            );
-            println!("✓ Recommend using direct input as default");
-        } else if diff_percent < 20.0 {
-            println!("✓ Performance difference is minimal ({:.1}%)", diff_percent);
-            println!("✓ Direct input provides clipboard preservation benefit");
-            println!("✓ Recommend using direct input as default");
-        } else {
-            println!(
-                "⚠ Direct input is {:.1}% slower than paste method",
-                diff_percent
-            );
-            println!("⚠ Consider performance vs clipboard preservation trade-off");
-        }
-    }
-
-    Ok(())
 }

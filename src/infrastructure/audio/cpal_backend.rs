@@ -151,11 +151,11 @@ impl CpalAudioBackend {
     ///
     /// # Returns
     /// 44バイトのWAVヘッダーデータ
-    /// 
+    ///
     /// # Example
     /// ```
     /// use voice_input::infrastructure::audio::cpal_backend::CpalAudioBackend;
-    /// 
+    ///
     /// // 1秒分のステレオ16bit 48kHzオーディオのヘッダー作成
     /// let data_len = 48000 * 2 * 2; // sample_rate * channels * bytes_per_sample
     /// let header = CpalAudioBackend::create_wav_header(data_len, 48000, 2, 16);
@@ -204,19 +204,19 @@ impl CpalAudioBackend {
     ///
     /// # Returns
     /// 完全なWAVファイルデータ (ヘッダー + PCMデータ)
-    /// 
+    ///
     /// # Errors
     /// - `AudioError::DataTooLarge` - データサイズが u32::MAX を超える場合
-    /// 
+    ///
     /// # Example
     /// ```
     /// use voice_input::infrastructure::audio::cpal_backend::{CpalAudioBackend, Sample};
-    /// 
+    ///
     /// // i16 サンプルの例
     /// let pcm_data: Vec<i16> = vec![0, 1000, -1000, 0];
     /// let wav_data = CpalAudioBackend::combine_wav_data(&pcm_data, 48000, 2).unwrap();
     /// assert_eq!(wav_data.len(), 44 + 8); // header + 4 samples * 2 bytes
-    /// 
+    ///
     /// // f32 サンプルの例
     /// let pcm_data_f32: Vec<f32> = vec![0.0, 0.5, -0.5, 0.0];
     /// let wav_data_f32 = CpalAudioBackend::combine_wav_data(&pcm_data_f32, 44100, 1).unwrap();
@@ -259,14 +259,14 @@ impl CpalAudioBackend {
     pub fn is_legacy_mode() -> bool {
         std::env::var("LEGACY_TMP_WAV_FILE").is_ok()
     }
-    
+
     /// メモリバッファのサイズ見積もり
     /// 録音時間に基づいて必要なバッファサイズを計算
     fn estimate_buffer_size(duration_secs: u32, sample_rate: u32, channels: u16) -> usize {
         // samples = sample_rate * channels * duration
         sample_rate as usize * channels as usize * duration_secs as usize
     }
-    
+
     /// 利用可能な入力デバイス名を返すユーティリティ
     pub fn list_devices() -> Vec<String> {
         let host = cpal::default_host();
@@ -310,7 +310,10 @@ impl CpalAudioBackend {
                 move |data: &[f32], _| {
                     if recording.load(Ordering::SeqCst) {
                         let mut buf = buffer.lock().unwrap();
-                        buf.extend(data.iter().map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16));
+                        buf.extend(
+                            data.iter()
+                                .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16),
+                        );
                     }
                 },
                 |e| eprintln!("stream error: {e}"),
@@ -393,15 +396,15 @@ impl AudioBackend for CpalAudioBackend {
         let stream = if Self::is_legacy_mode() {
             // レガシーモード: ファイルベース
             let wav_path = Self::make_output_path();
-            
+
             // RecordingStateをFileモードに設定
             *self.recording_state.lock().unwrap() = Some(RecordingState::File {
                 writer: Arc::new(Mutex::new(None)), // build_input_streamで初期化される
                 path: PathBuf::from(&wav_path),
             });
-            
+
             *self.output_path.lock().unwrap() = Some(wav_path.clone());
-            
+
             Self::build_input_stream(
                 self.recording.clone(),
                 &device,
@@ -413,18 +416,18 @@ impl AudioBackend for CpalAudioBackend {
             // メモリモード: バッファベース
             let sample_rate = config.sample_rate.0;
             let channels = config.channels;
-            
+
             // 30秒分のバッファを事前確保
             let capacity = Self::estimate_buffer_size(30, sample_rate, channels);
             let buffer = Arc::new(Mutex::new(Vec::with_capacity(capacity)));
-            
+
             // RecordingStateをMemoryモードに設定
             *self.recording_state.lock().unwrap() = Some(RecordingState::Memory {
                 buffer: buffer.clone(),
                 sample_rate,
                 channels,
             });
-            
+
             Self::build_memory_stream(
                 self.recording.clone(),
                 &device,
@@ -433,7 +436,7 @@ impl AudioBackend for CpalAudioBackend {
                 buffer,
             )?
         };
-        
+
         stream.play()?;
         self.recording.store(true, Ordering::SeqCst);
         *self.stream.lock().unwrap() = Some(stream);
@@ -445,7 +448,7 @@ impl AudioBackend for CpalAudioBackend {
         if !self.is_recording() {
             return Err("not recording".into());
         }
-        
+
         // ストリームを解放して終了
         *self.stream.lock().unwrap() = None;
         self.recording.store(false, Ordering::SeqCst);
@@ -457,9 +460,13 @@ impl AudioBackend for CpalAudioBackend {
             .unwrap()
             .take()
             .ok_or("recording state not set")?;
-            
+
         match state {
-            RecordingState::Memory { buffer, sample_rate, channels } => {
+            RecordingState::Memory {
+                buffer,
+                sample_rate,
+                channels,
+            } => {
                 // メモリモード: バッファからWAVデータを生成
                 let samples = buffer.lock().unwrap();
                 let wav_data = Self::combine_wav_data(&samples, sample_rate, channels)?;
@@ -781,25 +788,25 @@ mod tests {
         // Memory variant
         let data = vec![1, 2, 3, 4, 5];
         let audio_data = AudioData::Memory(data.clone());
-        
+
         match &audio_data {
             AudioData::Memory(vec) => assert_eq!(vec, &data),
             _ => panic!("Expected Memory variant"),
         }
-        
+
         // File variant
         let path = PathBuf::from("/tmp/test.wav");
         let audio_data_file = AudioData::File(path.clone());
-        
+
         match &audio_data_file {
             AudioData::File(p) => assert_eq!(p, &path),
             _ => panic!("Expected File variant"),
         }
-        
+
         // Debug trait
         assert!(format!("{:?}", audio_data).contains("Memory"));
         assert!(format!("{:?}", audio_data_file).contains("File"));
-        
+
         // Clone trait
         let cloned = audio_data.clone();
         match cloned {
@@ -817,23 +824,27 @@ mod tests {
             sample_rate: 48000,
             channels: 2,
         };
-        
+
         // bufferが適切に初期化されているか確認
         match memory_state {
-            RecordingState::Memory { buffer, sample_rate, channels } => {
+            RecordingState::Memory {
+                buffer,
+                sample_rate,
+                channels,
+            } => {
                 assert_eq!(sample_rate, 48000);
                 assert_eq!(channels, 2);
                 assert!(buffer.lock().unwrap().is_empty());
             }
             _ => panic!("Expected Memory state"),
         }
-        
+
         // ファイルモードの状態作成
         let file_state = RecordingState::File {
             writer: Arc::new(Mutex::new(None)),
             path: PathBuf::from("/tmp/test.wav"),
         };
-        
+
         match file_state {
             RecordingState::File { writer, path } => {
                 assert_eq!(path, PathBuf::from("/tmp/test.wav"));
@@ -846,10 +857,10 @@ mod tests {
     #[test]
     fn test_cpal_backend_with_recording_state() {
         let backend = CpalAudioBackend::default();
-        
+
         // 初期状態はNone
         assert!(backend.recording_state.lock().unwrap().is_none());
-        
+
         // recording_stateフィールドが存在することを確認
         assert!(!backend.is_recording());
     }
@@ -859,11 +870,11 @@ mod tests {
         // 48kHz, 2ch, 1秒
         let size = CpalAudioBackend::estimate_buffer_size(1, 48000, 2);
         assert_eq!(size, 96000); // 48000 * 2 * 1
-        
+
         // 44.1kHz, 1ch, 30秒
         let size = CpalAudioBackend::estimate_buffer_size(30, 44100, 1);
         assert_eq!(size, 1323000); // 44100 * 1 * 30
-        
+
         // 48kHz, 2ch, 30秒（最大録音時間）
         let size = CpalAudioBackend::estimate_buffer_size(30, 48000, 2);
         assert_eq!(size, 2880000); // 48000 * 2 * 30
@@ -873,13 +884,13 @@ mod tests {
     fn test_start_recording_memory_mode() {
         // メモリモードに設定
         unsafe { std::env::remove_var("LEGACY_TMP_WAV_FILE") };
-        
+
         let backend = CpalAudioBackend::default();
-        
+
         // 録音開始前の状態確認
         assert!(!backend.is_recording());
         assert!(backend.recording_state.lock().unwrap().is_none());
-        
+
         // 注意: 実際のデバイスが必要なため、CI環境では失敗する可能性がある
         // ここではRecordingStateの設定のみをテストする目的でモックを使用する想定
     }
@@ -888,13 +899,13 @@ mod tests {
     fn test_start_recording_legacy_mode() {
         // レガシーモードに設定
         unsafe { std::env::set_var("LEGACY_TMP_WAV_FILE", "1") };
-        
+
         let backend = CpalAudioBackend::default();
-        
+
         // 録音開始前の状態確認
         assert!(!backend.is_recording());
         assert!(backend.recording_state.lock().unwrap().is_none());
-        
+
         // クリーンアップ
         unsafe { std::env::remove_var("LEGACY_TMP_WAV_FILE") };
     }
@@ -903,7 +914,7 @@ mod tests {
     fn test_stop_recording_memory_mode() {
         // メモリモードでの動作をシミュレート
         let backend = CpalAudioBackend::default();
-        
+
         // テスト用のRecordingState::Memoryを設定
         let buffer = Arc::new(Mutex::new(vec![100i16, -100, 0, 1000, -1000]));
         *backend.recording_state.lock().unwrap() = Some(RecordingState::Memory {
@@ -911,25 +922,25 @@ mod tests {
             sample_rate: 48000,
             channels: 1,
         });
-        
+
         // 録音フラグを設定
         backend.recording.store(true, Ordering::SeqCst);
-        
+
         // stop_recordingを実行
         let result = backend.stop_recording().unwrap();
-        
+
         match result {
             AudioData::Memory(wav_data) => {
                 // WAVヘッダー（44バイト）+ データ（5サンプル * 2バイト = 10バイト）
                 assert_eq!(wav_data.len(), 54);
-                
+
                 // WAVヘッダーの基本チェック
                 assert_eq!(&wav_data[0..4], b"RIFF");
                 assert_eq!(&wav_data[8..12], b"WAVE");
             }
             _ => panic!("Expected AudioData::Memory"),
         }
-        
+
         // 録音状態がクリアされていることを確認
         assert!(!backend.is_recording());
         assert!(backend.recording_state.lock().unwrap().is_none());
@@ -939,27 +950,27 @@ mod tests {
     fn test_stop_recording_file_mode() {
         // ファイルモードでの動作をシミュレート
         let backend = CpalAudioBackend::default();
-        
+
         // テスト用のRecordingState::Fileを設定
         let test_path = PathBuf::from("/tmp/test.wav");
         *backend.recording_state.lock().unwrap() = Some(RecordingState::File {
             writer: Arc::new(Mutex::new(None)),
             path: test_path.clone(),
         });
-        
+
         // 録音フラグを設定
         backend.recording.store(true, Ordering::SeqCst);
-        
+
         // stop_recordingを実行
         let result = backend.stop_recording().unwrap();
-        
+
         match result {
             AudioData::File(path) => {
                 assert_eq!(path, test_path);
             }
             _ => panic!("Expected AudioData::File"),
         }
-        
+
         // 録音状態がクリアされていることを確認
         assert!(!backend.is_recording());
         assert!(backend.recording_state.lock().unwrap().is_none());
@@ -971,31 +982,31 @@ mod tests {
         let sample_rate = 48000u32;
         let channels = 2u16;
         let duration_secs = 30u32;
-        
+
         // サンプル数を計算
         let total_samples = sample_rate * channels as u32 * duration_secs;
-        
+
         // i16のバッファを作成（実際のメモリ使用量を確認）
         let buffer: Vec<i16> = vec![0; total_samples as usize];
-        
+
         // メモリサイズの確認
         let memory_size_bytes = buffer.len() * std::mem::size_of::<i16>();
         let memory_size_mb = memory_size_bytes as f64 / (1024.0 * 1024.0);
-        
+
         println!("30秒録音のメモリ使用量: {:.2} MB", memory_size_mb);
-        
+
         // 期待値: 約5.5MB (48000 * 2 * 30 * 2bytes = 5,760,000 bytes ≈ 5.49 MB)
         assert!(memory_size_mb < 6.0, "メモリ使用量が6MBを超えています");
         assert!(memory_size_mb > 5.0, "メモリ使用量が予想より少なすぎます");
-        
+
         // WAVデータ生成のテスト
         let wav_result = CpalAudioBackend::combine_wav_data(&buffer, sample_rate, channels);
         assert!(wav_result.is_ok());
-        
+
         let wav_data = wav_result.unwrap();
         let wav_size_mb = wav_data.len() as f64 / (1024.0 * 1024.0);
         println!("WAVファイルサイズ: {:.2} MB", wav_size_mb);
-        
+
         // WAVファイルサイズも同程度であることを確認（ヘッダー44バイト + データ）
         assert!((wav_size_mb - memory_size_mb).abs() < 0.01);
     }
@@ -1006,16 +1017,16 @@ mod tests {
         let sample_rate = 48000;
         let channels = 2;
         let duration = 30;
-        
+
         // estimate_buffer_sizeの結果を確認
         let estimated = CpalAudioBackend::estimate_buffer_size(duration, sample_rate, channels);
         let expected = sample_rate as usize * channels as usize * duration as usize;
         assert_eq!(estimated, expected);
-        
+
         // Vec::with_capacityで作成した場合のキャパシティを確認
         let buffer: Vec<i16> = Vec::with_capacity(estimated);
         assert_eq!(buffer.capacity(), estimated);
-        
+
         // 実際に要素を追加してもreallocが発生しないことを確認
         let mut buffer = buffer;
         for _ in 0..estimated {
@@ -1030,15 +1041,15 @@ mod tests {
     fn test_real_recording_memory_mode() {
         // 実際のデバイスでメモリモード録音をテスト（CI環境では無視）
         unsafe { std::env::remove_var("LEGACY_TMP_WAV_FILE") };
-        
+
         let backend = CpalAudioBackend::default();
-        
+
         // 録音開始を試みる
         match backend.start_recording() {
             Ok(_) => {
                 // 録音状態を確認
                 assert!(backend.is_recording());
-                
+
                 // RecordingStateがMemoryモードであることを確認
                 let state = backend.recording_state.lock().unwrap();
                 match &*state {
@@ -1048,10 +1059,10 @@ mod tests {
                     _ => panic!("Expected Memory mode"),
                 }
                 drop(state);
-                
+
                 // 少し待機（実際の録音をシミュレート）
                 std::thread::sleep(std::time::Duration::from_millis(100));
-                
+
                 // 録音停止
                 let result = backend.stop_recording().unwrap();
                 match result {

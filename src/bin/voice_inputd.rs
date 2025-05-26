@@ -44,7 +44,7 @@ use voice_input::{
             text_input,
         },
     },
-    ipc::{IpcCmd, IpcResp, RecordingResult, AudioDataDto, socket_path},
+    ipc::{AudioDataDto, IpcCmd, IpcResp, RecordingResult, socket_path},
     load_env,
 };
 
@@ -267,7 +267,7 @@ async fn start_recording(
                             audio_data: audio_data.into(),
                             duration_ms: 0, // Duration tracking not implemented yet
                         };
-                        
+
                         let (was_playing, stored_paste, stored_direct_input, prompt_to_save) = {
                             let mut c = match ctx_clone.lock() {
                                 Ok(g) => g,
@@ -284,7 +284,7 @@ async fn start_recording(
                             c.music_was_playing = false;
                             (w, c.paste, c.direct_input, prompt)
                         };
-                        
+
                         // Save prompt metadata if using file mode
                         if let AudioDataDto::File(ref path) = result.audio_data {
                             if let Some(p) = prompt_to_save {
@@ -292,7 +292,7 @@ async fn start_recording(
                                 let _ = fs::write(&meta, json!({ "prompt": p }).to_string());
                             }
                         }
-                        
+
                         let _ = tx_clone.send((result, stored_paste, was_playing, stored_direct_input));
                         play_stop_sound();
                     }
@@ -350,7 +350,7 @@ async fn stop_recording(
             fs::write(&meta, json!({ "prompt": p }).to_string())?;
         }
     }
-    
+
     let was_playing = c.music_was_playing;
     c.music_was_playing = false;
     tx.send((result, paste, was_playing, direct_input))?;
@@ -407,61 +407,61 @@ async fn handle_transcription(
 
     // Convert AudioDataDto back to AudioData
     let audio_data: AudioData = result.audio_data.into();
-    
+
     let text_result = openai_client.transcribe_audio(audio_data).await;
 
     // 転写に失敗してもクリップボード操作やペーストは試みない
     match text_result {
         Ok(text) => {
-        let repo = JsonFileDictRepo::new();
+            let repo = JsonFileDictRepo::new();
 
-        // 辞書を適用
-        let mut entries = repo.load().unwrap_or_default();
-        let replaced = apply_replacements(&text, &mut entries);
-        if let Err(e) = repo.save(&entries) {
-            eprintln!("dict save error: {e}");
-        }
-
-        // direct_inputでない場合のみクリップボードへコピー
-        if !direct_input {
-            if let Err(e) = set_clipboard(&replaced).await {
-                eprintln!("clipboard error: {e}");
+            // 辞書を適用
+            let mut entries = repo.load().unwrap_or_default();
+            let replaced = apply_replacements(&text, &mut entries);
+            if let Err(e) = repo.save(&entries) {
+                eprintln!("dict save error: {e}");
             }
-        }
 
-        // 即貼り付け
-        if paste {
-            tokio::time::sleep(Duration::from_millis(80)).await;
+            // direct_inputでない場合のみクリップボードへコピー
+            if !direct_input {
+                if let Err(e) = set_clipboard(&replaced).await {
+                    eprintln!("clipboard error: {e}");
+                }
+            }
 
-            if direct_input {
-                // 直接入力方式（Enigo使用、日本語対応）
-                match text_input::type_text(&replaced).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        eprintln!("Direct input failed: {}, falling back to paste", e);
-                        // フォールバック時はクリップボードにコピー
-                        if let Err(e) = set_clipboard(&replaced).await {
-                            eprintln!("clipboard error in fallback: {e}");
-                        }
-                        // 既存のペースト処理へフォールバック
-                        let _ = tokio::process::Command::new("osascript")
+            // 即貼り付け
+            if paste {
+                tokio::time::sleep(Duration::from_millis(80)).await;
+
+                if direct_input {
+                    // 直接入力方式（Enigo使用、日本語対応）
+                    match text_input::type_text(&replaced).await {
+                        Ok(_) => {}
+                        Err(e) => {
+                            eprintln!("Direct input failed: {}, falling back to paste", e);
+                            // フォールバック時はクリップボードにコピー
+                            if let Err(e) = set_clipboard(&replaced).await {
+                                eprintln!("clipboard error in fallback: {e}");
+                            }
+                            // 既存のペースト処理へフォールバック
+                            let _ = tokio::process::Command::new("osascript")
                             .arg("-e")
                             .arg(
                                 r#"tell app "System Events" to keystroke "v" using {command down}"#,
                             )
                             .output()
                             .await;
+                        }
                     }
+                } else {
+                    // 既存のペースト方式
+                    let _ = tokio::process::Command::new("osascript")
+                        .arg("-e")
+                        .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
+                        .output()
+                        .await;
                 }
-            } else {
-                // 既存のペースト方式
-                let _ = tokio::process::Command::new("osascript")
-                    .arg("-e")
-                    .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
-                    .output()
-                    .await;
             }
-        }
         }
         Err(e) => {
             eprintln!("transcription error: {e}");
