@@ -1,5 +1,5 @@
 dev-docs/onmemory-voice-data.md を確認して。
-dev-docs/onmemory-voice-data/Y-handover.md を確認して。
+dev-docs/onmemory-voice-data/_Y_-handover.md を確認して。
 **ultrathink** して Phase _X_ の詳細設計&実装手順を検討し、dev-docs/onmemory-voice-data/_X_.md に保存してください。
 
 記述例
