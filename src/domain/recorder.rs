@@ -1,5 +1,8 @@
 use crate::infrastructure::audio::{AudioBackend, AudioData};
-use crate::monitoring::{MemoryMonitor, metrics::{MetricsCollector, RecordingMode}};
+use crate::monitoring::{
+    MemoryMonitor,
+    metrics::{MetricsCollector, RecordingMode},
+};
 use std::error::Error;
 use std::sync::Arc;
 
@@ -13,7 +16,7 @@ pub struct Recorder<T: AudioBackend> {
 impl<T: AudioBackend> Recorder<T> {
     /// バックエンドを注入して新しい `Recorder` を作成。
     pub fn new(backend: T) -> Self {
-        Self { 
+        Self {
             backend,
             memory_monitor: None,
             metrics_collector: None,
@@ -41,11 +44,11 @@ impl<T: AudioBackend> Recorder<T> {
             RecordingMode::File
         };
         self.metrics_collector = Some(MetricsCollector::new(mode));
-        
+
         if let Some(ref mut collector) = self.metrics_collector {
             collector.start_recording();
         }
-        
+
         self.backend.start_recording()
     }
 
@@ -68,27 +71,29 @@ impl<T: AudioBackend> Recorder<T> {
         if let Some(ref mut collector) = self.metrics_collector {
             collector.start_processing();
         }
-        
+
         let result = self.backend.stop_recording()?;
-        
+
         // メモリ使用量の更新
         if let AudioData::Memory(ref data) = result {
             if let Some(ref monitor) = self.memory_monitor {
                 monitor.update_usage(data.len());
             }
         }
-        
+
         // メトリクスの完了
-        if let (Some(collector), Some(monitor)) = (self.metrics_collector.take(), &self.memory_monitor) {
+        if let (Some(collector), Some(monitor)) =
+            (self.metrics_collector.take(), &self.memory_monitor)
+        {
             let audio_bytes = match &result {
                 AudioData::Memory(data) => data.len(),
                 AudioData::File(_) => 0, // ファイルモードではサイズ不明
             };
-            
+
             let metrics = collector.finish(audio_bytes, monitor.get_metrics());
             metrics.log_summary();
         }
-        
+
         Ok(result)
     }
 

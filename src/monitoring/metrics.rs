@@ -1,5 +1,5 @@
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
-use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryMetrics {
@@ -13,10 +13,7 @@ impl MemoryMetrics {
     pub fn log_summary(&self) {
         println!(
             "[INFO] Memory usage: {:.1} MB / {} MB ({:.1}%), Peak: {:.1} MB",
-            self.current_mb,
-            self.threshold_mb,
-            self.usage_percent,
-            self.peak_mb
+            self.current_mb, self.threshold_mb, self.usage_percent, self.peak_mb
         );
     }
 }
@@ -55,10 +52,7 @@ impl RecordingMetrics {
     }
 
     pub fn log_summary(&self) {
-        println!(
-            "[INFO] Recording metrics ({:?} mode):",
-            self.mode
-        );
+        println!("[INFO] Recording metrics ({:?} mode):", self.mode);
         println!(
             "[INFO]   Duration: {:.1}s recording, {:.1}s processing, {:.1}s total",
             self.recording_duration.as_secs_f64(),
@@ -104,12 +98,14 @@ impl MetricsCollector {
 
     pub fn finish(self, audio_bytes: usize, memory_metrics: MemoryMetrics) -> RecordingMetrics {
         let total_duration = self.start_time.elapsed();
-        
-        let recording_duration = self.recording_start
+
+        let recording_duration = self
+            .recording_start
             .and_then(|start| self.processing_start.map(|end| end.duration_since(start)))
             .unwrap_or(Duration::from_secs(0));
-            
-        let processing_duration = self.processing_start
+
+        let processing_duration = self
+            .processing_start
             .map(|start| start.elapsed())
             .unwrap_or(Duration::from_secs(0));
 
@@ -132,22 +128,22 @@ mod tests {
     #[test]
     fn test_metrics_collector() {
         let mut collector = MetricsCollector::new(RecordingMode::Memory);
-        
+
         collector.start_recording();
         thread::sleep(Duration::from_millis(100));
-        
+
         collector.start_processing();
         thread::sleep(Duration::from_millis(50));
-        
+
         let memory_metrics = MemoryMetrics {
             current_mb: 10.0,
             peak_mb: 15.0,
             threshold_mb: 100,
             usage_percent: 10.0,
         };
-        
+
         let metrics = collector.finish(1024 * 1024, memory_metrics);
-        
+
         assert!(metrics.recording_duration.as_millis() >= 100);
         assert!(metrics.processing_duration.as_millis() >= 50);
         assert!(metrics.total_duration.as_millis() >= 150);
@@ -170,7 +166,7 @@ mod tests {
             },
             mode: RecordingMode::Memory,
         };
-        
+
         let json = metrics.to_json().unwrap();
         assert!(json.contains("\"mode\": \"Memory\""));
         assert!(json.contains("\"audio_bytes\": 10485760"));

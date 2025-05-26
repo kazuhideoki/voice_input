@@ -100,7 +100,9 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     let listener = UnixListener::bind(&path)?;
     println!("voice-inputd listening on {:?}", path);
 
-    let recorder = Rc::new(std::cell::RefCell::new(Recorder::new(CpalAudioBackend::default())));
+    let recorder = Rc::new(std::cell::RefCell::new(Recorder::new(
+        CpalAudioBackend::default(),
+    )));
     let ctx = Arc::new(Mutex::new(RecCtx {
         state: RecState::Idle,
         cancel: None,
@@ -546,7 +548,9 @@ mod tests {
 
     // Helper: construct a Recorder<CpalAudioBackend>
     fn make_recorder() -> Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>> {
-        Rc::new(std::cell::RefCell::new(Recorder::new(CpalAudioBackend::default())))
+        Rc::new(std::cell::RefCell::new(Recorder::new(
+            CpalAudioBackend::default(),
+        )))
     }
 
     /// `stop_recording` に `prompt` を提供すると、WAV と並べてメタJSONファイルが
@@ -626,7 +630,10 @@ mod tests {
         assert!(recorder.borrow().is_recording(), "recording did not start");
 
         tokio::time::sleep(Duration::from_secs(2)).await; // wait > 1 s
-        assert!(!recorder.borrow().is_recording(), "recording did not auto‑stop");
+        assert!(
+            !recorder.borrow().is_recording(),
+            "recording did not auto‑stop"
+        );
         assert_eq!(ctx.lock().map_err(|e| e.to_string())?.state, RecState::Idle);
         assert!(rx.try_recv().is_ok(), "Result not queued after timeout");
         Ok(())
