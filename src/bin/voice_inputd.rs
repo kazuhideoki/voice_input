@@ -406,6 +406,7 @@ async fn handle_transcription(
     } else {
         None
     };
+    let _ = _prompt; // Explicit acknowledgment of unused variable
 
     // Convert AudioDataDto back to AudioData
     let audio_data: AudioData = result.audio_data.into();

@@ -36,8 +36,6 @@ enum RecordingState {
     },
     /// ファイルモード: WAVファイルに直接書き込み
     File {
-        #[allow(dead_code)]
-        writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
         path: PathBuf,
     },
 }
@@ -399,7 +397,6 @@ impl AudioBackend for CpalAudioBackend {
 
             // RecordingStateをFileモードに設定
             *self.recording_state.lock().unwrap() = Some(RecordingState::File {
-                writer: Arc::new(Mutex::new(None)), // build_input_streamで初期化される
                 path: PathBuf::from(&wav_path),
             });
 
