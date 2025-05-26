@@ -20,8 +20,6 @@
 //! cargo test --test performance_test -- --ignored --nocapture
 //! ```
 
-mod benchmarks;
-
 use std::env;
 use std::error::Error;
 use std::thread;

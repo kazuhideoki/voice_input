@@ -49,8 +49,6 @@ let mut recorder = Recorder::new(backend)
 
 **実装ファイル:**
 - `benches/recording.rs` - Criterionベンチマーク
-- `tests/benchmarks/mod.rs` - ベンチマークモジュール
-- `tests/benchmarks/recording_bench.rs` - 録音ベンチマークテスト
 - `Cargo.toml` - criterion依存関係追加
 
 **ベンチマーク項目:**
@@ -58,18 +56,18 @@ let mut recorder = Recorder::new(backend)
 - メモリアロケーションのベンチマーク
 - メモリ監視オーバーヘッドの測定（< 1%）
 
+**注:** ベンチマークは`cargo bench`でローカル実行のみ
+
 ### 4. CI/CD統合（Step 4）
 
 **実装ファイル:**
 - `.github/workflows/ci.yml` - CI拡張（E2Eテスト追加）
-- `.github/workflows/benchmark.yml` - ベンチマークワークフロー
 - `scripts/quality-check.sh` - ローカル品質チェックスクリプト
 
 **CI/CD機能:**
 - E2Eテストの自動実行（モック環境）
-- パフォーマンスベンチマークの継続的実行
-- 性能劣化時の自動アラート（10%閾値）
-- PRへのベンチマーク結果コメント
+- コード品質チェック（fmt, clippy）
+- テストカバレッジの確認
 
 ### 5. ドキュメント更新（Step 5）
 
@@ -78,7 +76,7 @@ let mut recorder = Recorder::new(backend)
 - メモリ使用量の目安（1分=10MB）
 - パフォーマンス測定結果の表
 - ローカル品質チェックの手順
-- ベンチマーク実行方法
+- ベンチマーク実行方法（`cargo bench`）
 
 ## 技術的成果
 
@@ -115,7 +113,7 @@ let mut recorder = Recorder::new(backend)
    - 改善案: システムメモリ使用量の統合監視
 
 3. **ベンチマークの拡充**
-   - 現在: 基本的な録音シナリオ
+   - 現在: 基本的な録音シナリオ（ローカル実行のみ）
    - 改善案: 並行録音、ストリーミング処理のベンチマーク
 
 ### 将来的な拡張
