@@ -1,7 +1,7 @@
 use std::error::Error;
 
 pub mod cpal_backend;
-pub use cpal_backend::{AudioData, CpalAudioBackend};
+pub use cpal_backend::CpalAudioBackend;
 
 /// 録音デバイス抽象。
 /// 実装は `start_recording`→`stop_recording` が 1 対で呼ばれることを前提とする。
@@ -9,8 +9,8 @@ pub trait AudioBackend {
     /// 録音を開始。
     fn start_recording(&self) -> Result<(), Box<dyn Error>>;
 
-    /// 録音を停止し、WAVフォーマットのバイトデータを返します。
-    fn stop_recording(&self) -> Result<AudioData, Box<dyn Error>>;
+    /// 録音を停止し、WAV フォーマットのバイトデータを返します。
+    fn stop_recording(&self) -> Result<Vec<u8>, Box<dyn Error>>;
 
     /// 現在録音中であれば `true`。
     fn is_recording(&self) -> bool;

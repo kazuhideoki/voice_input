@@ -35,7 +35,7 @@ use voice_input::{
     domain::dict::{DictRepository, apply_replacements},
     domain::recorder::Recorder,
     infrastructure::{
-        audio::{CpalAudioBackend, cpal_backend::AudioData},
+        audio::CpalAudioBackend,
         dict::JsonFileDictRepo,
         external::{
             clipboard::get_selected_text,
@@ -44,7 +44,7 @@ use voice_input::{
             text_input,
         },
     },
-    ipc::{IpcCmd, IpcResp, RecordingResult, socket_path},
+    ipc::{AudioDataDto, IpcCmd, IpcResp, RecordingResult, socket_path},
     load_env,
 };
 
@@ -264,9 +264,9 @@ async fn start_recording(
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(max_secs)) => {
                 if recorder.borrow().is_recording() {
-                    if let Ok(audio_data) = recorder.borrow_mut().stop_raw() {
+                    if let Ok(bytes) = recorder.borrow_mut().stop_raw() {
                         let result = RecordingResult {
-                            audio_data: audio_data.into(),
+                            audio_data: AudioDataDto::Memory(bytes),
                             duration_ms: 0, // Duration tracking not implemented yet
                         };
 
@@ -327,7 +327,7 @@ async fn stop_recording(
     }
 
     play_stop_sound();
-    let audio_data = recorder.borrow_mut().stop_raw()?;
+    let bytes = recorder.borrow_mut().stop_raw()?;
     c.state = RecState::Idle;
 
     // 開始時の保存値→引数→現在の選択の順でプロンプトを決定
@@ -335,7 +335,7 @@ async fn stop_recording(
     let _final_prompt = prompt.or(stored).or_else(|| get_selected_text().ok());
 
     let result = RecordingResult {
-        audio_data: audio_data.into(),
+        audio_data: AudioDataDto::Memory(bytes),
         duration_ms: 0, // Duration tracking not implemented yet
     };
 
@@ -378,10 +378,10 @@ async fn handle_transcription(
         }
     };
 
-    // Convert AudioDataDto back to AudioData
-    let audio_data: AudioData = result.audio_data.into();
+    // Convert AudioDataDto to Vec<u8>
+    let wav_data: Vec<u8> = result.audio_data.into();
 
-    let text_result = openai_client.transcribe_audio(audio_data).await;
+    let text_result = openai_client.transcribe_audio(wav_data).await;
 
     // 転写に失敗してもクリップボード操作やペーストは試みない
     match text_result {

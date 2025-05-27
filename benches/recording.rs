@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use voice_input::domain::recorder::Recorder;
-use voice_input::infrastructure::audio::{AudioBackend, AudioData};
+use voice_input::infrastructure::audio::AudioBackend;
 
 /// ベンチマーク用のモックAudioBackend
 #[derive(Clone)]
@@ -34,7 +34,7 @@ impl AudioBackend for BenchmarkAudioBackend {
         Ok(())
     }
 
-    fn stop_recording(&self) -> Result<AudioData, Box<dyn Error>> {
+    fn stop_recording(&self) -> Result<Vec<u8>, Box<dyn Error>> {
         use std::io::{Seek, SeekFrom, Write};
         use tempfile::NamedTempFile;
 
@@ -43,7 +43,7 @@ impl AudioBackend for BenchmarkAudioBackend {
 
         if self.use_memory {
             // メモリモード: 実際のサイズのデータを生成
-            Ok(AudioData::Memory(vec![0u8; size]))
+            Ok(vec![0u8; size])
         } else {
             // ファイルモード: 実際のファイルI/Oを実行
             let mut tmp = NamedTempFile::new()?;
@@ -66,7 +66,8 @@ impl AudioBackend for BenchmarkAudioBackend {
             // ファイルを永続化（自動削除を防ぐ）
             let _ = tmp.persist(&path);
 
-            Ok(AudioData::Memory(std::fs::read(path)?))
+            let bytes = std::fs::read(&path)?;
+            Ok(bytes)
         }
     }
 
@@ -106,8 +107,7 @@ fn benchmark_recording_modes(c: &mut Criterion) {
                     recorder.start().expect("Failed to start recording");
 
                     // 録音停止とデータ取得
-                    let result = recorder.stop_raw().expect("Failed to stop recording");
-                    let AudioData::Memory(data) = result;
+                    let data = recorder.stop_raw().expect("Failed to stop recording");
                     assert_eq!(data.len(), audio_size);
                     black_box(data);
                 });
@@ -129,8 +129,8 @@ fn benchmark_recording_modes(c: &mut Criterion) {
                     recorder.start().expect("Failed to start recording");
 
                     // 録音停止とデータ取得
-                    let result = recorder.stop_raw().expect("Failed to stop recording");
-                    let AudioData::Memory(data) = result;
+                    let data = recorder.stop_raw().expect("Failed to stop recording");
+                    assert_eq!(data.len(), audio_size);
                     black_box(data);
                 });
             },

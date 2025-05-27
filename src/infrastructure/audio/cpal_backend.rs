@@ -13,12 +13,6 @@ use std::{
     },
 };
 
-/// 録音データの返却形式
-#[derive(Debug, Clone)]
-pub enum AudioData {
-    /// WAVフォーマットのバイトデータ
-    Memory(Vec<u8>),
-}
 
 /// 録音状態を管理する内部列挙型
 enum RecordingState {
@@ -339,8 +333,8 @@ impl AudioBackend for CpalAudioBackend {
         Ok(())
     }
 
-    /// 録音を停止し、音声データを返します。
-    fn stop_recording(&self) -> Result<AudioData, Box<dyn Error>> {
+    /// 録音を停止し、WAV データを返します。
+    fn stop_recording(&self) -> Result<Vec<u8>, Box<dyn Error>> {
         if !self.is_recording() {
             return Err("not recording".into());
         }
@@ -365,7 +359,7 @@ impl AudioBackend for CpalAudioBackend {
 
         let samples = buffer.lock().unwrap();
         let wav_data = Self::combine_wav_data(&samples, sample_rate, channels)?;
-        Ok(AudioData::Memory(wav_data))
+        Ok(wav_data)
     }
 
     /// 録音中かどうかを確認します。
@@ -654,23 +648,6 @@ mod tests {
         assert_eq!(&result[50..52], &[56u8, 255]); // R: -200
     }
 
-    #[test]
-    fn test_audio_data_enum() {
-        // Memory variant
-        let data = vec![1, 2, 3, 4, 5];
-        let audio_data = AudioData::Memory(data.clone());
-
-        let AudioData::Memory(vec) = &audio_data;
-        assert_eq!(vec, &data);
-
-        // Debug trait
-        assert!(format!("{:?}", audio_data).contains("Memory"));
-
-        // Clone trait
-        let cloned = audio_data.clone();
-        let AudioData::Memory(vec) = cloned;
-        assert_eq!(vec, data);
-    }
 
     #[test]
     fn test_recording_state_creation() {
@@ -751,8 +728,8 @@ mod tests {
         backend.recording.store(true, Ordering::SeqCst);
 
         // stop_recordingを実行
-        let result = backend.stop_recording().unwrap();
-        let AudioData::Memory(wav_data) = result;
+        let wav_data = backend.stop_recording().unwrap();
+
         // WAVヘッダー（44バイト）+ データ（5サンプル * 2バイト = 10バイト）
         assert_eq!(wav_data.len(), 54);
 
@@ -851,10 +828,9 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(100));
 
                 // 録音停止
-                let result = backend.stop_recording().unwrap();
-                let AudioData::Memory(data) = result;
+                let data = backend.stop_recording().unwrap();
                 println!("録音データサイズ: {} bytes", data.len());
-                assert!(data.len() > 44); // 少なくともWAVヘッダーより大きい
+                assert!(data.len() > 44);
             }
             Err(e) => {
                 println!("録音開始失敗（デバイスなし）: {}", e);

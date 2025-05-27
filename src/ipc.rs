@@ -55,20 +55,16 @@ pub struct RecordingResult {
     pub duration_ms: u64,
 }
 
-use crate::infrastructure::audio::cpal_backend::AudioData;
-
-impl From<AudioData> for AudioDataDto {
-    fn from(data: AudioData) -> Self {
-        match data {
-            AudioData::Memory(bytes) => AudioDataDto::Memory(bytes),
-        }
+impl From<Vec<u8>> for AudioDataDto {
+    fn from(bytes: Vec<u8>) -> Self {
+        AudioDataDto::Memory(bytes)
     }
 }
 
-impl From<AudioDataDto> for AudioData {
+impl From<AudioDataDto> for Vec<u8> {
     fn from(dto: AudioDataDto) -> Self {
         match dto {
-            AudioDataDto::Memory(bytes) => AudioData::Memory(bytes),
+            AudioDataDto::Memory(bytes) => bytes,
         }
     }
 }
@@ -156,21 +152,20 @@ mod tests {
     }
 
     #[test]
-    fn test_from_audio_data_to_dto() {
-        // Test Memory variant
-        let audio_data = AudioData::Memory(vec![1, 2, 3, 4]);
-        let dto: AudioDataDto = audio_data.into();
+    fn test_from_vec_to_dto() {
+        // Test Vec<u8> to AudioDataDto conversion
+        let wav_data = vec![1, 2, 3, 4];
+        let dto: AudioDataDto = wav_data.clone().into();
         let AudioDataDto::Memory(data) = dto;
-        assert_eq!(data, vec![1, 2, 3, 4]);
+        assert_eq!(data, wav_data);
     }
 
     #[test]
-    fn test_from_dto_to_audio_data() {
-        // Test Memory variant
+    fn test_from_dto_to_vec() {
+        // Test AudioDataDto to Vec<u8> conversion
         let dto = AudioDataDto::Memory(vec![5, 6, 7, 8]);
-        let audio_data: AudioData = dto.into();
-        let AudioData::Memory(data) = audio_data;
-        assert_eq!(data, vec![5, 6, 7, 8]);
+        let wav_data: Vec<u8> = dto.into();
+        assert_eq!(wav_data, vec![5, 6, 7, 8]);
     }
 
     #[test]
