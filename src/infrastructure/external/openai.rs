@@ -1,6 +1,5 @@
 //! OpenAI STT API ラッパ。
 //! WAV ファイルを multipart/form-data で転写エンドポイントに送信します。
-use crate::infrastructure::audio::cpal_backend::AudioData;
 use reqwest::multipart;
 use serde::Deserialize;
 use std::env;
@@ -44,9 +43,8 @@ impl OpenAiClient {
         })
     }
 
-    /// AudioDataから直接転写を実行
-    pub async fn transcribe_audio(&self, audio_data: AudioData) -> Result<String, String> {
-        let AudioData::Memory(wav_data) = audio_data;
+    /// WAVデータから直接転写を実行
+    pub async fn transcribe_audio(&self, wav_data: Vec<u8>) -> Result<String, String> {
 
         let part = multipart::Part::bytes(wav_data)
             .file_name("audio.wav")
@@ -170,7 +168,6 @@ pub async fn transcribe_audio(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infrastructure::audio::cpal_backend::AudioData;
 
     #[test]
     fn parse_transcription_response_json() {
@@ -215,10 +212,9 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, // data size
         ];
 
-        let audio_data = AudioData::Memory(wav_data);
 
         // This will fail with the actual API, but we're testing the method exists
-        let result = client.transcribe_audio(audio_data).await;
+        let result = client.transcribe_audio(wav_data).await;
 
         // We expect an error since we're using a test API key
         assert!(result.is_err());
@@ -229,10 +225,8 @@ mod tests {
         unsafe { env::set_var("OPENAI_API_KEY", "test-key") };
 
         let client = OpenAiClient::new().unwrap();
-        let audio_data = AudioData::Memory(Vec::new());
-
         // This will fail with the test API key, but ensures the method exists
-        let result = client.transcribe_audio(audio_data).await;
+        let result = client.transcribe_audio(Vec::new()).await;
 
         assert!(result.is_err());
     }

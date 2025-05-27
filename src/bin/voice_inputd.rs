@@ -35,7 +35,7 @@ use voice_input::{
     domain::dict::{DictRepository, apply_replacements},
     domain::recorder::Recorder,
     infrastructure::{
-        audio::{CpalAudioBackend, cpal_backend::AudioData},
+        audio::CpalAudioBackend,
         dict::JsonFileDictRepo,
         external::{
             clipboard::get_selected_text,
@@ -44,7 +44,7 @@ use voice_input::{
             text_input,
         },
     },
-    ipc::{IpcCmd, IpcResp, RecordingResult, socket_path},
+    ipc::{AudioDataDto, IpcCmd, IpcResp, RecordingResult, socket_path},
     load_env,
 };
 
@@ -378,10 +378,10 @@ async fn handle_transcription(
         }
     };
 
-    // Convert AudioDataDto back to AudioData
-    let audio_data: AudioData = result.audio_data.into();
+    // Convert AudioDataDto to Vec<u8>
+    let wav_data: Vec<u8> = result.audio_data.into();
 
-    let text_result = openai_client.transcribe_audio(audio_data).await;
+    let text_result = openai_client.transcribe_audio(wav_data).await;
 
     // 転写に失敗してもクリップボード操作やペーストは試みない
     match text_result {
