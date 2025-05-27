@@ -436,8 +436,8 @@ impl AudioBackend for CpalAudioBackend {
         Ok(())
     }
 
-    /// 録音を停止し、音声データを返します。
-    fn stop_recording(&self) -> Result<AudioData, Box<dyn Error>> {
+    /// 録音を停止し、WAV データを返します。
+    fn stop_recording(&self) -> Result<Vec<u8>, Box<dyn Error>> {
         if !self.is_recording() {
             return Err("not recording".into());
         }
@@ -463,11 +463,12 @@ impl AudioBackend for CpalAudioBackend {
                 // メモリモード: バッファからWAVデータを生成
                 let samples = buffer.lock().unwrap();
                 let wav_data = Self::combine_wav_data(&samples, sample_rate, channels)?;
-                Ok(AudioData::Memory(wav_data))
+                Ok(wav_data)
             }
             RecordingState::File { path, .. } => {
-                // レガシーモード: ファイルパスを返す
-                Ok(AudioData::File(path))
+                // レガシーモード: ファイルから読み込んで返す
+                let bytes = std::fs::read(&path)?;
+                Ok(bytes)
             }
         }
     }
@@ -918,19 +919,14 @@ mod tests {
         backend.recording.store(true, Ordering::SeqCst);
 
         // stop_recordingを実行
-        let result = backend.stop_recording().unwrap();
+        let wav_data = backend.stop_recording().unwrap();
 
-        match result {
-            AudioData::Memory(wav_data) => {
-                // WAVヘッダー（44バイト）+ データ（5サンプル * 2バイト = 10バイト）
-                assert_eq!(wav_data.len(), 54);
+        // WAVヘッダー（44バイト）+ データ（5サンプル * 2バイト = 10バイト）
+        assert_eq!(wav_data.len(), 54);
 
-                // WAVヘッダーの基本チェック
-                assert_eq!(&wav_data[0..4], b"RIFF");
-                assert_eq!(&wav_data[8..12], b"WAVE");
-            }
-            _ => panic!("Expected AudioData::Memory"),
-        }
+        // WAVヘッダーの基本チェック
+        assert_eq!(&wav_data[0..4], b"RIFF");
+        assert_eq!(&wav_data[8..12], b"WAVE");
 
         // 録音状態がクリアされていることを確認
         assert!(!backend.is_recording());
@@ -952,14 +948,10 @@ mod tests {
         backend.recording.store(true, Ordering::SeqCst);
 
         // stop_recordingを実行
-        let result = backend.stop_recording().unwrap();
-
-        match result {
-            AudioData::File(path) => {
-                assert_eq!(path, test_path);
-            }
-            _ => panic!("Expected AudioData::File"),
-        }
+        let wav_data = backend.stop_recording().unwrap();
+        // ファイルモードでもバイト列が返る
+        assert!(!wav_data.is_empty());
+        assert!(test_path.exists());
 
         // 録音状態がクリアされていることを確認
         assert!(!backend.is_recording());
@@ -1052,14 +1044,9 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(100));
 
                 // 録音停止
-                let result = backend.stop_recording().unwrap();
-                match result {
-                    AudioData::Memory(data) => {
-                        println!("録音データサイズ: {} bytes", data.len());
-                        assert!(data.len() > 44); // 少なくともWAVヘッダーより大きい
-                    }
-                    _ => panic!("Expected Memory data"),
-                }
+                let data = backend.stop_recording().unwrap();
+                println!("録音データサイズ: {} bytes", data.len());
+                assert!(data.len() > 44);
             }
             Err(e) => {
                 println!("録音開始失敗（デバイスなし）: {}", e);

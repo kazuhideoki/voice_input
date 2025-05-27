@@ -73,7 +73,11 @@ async fn measure_performance(use_legacy: bool) -> Result<PerformanceMetrics, Box
     // OpenAI API呼び出し
     let client = OpenAiClient::new()?;
     let transcription_start = Instant::now();
-    let _result = client.transcribe_audio(audio_data).await?;
+    let _result = client
+        .transcribe_audio(
+            voice_input::infrastructure::audio::cpal_backend::AudioData::Memory(audio_data),
+        )
+        .await?;
 
     let total_end = Instant::now();
 
@@ -214,25 +218,16 @@ async fn test_memory_usage() {
     thread::sleep(Duration::from_secs(30));
 
     match recorder.stop_raw() {
-        Ok(audio_data) => {
-            match audio_data {
-                voice_input::infrastructure::audio::cpal_backend::AudioData::Memory(data) => {
-                    let size_mb = data.len() as f64 / (1024.0 * 1024.0);
-                    println!("✅ Memory mode - WAV data size: {:.2} MB", size_mb);
+        Ok(data) => {
+            let size_mb = data.len() as f64 / (1024.0 * 1024.0);
+            println!("✅ Recorded WAV size: {:.2} MB", size_mb);
 
-                    // 理論値との比較
-                    // 48kHz * 2ch * 2bytes * 30sec = 5.76MB
-                    let expected_mb = 48000.0 * 2.0 * 2.0 * 30.0 / (1024.0 * 1024.0);
-                    println!("📐 Expected size (theoretical): {:.2} MB", expected_mb);
-                    println!(
-                        "📊 Actual vs Expected: {:.1}%",
-                        (size_mb / expected_mb) * 100.0
-                    );
-                }
-                voice_input::infrastructure::audio::cpal_backend::AudioData::File(path) => {
-                    println!("📁 File mode - saved to: {:?}", path);
-                }
-            }
+            let expected_mb = 48000.0 * 2.0 * 2.0 * 30.0 / (1024.0 * 1024.0);
+            println!("📐 Expected size (theoretical): {:.2} MB", expected_mb);
+            println!(
+                "📊 Actual vs Expected: {:.1}%",
+                (size_mb / expected_mb) * 100.0
+            );
         }
         Err(e) => {
             eprintln!("❌ Failed to stop recording: {}", e);
