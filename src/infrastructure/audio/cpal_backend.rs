@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn test_wav_header_mono() {
         // モノラル設定でのヘッダー生成
-        let data_len = 44100 * 1 * 2; // 44.1kHz, mono, 16bit
+        let data_len = 44100 * 2; // 44.1kHz, mono, 16bit
         let header = CpalAudioBackend::create_wav_header(data_len, 44100, 1, 16);
 
         assert_eq!(header.len(), 44);
@@ -578,7 +578,7 @@ mod tests {
 
         // バイトレート確認
         let byte_rate = u32::from_le_bytes([header[28], header[29], header[30], header[31]]);
-        assert_eq!(byte_rate, 44100 * 1 * 2); // 88200
+        assert_eq!(byte_rate, 44100 * 2); // 88200
 
         // ブロックアライン確認
         let block_align = u16::from_le_bytes([header[32], header[33]]);
@@ -1019,9 +1019,7 @@ mod tests {
 
         // 実際に要素を追加してもreallocが発生しないことを確認
         let mut buffer = buffer;
-        for _ in 0..estimated {
-            buffer.push(0);
-        }
+        buffer.resize(estimated, 0);
         // capacityが変わっていないことを確認（reallocが発生していない）
         assert_eq!(buffer.capacity(), estimated);
     }

@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use voice_input::domain::recorder::Recorder;
 use voice_input::infrastructure::audio::{AudioBackend, AudioData};
-use voice_input::monitoring::MemoryMonitor;
 
 /// ベンチマーク用のモックAudioBackend
 #[derive(Clone)]
