@@ -1,7 +1,7 @@
 use std::error::Error;
 
 pub mod cpal_backend;
-pub use cpal_backend::{AudioData, CpalAudioBackend};
+pub use cpal_backend::CpalAudioBackend;
 
 /// 録音デバイス抽象。
 /// 実装は `start_recording`→`stop_recording` が 1 対で呼ばれることを前提とする。

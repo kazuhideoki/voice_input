@@ -73,11 +73,7 @@ async fn measure_performance(use_legacy: bool) -> Result<PerformanceMetrics, Box
     // OpenAI API呼び出し
     let client = OpenAiClient::new()?;
     let transcription_start = Instant::now();
-    let _result = client
-        .transcribe_audio(
-            voice_input::infrastructure::audio::cpal_backend::AudioData::Memory(audio_data),
-        )
-        .await?;
+    let _result = client.transcribe_audio(audio_data).await?;
 
     let total_end = Instant::now();
 
