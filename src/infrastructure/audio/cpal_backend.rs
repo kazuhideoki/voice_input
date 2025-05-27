@@ -7,8 +7,6 @@ use hound::{SampleFormat as WavFmt, WavWriter};
 use std::{
     error::Error,
     fmt,
-    fs::File,
-    io::BufWriter,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -692,7 +690,7 @@ mod tests {
 
         // データ部分の検証（リトルエンディアン）
         assert_eq!(&result[44..46], &[100u8, 0]); // 100
-        assert_eq!(&result[46..48], &[156u8, 255]); // -100 
+        assert_eq!(&result[46..48], &[156u8, 255]); // -100
         assert_eq!(&result[48..50], &[232u8, 3]); // 1000
         assert_eq!(&result[50..52], &[24u8, 252]); // -1000
         assert_eq!(&result[52..54], &[0u8, 0]); // 0
