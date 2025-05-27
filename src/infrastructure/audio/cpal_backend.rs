@@ -35,9 +35,7 @@ enum RecordingState {
         channels: u16,
     },
     /// ファイルモード: WAVファイルに直接書き込み
-    File {
-        path: PathBuf,
-    },
+    File { path: PathBuf },
 }
 
 /// Audio processing errors
