@@ -229,9 +229,6 @@ async fn test_memory_usage() {
                         (size_mb / expected_mb) * 100.0
                     );
                 }
-                voice_input::infrastructure::audio::cpal_backend::AudioData::File(path) => {
-                    println!("📁 File mode - saved to: {:?}", path);
-                }
             }
         }
         Err(e) => {

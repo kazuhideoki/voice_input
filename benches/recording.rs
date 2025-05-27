@@ -66,7 +66,7 @@ impl AudioBackend for BenchmarkAudioBackend {
             // ファイルを永続化（自動削除を防ぐ）
             let _ = tmp.persist(&path);
 
-            Ok(AudioData::File(path))
+            Ok(AudioData::Memory(std::fs::read(path)?))
         }
     }
 
@@ -107,15 +107,9 @@ fn benchmark_recording_modes(c: &mut Criterion) {
 
                     // 録音停止とデータ取得
                     let result = recorder.stop_raw().expect("Failed to stop recording");
-
-                    // 結果の検証（black_boxで最適化を防ぐ）
-                    match result {
-                        AudioData::Memory(data) => {
-                            assert_eq!(data.len(), audio_size);
-                            black_box(data);
-                        }
-                        _ => panic!("Expected memory mode"),
-                    }
+                    let AudioData::Memory(data) = result;
+                    assert_eq!(data.len(), audio_size);
+                    black_box(data);
                 });
             },
         );
@@ -136,18 +130,8 @@ fn benchmark_recording_modes(c: &mut Criterion) {
 
                     // 録音停止とデータ取得
                     let result = recorder.stop_raw().expect("Failed to stop recording");
-
-                    // 結果の検証とクリーンアップ
-                    match result {
-                        AudioData::File(path) => {
-                            // ファイルが実際に作成されたことを確認
-                            assert!(path.exists());
-                            // クリーンアップ
-                            let _ = std::fs::remove_file(&path);
-                            black_box(path);
-                        }
-                        _ => panic!("Expected file mode"),
-                    }
+                    let AudioData::Memory(data) = result;
+                    black_box(data);
                 });
             },
         );
