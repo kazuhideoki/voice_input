@@ -29,20 +29,10 @@ impl<T: AudioBackend> Recorder<T> {
         self
     }
 
-    /// メモリモードかどうかを判定
-    fn is_memory_mode(&self) -> bool {
-        // 環境変数で判定する簡易実装
-        std::env::var("LEGACY_TMP_WAV_FILE").unwrap_or_default() != "true"
-    }
-
     /// 録音を開始します。
     pub fn start(&mut self) -> Result<(), Box<dyn Error>> {
         // メトリクス収集開始
-        let mode = if self.is_memory_mode() {
-            RecordingMode::Memory
-        } else {
-            RecordingMode::File
-        };
+        let mode = RecordingMode::Memory;
         self.metrics_collector = Some(MetricsCollector::new(mode));
 
         if let Some(ref mut collector) = self.metrics_collector {
@@ -56,13 +46,8 @@ impl<T: AudioBackend> Recorder<T> {
     /// 注意: このメソッドは廃止予定です。代わりに stop_raw() を使用してください。
     /// メモリモードでは一時ファイルを作成しません。
     pub fn stop(&mut self) -> Result<String, Box<dyn Error>> {
-        match self.backend.stop_recording()? {
-            AudioData::File(path) => Ok(path.to_string_lossy().into_owned()),
-            AudioData::Memory(_) => {
-                // メモリモードでは一時ファイルを作成しない
-                Err("Memory mode is not supported by stop(). Use stop_raw() instead.".into())
-            }
-        }
+        let _ = self.backend.stop_recording()?;
+        Err("Memory mode is not supported by stop(). Use stop_raw() instead.".into())
     }
 
     /// 録音を停止し、音声データを返します。
@@ -75,10 +60,9 @@ impl<T: AudioBackend> Recorder<T> {
         let result = self.backend.stop_recording()?;
 
         // メモリ使用量の更新
-        if let AudioData::Memory(ref data) = result {
-            if let Some(ref monitor) = self.memory_monitor {
-                monitor.update_usage(data.len());
-            }
+        if let Some(ref monitor) = self.memory_monitor {
+            let AudioData::Memory(data) = &result;
+            monitor.update_usage(data.len());
         }
 
         // メトリクスの完了
@@ -87,7 +71,6 @@ impl<T: AudioBackend> Recorder<T> {
         {
             let audio_bytes = match &result {
                 AudioData::Memory(data) => data.len(),
-                AudioData::File(_) => 0, // ファイルモードではサイズ不明
             };
 
             let metrics = collector.finish(audio_bytes, monitor.get_metrics());
@@ -112,15 +95,13 @@ mod tests {
     /// テスト用のモックAudioBackend
     struct MockAudioBackend {
         recording: Arc<AtomicBool>,
-        return_memory: bool,
         test_data: Vec<u8>,
     }
 
     impl MockAudioBackend {
-        fn new(return_memory: bool) -> Self {
+        fn new() -> Self {
             Self {
                 recording: Arc::new(AtomicBool::new(false)),
-                return_memory,
                 test_data: vec![1, 2, 3, 4, 5], // テスト用のダミーデータ
             }
         }
@@ -134,11 +115,7 @@ mod tests {
 
         fn stop_recording(&self) -> Result<AudioData, Box<dyn Error>> {
             self.recording.store(false, Ordering::SeqCst);
-            if self.return_memory {
-                Ok(AudioData::Memory(self.test_data.clone()))
-            } else {
-                Ok(AudioData::File("/tmp/test.wav".into()))
-            }
+            Ok(AudioData::Memory(self.test_data.clone()))
         }
 
         fn is_recording(&self) -> bool {
@@ -147,23 +124,8 @@ mod tests {
     }
 
     #[test]
-    fn test_recorder_with_file_backend() {
-        let backend = MockAudioBackend::new(false);
-        let mut recorder = Recorder::new(backend);
-
-        // 録音開始
-        assert!(recorder.start().is_ok());
-        assert!(recorder.is_recording());
-
-        // 録音停止（ファイルモード）
-        let result = recorder.stop().unwrap();
-        assert_eq!(result, "/tmp/test.wav");
-        assert!(!recorder.is_recording());
-    }
-
-    #[test]
     fn test_recorder_with_memory_backend() {
-        let backend = MockAudioBackend::new(true);
+        let backend = MockAudioBackend::new();
         let mut recorder = Recorder::new(backend);
 
         // 録音開始
@@ -179,18 +141,14 @@ mod tests {
 
     #[test]
     fn test_recorder_stop_raw() {
-        let backend = MockAudioBackend::new(true);
+        let backend = MockAudioBackend::new();
         let mut recorder = Recorder::new(backend);
 
         recorder.start().unwrap();
 
         // stop_rawは直接AudioDataを返す
         let result = recorder.stop_raw().unwrap();
-        match result {
-            AudioData::Memory(data) => {
-                assert_eq!(data, vec![1, 2, 3, 4, 5]);
-            }
-            _ => panic!("Expected AudioData::Memory"),
-        }
+        let AudioData::Memory(data) = result;
+        assert_eq!(data, vec![1, 2, 3, 4, 5]);
     }
 }

@@ -23,7 +23,7 @@ use std::{
 
 use arboard::Clipboard;
 use futures::{SinkExt, StreamExt};
-use serde_json::{Value, json};
+
 use tokio::{
     net::{UnixListener, UnixStream},
     sync::{Semaphore, mpsc, oneshot},
@@ -44,7 +44,7 @@ use voice_input::{
             text_input,
         },
     },
-    ipc::{AudioDataDto, IpcCmd, IpcResp, RecordingResult, socket_path},
+    ipc::{IpcCmd, IpcResp, RecordingResult, socket_path},
     load_env,
 };
 
@@ -270,7 +270,7 @@ async fn start_recording(
                             duration_ms: 0, // Duration tracking not implemented yet
                         };
 
-                        let (was_playing, stored_paste, stored_direct_input, prompt_to_save) = {
+                        let (was_playing, stored_paste, stored_direct_input) = {
                             let mut c = match ctx_clone.lock() {
                                 Ok(g) => g,
                                 Err(e) => {
@@ -281,19 +281,13 @@ async fn start_recording(
                             c.state = RecState::Idle;
                             c.cancel = None;
                             let stored = c.start_prompt.take();
-                            let prompt = stored.or_else(|| get_selected_text().ok());
+                            let _prompt = stored.or_else(|| get_selected_text().ok());
                             let w = c.music_was_playing;
                             c.music_was_playing = false;
-                            (w, c.paste, c.direct_input, prompt)
+                            (w, c.paste, c.direct_input)
                         };
 
-                        // Save prompt metadata if using file mode
-                        if let AudioDataDto::File(ref path) = result.audio_data {
-                            if let Some(p) = prompt_to_save {
-                                let meta = format!("{}.json", path);
-                                let _ = fs::write(&meta, json!({ "prompt": p }).to_string());
-                            }
-                        }
+
 
                         let _ = tx_clone.send((result, stored_paste, was_playing, stored_direct_input));
                         play_stop_sound();
@@ -338,20 +332,12 @@ async fn stop_recording(
 
     // 開始時の保存値→引数→現在の選択の順でプロンプトを決定
     let stored = c.start_prompt.take();
-    let final_prompt = prompt.or(stored).or_else(|| get_selected_text().ok());
+    let _final_prompt = prompt.or(stored).or_else(|| get_selected_text().ok());
 
     let result = RecordingResult {
         audio_data: audio_data.into(),
         duration_ms: 0, // Duration tracking not implemented yet
     };
-
-    // Save prompt metadata if using file mode
-    if let AudioDataDto::File(ref path) = result.audio_data {
-        if let Some(p) = final_prompt {
-            let meta = format!("{}.json", path);
-            fs::write(&meta, json!({ "prompt": p }).to_string())?;
-        }
-    }
 
     let was_playing = c.music_was_playing;
     c.music_was_playing = false;
@@ -391,22 +377,6 @@ async fn handle_transcription(
             return Err(e.into());
         }
     };
-
-    // メタJSONが存在すれば prompt を読み込む (file mode only)
-    // Note: The new OpenAI client doesn't support prompt in transcribe_audio yet
-    let _prompt = if let AudioDataDto::File(ref path) = result.audio_data {
-        fs::read_to_string(format!("{}.json", path))
-            .ok()
-            .and_then(|s| {
-                serde_json::from_str::<Value>(&s).ok().and_then(|v| {
-                    v.get("prompt")
-                        .and_then(|p| p.as_str().map(|s| s.to_string()))
-                })
-            })
-    } else {
-        None
-    };
-    let _ = _prompt; // Explicit acknowledgment of unused variable
 
     // Convert AudioDataDto back to AudioData
     let audio_data: AudioData = result.audio_data.into();
@@ -556,51 +526,6 @@ mod tests {
 
     /// `stop_recording` に `prompt` を提供すると、WAV と並べてメタJSONファイルが
     /// 作成されることを検証します。入力デバイスが存在しない場合は自動的にスキップします。
-    #[tokio::test(flavor = "current_thread")]
-    #[ignore = "Requires LocalSet context and audio device"]
-    async fn prompt_is_saved_as_meta() -> Result<(), Box<dyn std::error::Error>> {
-        // このテスト中に30秒タイマーが発火するのを防止する
-        unsafe {
-            std::env::set_var("VOICE_INPUT_MAX_SECS", "60");
-        }
-
-        let recorder = make_recorder();
-        let ctx = Arc::new(Mutex::new(RecCtx {
-            state: RecState::Idle,
-            cancel: None,
-            music_was_playing: false,
-            start_prompt: None,
-            paste: false,
-            direct_input: false,
-        }));
-        let (tx, mut rx) = mpsc::unbounded_channel::<(RecordingResult, bool, bool, bool)>();
-
-        if start_recording(
-            recorder.clone(),
-            &ctx,
-            &tx,
-            false,
-            Some("hello".into()),
-            false,
-        )
-        .await
-        .is_err()
-        {
-            eprintln!("⚠️  No audio device – prompt meta test skipped");
-            return Ok(());
-        }
-        stop_recording(recorder, &ctx, &tx, false, None, false).await?;
-
-        let (result, _, _, _) = rx.recv().await.expect("result not queued");
-        if let AudioDataDto::File(path) = result.audio_data {
-            let meta = std::fs::read_to_string(format!("{}.json", path))?;
-            assert!(meta.contains("hello"));
-        } else {
-            panic!("Expected file mode");
-        }
-        Ok(())
-    }
-
     /// 自動タイムアウト（1秒に設定）が録音を停止し、状態を
     /// Idleに戻すことを確認します。オーディオデバイスが利用できない場合はスキップします。
     #[tokio::test(flavor = "current_thread")]

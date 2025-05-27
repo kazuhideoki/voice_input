@@ -46,7 +46,6 @@ pub struct IpcResp {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum AudioDataDto {
     Memory(Vec<u8>),
-    File(String),
 }
 
 /// 録音結果を表す構造体
@@ -62,7 +61,6 @@ impl From<AudioData> for AudioDataDto {
     fn from(data: AudioData) -> Self {
         match data {
             AudioData::Memory(bytes) => AudioDataDto::Memory(bytes),
-            AudioData::File(path) => AudioDataDto::File(path.to_string_lossy().to_string()),
         }
     }
 }
@@ -71,7 +69,6 @@ impl From<AudioDataDto> for AudioData {
     fn from(dto: AudioDataDto) -> Self {
         match dto {
             AudioDataDto::Memory(bytes) => AudioData::Memory(bytes),
-            AudioDataDto::File(path) => AudioData::File(PathBuf::from(path)),
         }
     }
 }
@@ -114,21 +111,8 @@ mod tests {
         let wav_data = vec![0u8, 1, 2, 3, 4, 5];
         let audio_data = AudioDataDto::Memory(wav_data.clone());
 
-        match audio_data {
-            AudioDataDto::Memory(data) => assert_eq!(data, wav_data),
-            _ => panic!("Expected Memory variant"),
-        }
-    }
-
-    #[test]
-    fn test_audio_data_dto_file_variant() {
-        let file_path = "/tmp/test.wav".to_string();
-        let audio_data = AudioDataDto::File(file_path.clone());
-
-        match audio_data {
-            AudioDataDto::File(path) => assert_eq!(path, file_path),
-            _ => panic!("Expected File variant"),
-        }
+        let AudioDataDto::Memory(data) = audio_data;
+        assert_eq!(data, wav_data);
     }
 
     #[test]
@@ -142,27 +126,8 @@ mod tests {
         };
 
         assert_eq!(result.duration_ms, 1500);
-        match result.audio_data {
-            AudioDataDto::Memory(data) => assert_eq!(data, vec![1, 2, 3]),
-            _ => panic!("Expected Memory variant"),
-        }
-    }
-
-    #[test]
-    fn test_recording_result_with_file() {
-        let audio_data = AudioDataDto::File("/tmp/recording.wav".to_string());
-        let duration_ms = 3000u64;
-
-        let result = RecordingResult {
-            audio_data,
-            duration_ms,
-        };
-
-        assert_eq!(result.duration_ms, 3000);
-        match &result.audio_data {
-            AudioDataDto::File(path) => assert_eq!(path, "/tmp/recording.wav"),
-            _ => panic!("Expected File variant"),
-        }
+        let AudioDataDto::Memory(data) = result.audio_data;
+        assert_eq!(data, vec![1, 2, 3]);
     }
 
     #[test]
@@ -171,19 +136,8 @@ mod tests {
         let json = serde_json::to_string(&memory_data).unwrap();
         let deserialized: AudioDataDto = serde_json::from_str(&json).unwrap();
 
-        match deserialized {
-            AudioDataDto::Memory(data) => assert_eq!(data, vec![1, 2, 3, 4, 5]),
-            _ => panic!("Expected Memory variant"),
-        }
-
-        let file_data = AudioDataDto::File("/path/to/file.wav".to_string());
-        let json = serde_json::to_string(&file_data).unwrap();
-        let deserialized: AudioDataDto = serde_json::from_str(&json).unwrap();
-
-        match deserialized {
-            AudioDataDto::File(path) => assert_eq!(path, "/path/to/file.wav"),
-            _ => panic!("Expected File variant"),
-        }
+        let AudioDataDto::Memory(data) = deserialized;
+        assert_eq!(data, vec![1, 2, 3, 4, 5]);
     }
 
     #[test]
@@ -197,52 +151,26 @@ mod tests {
         let deserialized: RecordingResult = serde_json::from_str(&json).unwrap();
 
         assert_eq!(deserialized.duration_ms, 2500);
-        match deserialized.audio_data {
-            AudioDataDto::Memory(data) => assert_eq!(data, vec![10, 20, 30]),
-            _ => panic!("Expected Memory variant"),
-        }
+        let AudioDataDto::Memory(data) = deserialized.audio_data;
+        assert_eq!(data, vec![10, 20, 30]);
     }
 
     #[test]
     fn test_from_audio_data_to_dto() {
-        use std::path::PathBuf;
-
         // Test Memory variant
         let audio_data = AudioData::Memory(vec![1, 2, 3, 4]);
         let dto: AudioDataDto = audio_data.into();
-        match dto {
-            AudioDataDto::Memory(data) => assert_eq!(data, vec![1, 2, 3, 4]),
-            _ => panic!("Expected Memory variant"),
-        }
-
-        // Test File variant
-        let audio_data = AudioData::File(PathBuf::from("/tmp/test.wav"));
-        let dto: AudioDataDto = audio_data.into();
-        match dto {
-            AudioDataDto::File(path) => assert_eq!(path, "/tmp/test.wav"),
-            _ => panic!("Expected File variant"),
-        }
+        let AudioDataDto::Memory(data) = dto;
+        assert_eq!(data, vec![1, 2, 3, 4]);
     }
 
     #[test]
     fn test_from_dto_to_audio_data() {
-        use std::path::PathBuf;
-
         // Test Memory variant
         let dto = AudioDataDto::Memory(vec![5, 6, 7, 8]);
         let audio_data: AudioData = dto.into();
-        match audio_data {
-            AudioData::Memory(data) => assert_eq!(data, vec![5, 6, 7, 8]),
-            _ => panic!("Expected Memory variant"),
-        }
-
-        // Test File variant
-        let dto = AudioDataDto::File("/tmp/output.wav".to_string());
-        let audio_data: AudioData = dto.into();
-        match audio_data {
-            AudioData::File(path) => assert_eq!(path, PathBuf::from("/tmp/output.wav")),
-            _ => panic!("Expected File variant"),
-        }
+        let AudioData::Memory(data) = audio_data;
+        assert_eq!(data, vec![5, 6, 7, 8]);
     }
 
     #[test]
