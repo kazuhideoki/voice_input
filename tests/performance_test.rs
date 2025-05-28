@@ -1,5 +1,5 @@
 //! パフォーマンステスト
-//! メモリモードとファイルモードの性能比較を行います。
+//! メモリモードでの録音・転写パフォーマンスを測定します。
 //!
 //! ## 実行前要件
 //! 1. OpenAI APIキーの設定:
@@ -47,16 +47,7 @@ fn get_current_memory_usage_mb() -> f64 {
 }
 
 /// パフォーマンスを測定
-async fn measure_performance(use_legacy: bool) -> Result<PerformanceMetrics, Box<dyn Error>> {
-    // 環境変数設定
-    unsafe {
-        if use_legacy {
-            env::set_var("LEGACY_TMP_WAV_FILE", "true");
-        } else {
-            env::remove_var("LEGACY_TMP_WAV_FILE");
-        }
-    }
-
+async fn measure_performance() -> Result<PerformanceMetrics, Box<dyn Error>> {
     let start = Instant::now();
 
     // 録音開始
@@ -82,111 +73,55 @@ async fn measure_performance(use_legacy: bool) -> Result<PerformanceMetrics, Box
         transcription_time: total_end - transcription_start,
         total_time: total_end - start,
         memory_usage_mb: get_current_memory_usage_mb(),
-        mode: if use_legacy {
-            "File".to_string()
-        } else {
-            "Memory".to_string()
-        },
+        mode: "Memory".to_string(),
     })
 }
 
-/// 結果を表形式で出力
-fn print_results(memory_metrics: &PerformanceMetrics, file_metrics: &PerformanceMetrics) {
-    println!("\n🎯 Performance Comparison Results");
-    println!("═══════════════════════════════════════════════════════════════");
+/// 結果を出力
+fn print_results(metrics: &PerformanceMetrics) {
+    println!("\n🎯 Performance Test Results");
+    println!("═══════════════════════════════════════════════");
     println!(
-        "{:<20} │ {:>15} │ {:>15} │ {:>10}",
-        "Metric", "Memory Mode", "File Mode", "Difference"
+        "Recording Time:     {:>10.2}ms",
+        metrics.recording_time.as_millis()
     );
-    println!("───────────────────────────────────────────────────────────────");
-
-    // 録音時間
     println!(
-        "{:<20} │ {:>13.2}ms │ {:>13.2}ms │ {:>8.2}ms",
-        "Recording Time",
-        memory_metrics.recording_time.as_millis(),
-        file_metrics.recording_time.as_millis(),
-        memory_metrics.recording_time.as_millis() as f64
-            - file_metrics.recording_time.as_millis() as f64
+        "Transcription Time: {:>10.2}ms",
+        metrics.transcription_time.as_millis()
     );
-
-    // 転写時間
     println!(
-        "{:<20} │ {:>13.2}ms │ {:>13.2}ms │ {:>8.2}ms",
-        "Transcription Time",
-        memory_metrics.transcription_time.as_millis(),
-        file_metrics.transcription_time.as_millis(),
-        memory_metrics.transcription_time.as_millis() as f64
-            - file_metrics.transcription_time.as_millis() as f64
+        "Total Time:         {:>10.2}ms",
+        metrics.total_time.as_millis()
     );
-
-    // 合計時間
-    println!(
-        "{:<20} │ {:>13.2}ms │ {:>13.2}ms │ {:>8.2}ms",
-        "Total Time",
-        memory_metrics.total_time.as_millis(),
-        file_metrics.total_time.as_millis(),
-        memory_metrics.total_time.as_millis() as f64 - file_metrics.total_time.as_millis() as f64
-    );
-
-    println!("═══════════════════════════════════════════════════════════════");
-
-    // パフォーマンス改善率
-    let improvement = ((file_metrics.total_time.as_millis() as f64
-        - memory_metrics.total_time.as_millis() as f64)
-        / file_metrics.total_time.as_millis() as f64)
-        * 100.0;
-
-    if improvement > 0.0 {
-        println!(
-            "\n✅ Performance Improvement: {:.1}% faster in Memory mode",
-            improvement
-        );
-    } else {
-        println!(
-            "\n⚠️  Performance Degradation: {:.1}% slower in Memory mode",
-            -improvement
-        );
-    }
+    println!("Memory Usage:       {:>10.2}MB", metrics.memory_usage_mb);
+    println!("Mode:               {:>10}", metrics.mode);
+    println!("═══════════════════════════════════════════════");
 }
 
 #[tokio::test]
 #[ignore]
-async fn test_performance_comparison() {
+async fn test_performance_measurement() {
     // OpenAI APIキーが設定されているか確認
     if env::var("OPENAI_API_KEY").is_err() {
         eprintln!("⚠️  OPENAI_API_KEY not set. Skipping performance test.");
         return;
     }
 
-    println!("🚀 Starting performance comparison test...");
-    println!("This test will record 5 seconds of audio in each mode.\n");
+    println!("🚀 Starting performance test...");
+    println!("This test will record 5 seconds of audio.\n");
 
     // メモリモードでの測定
     println!("📊 Testing Memory mode...");
-    let memory_metrics = match measure_performance(false).await {
+    let metrics = match measure_performance().await {
         Ok(metrics) => metrics,
         Err(e) => {
-            eprintln!("❌ Memory mode test failed: {}", e);
-            return;
-        }
-    };
-
-    // 少し待機
-    thread::sleep(Duration::from_secs(2));
-
-    // ファイルモードでの測定
-    println!("📊 Testing File mode...");
-    let file_metrics = match measure_performance(true).await {
-        Ok(metrics) => metrics,
-        Err(e) => {
-            eprintln!("❌ File mode test failed: {}", e);
+            eprintln!("❌ Performance test failed: {}", e);
             return;
         }
     };
 
     // 結果を表示
-    print_results(&memory_metrics, &file_metrics);
+    print_results(&metrics);
 }
 
 #[tokio::test]
@@ -196,9 +131,6 @@ async fn test_memory_usage() {
     println!("Testing memory consumption with longer recording...\n");
 
     // 30秒録音でのメモリ使用量を確認
-    unsafe {
-        env::remove_var("LEGACY_TMP_WAV_FILE");
-    }
 
     let backend = CpalAudioBackend::default();
 

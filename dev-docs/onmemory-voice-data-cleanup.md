@@ -222,75 +222,75 @@ flowchart TD
 ### タスク分割
 
 #### Phase 1: AudioData型とIPC層の簡素化
-- [ ] `src/infrastructure/audio/cpal_backend.rs`の`AudioData`をenumからstructに変更
-- [ ] `src/ipc.rs`の`AudioDataDto`を同様に簡素化
-- [ ] AudioData/AudioDataDto間の変換実装を更新
-- [ ] 関連するuseステートメントの更新
-- [ ] コンパイルエラーの解消
-- [ ] 既存テストの修正
+- [x] `src/infrastructure/audio/cpal_backend.rs`の`AudioData`をenumからstructに変更
+- [x] `src/ipc.rs`の`AudioDataDto`を同様に簡素化
+- [x] AudioData/AudioDataDto間の変換実装を更新
+- [x] 関連するuseステートメントの更新
+- [x] コンパイルエラーの解消
+- [x] 既存テストの修正
 
 #### Phase 2: CpalAudioBackendの簡素化
-- [ ] `RecordingState`列挙型の削除
-- [ ] `is_legacy_mode()`関数の削除
-- [ ] `make_output_path()`関数の削除
-- [ ] `build_input_stream()`関数の削除
-- [ ] `start_recording()`からファイルモード分岐を削除
-- [ ] `stop_recording()`からファイルモード処理を削除
-- [ ] `output_path`フィールドの削除
-- [ ] `recording_state`フィールドの型変更
-- [ ] hound依存関係の削除（Cargo.toml）
+- [x] `RecordingState`列挙型の削除
+- [x] `is_legacy_mode()`関数の削除
+- [x] `make_output_path()`関数の削除
+- [x] `build_input_stream()`関数の削除
+- [x] `start_recording()`からファイルモード分岐を削除
+- [x] `stop_recording()`からファイルモード処理を削除
+- [x] `output_path`フィールドの削除
+- [x] `recording_state`フィールドの型変更
+- [x] hound依存関係の削除（Cargo.toml）
 
 #### Phase 3: OpenAIクライアントとRecorderの簡素化
-- [ ] OpenAIクライアントの`transcribe_audio()`からmatch文を削除
-- [ ] OpenAIクライアントの`transcribe()`と`transcribe_with_prompt()`の削除または更新
-- [ ] Recorderの`stop()`メソッド削除
-- [ ] Recorderの`stop_raw()`を`stop()`にリネーム
-- [ ] Recorderの`is_memory_mode()`削除
-- [ ] voice_inputdでのメタデータファイル処理削除
+- [x] OpenAIクライアントの`transcribe_audio()`からmatch文を削除
+- [x] OpenAIクライアントの`transcribe()`と`transcribe_with_prompt()`の削除または更新
+- [x] Recorderの`stop()`メソッド削除
+- [x] Recorderの`stop_raw()`を`stop()`にリネーム
+- [x] Recorderの`is_memory_mode()`削除
+- [x] voice_inputdでのメタデータファイル処理削除
 
 #### Phase 4: テストコードのクリーンアップ
-- [ ] `tests/e2e/file_mode_test.rs`の削除
-- [ ] `tests/e2e/mode_switch_test.rs`の削除
-- [ ] `tests/e2e/mod.rs`から`start_voice_inputd()`のlegacy_mode引数削除
-- [ ] `tests/performance_test.rs`からファイルモード関連テスト削除
-- [ ] `benches/recording.rs`からファイルモードベンチマーク削除
-- [ ] その他のテストファイルから`LEGACY_TMP_WAV_FILE`参照削除
+- [x] `tests/e2e/file_mode_test.rs`の削除
+- [x] `tests/e2e/mode_switch_test.rs`の削除
+- [x] `tests/e2e/mod.rs`から`start_voice_inputd()`のlegacy_mode引数削除
+- [x] `tests/performance_test.rs`からファイルモード関連テスト削除
+- [x] `benches/recording.rs`からファイルモードベンチマーク削除
+- [x] その他のテストファイルから`LEGACY_TMP_WAV_FILE`参照削除
 
 #### Phase 5: ドキュメントとクリーンアップ
-- [ ] README.mdから環境変数`LEGACY_TMP_WAV_FILE`の説明削除
-- [ ] CLAUDE.mdの更新（該当する場合）
-- [ ] Cargo.tomlからhound依存関係削除
-- [ ] 不要なimport文の削除
-- [ ] `cargo fmt`の実行
-- [ ] `cargo clippy`の実行
-- [ ] 最終的な動作確認
+- [x] README.mdから環境変数`LEGACY_TMP_WAV_FILE`の説明削除
+- [x] CLAUDE.mdの更新（該当する場合）
+- [x] Cargo.tomlからhound依存関係削除
+- [x] 不要なimport文の削除
+- [x] `cargo fmt`の実行
+- [x] `cargo clippy`の実行
+- [x] 最終的な動作確認
 
 ### 手動でのチェック項目
 
 #### 各Phase共通
-- [ ] `cargo check`でコンパイルエラーがないこと
-- [ ] `cargo clippy -- -D warnings`で警告がないこと
-- [ ] `cargo fmt`でフォーマットが整っていること
+- [x] `cargo check`でコンパイルエラーがないこと
+- [x] `cargo clippy -- -D warnings`で警告がないこと
+- [x] `cargo fmt`でフォーマットが整っていること
 
 #### Phase 1完了時
-- [ ] AudioData型が正しく簡素化されていること
-- [ ] IPC通信が正常に動作すること
+- [x] AudioData型が正しく簡素化されていること
+- [x] IPC通信が正常に動作すること
 
 #### Phase 2完了時
-- [ ] 環境変数`LEGACY_TMP_WAV_FILE`を設定してもメモリモードで動作すること
-- [ ] `/tmp`ディレクトリにWAVファイルが作成されないこと
+- [x] 環境変数`LEGACY_TMP_WAV_FILE`を設定してもメモリモードで動作すること
+- [x] `/tmp`ディレクトリにWAVファイルが作成されないこと
 
 #### Phase 3完了時
-- [ ] 録音→転写の基本フローが動作すること
-- [ ] エラーハンドリングが適切に機能すること
+- [x] 録音→転写の基本フローが動作すること
+- [x] エラーハンドリングが適切に機能すること
 
 #### Phase 4完了時
-- [ ] `cargo test`で全テストがパスすること
-- [ ] `cargo test --features ci-test`でCIテストがパスすること
-- [ ] テストカバレッジが大幅に低下していないこと
+- [x] `cargo test`で全テストがパスすること
+- [x] `cargo test --features ci-test`でCIテストがパスすること
+- [x] テストカバレッジが大幅に低下していないこと
 
 #### Phase 5完了時
-- [ ] `cargo build --release`でリリースビルドが成功すること
-- [ ] バイナリサイズが削減されていること
-- [ ] ドキュメントに矛盾がないこと
+- [x] `cargo build --release`でリリースビルドが成功すること
+- [x] バイナリサイズが削減されていること
+- [x] ドキュメントに矛盾がないこと
 - [ ] 実機での動作確認（録音→転写→ペースト）

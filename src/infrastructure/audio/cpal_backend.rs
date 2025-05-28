@@ -231,7 +231,6 @@ impl CpalAudioBackend {
 
 // =============== 内部ユーティリティ ================================
 impl CpalAudioBackend {
-
     /// メモリバッファのサイズ見積もり
     /// 録音時間に基づいて必要なバッファサイズを計算
     fn estimate_buffer_size(duration_secs: u32, sample_rate: u32, channels: u16) -> usize {
@@ -286,7 +285,6 @@ impl CpalAudioBackend {
 
         Ok(stream)
     }
-
 }
 
 impl AudioBackend for CpalAudioBackend {
@@ -648,10 +646,10 @@ mod tests {
     fn test_memory_mode_only() {
         // メモリモード専用になったことを確認
         let backend = CpalAudioBackend::default();
-        
+
         // 録音状態は初期状態でNone
         assert!(backend.recording_state.lock().unwrap().is_none());
-        
+
         // 録音中でない
         assert!(!backend.is_recording());
     }
@@ -734,7 +732,7 @@ mod tests {
         // 録音開始前の状態確認
         assert!(!backend.is_recording());
         assert!(backend.recording_state.lock().unwrap().is_none());
-        
+
         // streamも初期状態でNone
         assert!(backend.stream.lock().unwrap().is_none());
     }
@@ -758,7 +756,7 @@ mod tests {
         // stop_recordingを実行
         let result = backend.stop_recording().unwrap();
 
-        // AudioData::Memory(wav_data) => wav_data
+        // AudioDataのメモリ内容を取得
         let wav_data = result.0;
         // WAVヘッダー（44バイト）+ データ（5サンプル * 2バイト = 10バイト）
         assert_eq!(wav_data.len(), 54);

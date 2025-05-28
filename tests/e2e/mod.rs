@@ -1,19 +1,12 @@
 pub mod memory_mode_test;
-pub mod file_mode_test;
-pub mod mode_switch_test;
 
 use std::process::{Child, Command};
 use std::time::Duration;
 use std::thread;
 use std::io::Write;
 
-pub fn start_voice_inputd(use_file_mode: bool) -> Result<Child, std::io::Error> {
-    let mut cmd = Command::new("target/debug/voice_inputd");
-    
-    if use_file_mode {
-        cmd.env("LEGACY_TMP_WAV_FILE", "true");
-    }
-    
+pub fn start_voice_inputd() -> Result<Child, std::io::Error> {
+    let cmd = Command::new("target/debug/voice_inputd");
     cmd.spawn()
 }
 

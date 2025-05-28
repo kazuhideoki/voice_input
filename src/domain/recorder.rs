@@ -29,7 +29,6 @@ impl<T: AudioBackend> Recorder<T> {
         self
     }
 
-
     /// 録音を開始します。
     pub fn start(&mut self) -> Result<(), Box<dyn Error>> {
         // メトリクス収集開始
@@ -41,7 +40,6 @@ impl<T: AudioBackend> Recorder<T> {
 
         self.backend.start_recording()
     }
-
 
     /// 録音を停止し、音声データを返します。
     pub fn stop(&mut self) -> Result<AudioData, Box<dyn Error>> {

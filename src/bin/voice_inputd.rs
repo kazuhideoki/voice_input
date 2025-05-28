@@ -23,7 +23,6 @@ use std::{
 
 use arboard::Clipboard;
 use futures::{SinkExt, StreamExt};
-use serde_json;
 use tokio::{
     net::{UnixListener, UnixStream},
     sync::{Semaphore, mpsc, oneshot},
@@ -386,9 +385,7 @@ async fn handle_transcription(
         }
     };
 
-    // メタJSONが存在すれば prompt を読み込む (file mode only)
-    // Note: The new OpenAI client doesn't support prompt in transcribe_audio yet
-    // メモリモードではメタデータファイルがないため、プロンプトは取得しない
+    // メモリモードではメタデータファイルを使用しないため、プロンプトは取得しない
     let _prompt: Option<String> = None;
     let _ = _prompt; // Explicit acknowledgment of unused variable
 

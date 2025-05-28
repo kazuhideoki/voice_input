@@ -54,7 +54,6 @@ impl OpenAiClient {
         self.transcribe_with_part(part, None).await
     }
 
-
     /// 共通の転写処理
     async fn transcribe_with_part(
         &self,
@@ -105,7 +104,6 @@ impl OpenAiClient {
         Ok(transcription.text)
     }
 }
-
 
 // === Unit tests ==========================================================
 #[cfg(test)]
@@ -170,7 +168,7 @@ mod tests {
         unsafe { env::set_var("OPENAI_API_KEY", "test-key") };
 
         let client = OpenAiClient::new().unwrap();
-        // ファイルモードの代わりにメモリモードを使用
+        // メモリモードでのテスト
         let test_data = vec![1, 2, 3, 4];
         let audio_data = AudioData(test_data);
 
@@ -180,5 +178,4 @@ mod tests {
         // We expect an error since the file doesn't exist
         assert!(result.is_err());
     }
-
 }
