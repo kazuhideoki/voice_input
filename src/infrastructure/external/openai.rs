@@ -46,13 +46,7 @@ impl OpenAiClient {
 
     /// AudioDataから直接転写を実行
     pub async fn transcribe_audio(&self, audio_data: AudioData) -> Result<String, String> {
-        let wav_data = match audio_data {
-            AudioData::Memory(data) => data,
-            AudioData::File(path) => {
-                // 後方互換性: ファイルから読み込み
-                std::fs::read(&path).map_err(|e| format!("Failed to read audio file: {}", e))?
-            }
-        };
+        let wav_data = audio_data.0;
 
         let part = multipart::Part::bytes(wav_data)
             .file_name("audio.wav")
@@ -177,7 +171,6 @@ pub async fn transcribe_audio(
 mod tests {
     use super::*;
     use crate::infrastructure::audio::cpal_backend::AudioData;
-    use std::path::PathBuf;
 
     #[test]
     fn parse_transcription_response_json() {
@@ -222,7 +215,7 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, // data size
         ];
 
-        let audio_data = AudioData::Memory(wav_data);
+        let audio_data = AudioData(wav_data);
 
         // This will fail with the actual API, but we're testing the method exists
         let result = client.transcribe_audio(audio_data).await;
@@ -236,7 +229,9 @@ mod tests {
         unsafe { env::set_var("OPENAI_API_KEY", "test-key") };
 
         let client = OpenAiClient::new().unwrap();
-        let audio_data = AudioData::File(PathBuf::from("/tmp/test.wav"));
+        // ファイルモードの代わりにメモリモードを使用
+        let test_data = vec![1, 2, 3, 4];
+        let audio_data = AudioData(test_data);
 
         // This will fail because the file doesn't exist, but we're testing the method exists
         let result = client.transcribe_audio(audio_data).await;

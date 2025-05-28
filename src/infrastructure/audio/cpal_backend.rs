@@ -15,14 +15,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-/// 録音データの返却形式
+/// 録音データの返却形式（メモリモード専用）
 #[derive(Debug, Clone)]
-pub enum AudioData {
-    /// WAVフォーマットのバイトデータ（メモリモード）
-    Memory(Vec<u8>),
-    /// WAVファイルへのパス（レガシーモード）
-    File(PathBuf),
-}
+pub struct AudioData(pub Vec<u8>);
 
 /// 録音状態を管理する内部列挙型
 enum RecordingState {
@@ -463,11 +458,11 @@ impl AudioBackend for CpalAudioBackend {
                 // メモリモード: バッファからWAVデータを生成
                 let samples = buffer.lock().unwrap();
                 let wav_data = Self::combine_wav_data(&samples, sample_rate, channels)?;
-                Ok(AudioData::Memory(wav_data))
+                Ok(AudioData(wav_data))
             }
             RecordingState::File { path, .. } => {
                 // レガシーモード: ファイルパスを返す
-                Ok(AudioData::File(path))
+                Ok(AudioData(std::fs::read(&path)?))
             }
         }
     }
@@ -777,35 +772,20 @@ mod tests {
     }
 
     #[test]
-    fn test_audio_data_enum() {
-        // Memory variant
+    fn test_audio_data_struct() {
+        // Data creation
         let data = vec![1, 2, 3, 4, 5];
-        let audio_data = AudioData::Memory(data.clone());
+        let audio_data = AudioData(data.clone());
 
-        match &audio_data {
-            AudioData::Memory(vec) => assert_eq!(vec, &data),
-            _ => panic!("Expected Memory variant"),
-        }
-
-        // File variant
-        let path = PathBuf::from("/tmp/test.wav");
-        let audio_data_file = AudioData::File(path.clone());
-
-        match &audio_data_file {
-            AudioData::File(p) => assert_eq!(p, &path),
-            _ => panic!("Expected File variant"),
-        }
+        // Data access
+        assert_eq!(audio_data.0, data);
 
         // Debug trait
-        assert!(format!("{:?}", audio_data).contains("Memory"));
-        assert!(format!("{:?}", audio_data_file).contains("File"));
+        assert!(format!("{:?}", audio_data).contains("AudioData"));
 
         // Clone trait
         let cloned = audio_data.clone();
-        match cloned {
-            AudioData::Memory(vec) => assert_eq!(vec, data),
-            _ => panic!("Clone failed"),
-        }
+        assert_eq!(cloned.0, data);
     }
 
     #[test]
@@ -920,17 +900,14 @@ mod tests {
         // stop_recordingを実行
         let result = backend.stop_recording().unwrap();
 
-        match result {
-            AudioData::Memory(wav_data) => {
-                // WAVヘッダー（44バイト）+ データ（5サンプル * 2バイト = 10バイト）
-                assert_eq!(wav_data.len(), 54);
+        // AudioData::Memory(wav_data) => wav_data
+        let wav_data = result.0;
+        // WAVヘッダー（44バイト）+ データ（5サンプル * 2バイト = 10バイト）
+        assert_eq!(wav_data.len(), 54);
 
-                // WAVヘッダーの基本チェック
-                assert_eq!(&wav_data[0..4], b"RIFF");
-                assert_eq!(&wav_data[8..12], b"WAVE");
-            }
-            _ => panic!("Expected AudioData::Memory"),
-        }
+        // WAVヘッダーの基本チェック
+        assert_eq!(&wav_data[0..4], b"RIFF");
+        assert_eq!(&wav_data[8..12], b"WAVE");
 
         // 録音状態がクリアされていることを確認
         assert!(!backend.is_recording());
@@ -942,8 +919,12 @@ mod tests {
         // ファイルモードでの動作をシミュレート
         let backend = CpalAudioBackend::default();
 
+        // テストファイルを作成
+        let test_data = vec![1, 2, 3, 4, 5];
+        let test_path = PathBuf::from("/tmp/test_voice_input.wav");
+        std::fs::write(&test_path, &test_data).unwrap();
+
         // テスト用のRecordingState::Fileを設定
-        let test_path = PathBuf::from("/tmp/test.wav");
         *backend.recording_state.lock().unwrap() = Some(RecordingState::File {
             path: test_path.clone(),
         });
@@ -954,16 +935,16 @@ mod tests {
         // stop_recordingを実行
         let result = backend.stop_recording().unwrap();
 
-        match result {
-            AudioData::File(path) => {
-                assert_eq!(path, test_path);
-            }
-            _ => panic!("Expected AudioData::File"),
-        }
+        // ファイルモードでもAudioDataはメモリデータ
+        let wav_data = result.0;
+        assert_eq!(wav_data, test_data); // ファイルが読み込まれている
 
         // 録音状態がクリアされていることを確認
         assert!(!backend.is_recording());
         assert!(backend.recording_state.lock().unwrap().is_none());
+
+        // テストファイルを削除
+        let _ = std::fs::remove_file(&test_path);
     }
 
     #[test]
@@ -1053,13 +1034,9 @@ mod tests {
 
                 // 録音停止
                 let result = backend.stop_recording().unwrap();
-                match result {
-                    AudioData::Memory(data) => {
-                        println!("録音データサイズ: {} bytes", data.len());
-                        assert!(data.len() > 44); // 少なくともWAVヘッダーより大きい
-                    }
-                    _ => panic!("Expected Memory data"),
-                }
+                let data = result.0;
+                println!("録音データサイズ: {} bytes", data.len());
+                assert!(data.len() > 44); // 少なくともWAVヘッダーより大きい
             }
             Err(e) => {
                 println!("録音開始失敗（デバイスなし）: {}", e);

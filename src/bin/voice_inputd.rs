@@ -23,7 +23,7 @@ use std::{
 
 use arboard::Clipboard;
 use futures::{SinkExt, StreamExt};
-use serde_json::{Value, json};
+use serde_json;
 use tokio::{
     net::{UnixListener, UnixStream},
     sync::{Semaphore, mpsc, oneshot},
@@ -44,7 +44,7 @@ use voice_input::{
             text_input,
         },
     },
-    ipc::{AudioDataDto, IpcCmd, IpcResp, RecordingResult, socket_path},
+    ipc::{IpcCmd, IpcResp, RecordingResult, socket_path},
     load_env,
 };
 
@@ -287,12 +287,9 @@ async fn start_recording(
                             (w, c.paste, c.direct_input, prompt)
                         };
 
-                        // Save prompt metadata if using file mode
-                        if let AudioDataDto::File(ref path) = result.audio_data {
-                            if let Some(p) = prompt_to_save {
-                                let meta = format!("{}.json", path);
-                                let _ = fs::write(&meta, json!({ "prompt": p }).to_string());
-                            }
+                        // Save prompt metadata (no longer needed in memory mode)
+                        if let Some(_p) = prompt_to_save {
+                            // メモリモードではメタデータファイルを作成しない
                         }
 
                         let _ = tx_clone.send((result, stored_paste, was_playing, stored_direct_input));
@@ -345,12 +342,9 @@ async fn stop_recording(
         duration_ms: 0, // Duration tracking not implemented yet
     };
 
-    // Save prompt metadata if using file mode
-    if let AudioDataDto::File(ref path) = result.audio_data {
-        if let Some(p) = final_prompt {
-            let meta = format!("{}.json", path);
-            fs::write(&meta, json!({ "prompt": p }).to_string())?;
-        }
+    // Save prompt metadata (no longer needed in memory mode)
+    if let Some(_p) = final_prompt {
+        // メモリモードではメタデータファイルを作成しない
     }
 
     let was_playing = c.music_was_playing;
@@ -394,18 +388,8 @@ async fn handle_transcription(
 
     // メタJSONが存在すれば prompt を読み込む (file mode only)
     // Note: The new OpenAI client doesn't support prompt in transcribe_audio yet
-    let _prompt = if let AudioDataDto::File(ref path) = result.audio_data {
-        fs::read_to_string(format!("{}.json", path))
-            .ok()
-            .and_then(|s| {
-                serde_json::from_str::<Value>(&s).ok().and_then(|v| {
-                    v.get("prompt")
-                        .and_then(|p| p.as_str().map(|s| s.to_string()))
-                })
-            })
-    } else {
-        None
-    };
+    // メモリモードではメタデータファイルがないため、プロンプトは取得しない
+    let _prompt: Option<String> = None;
     let _ = _prompt; // Explicit acknowledgment of unused variable
 
     // Convert AudioDataDto back to AudioData
@@ -592,12 +576,8 @@ mod tests {
         stop_recording(recorder, &ctx, &tx, false, None, false).await?;
 
         let (result, _, _, _) = rx.recv().await.expect("result not queued");
-        if let AudioDataDto::File(path) = result.audio_data {
-            let meta = std::fs::read_to_string(format!("{}.json", path))?;
-            assert!(meta.contains("hello"));
-        } else {
-            panic!("Expected file mode");
-        }
+        // メモリモードではメタデータファイルは作成されない
+        assert!(result.audio_data.0.len() > 0); // 音声データが存在することのみ確認
         Ok(())
     }
 
