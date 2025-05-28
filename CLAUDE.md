@@ -2,6 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Project Architecture
+
+### Core Components
+
+- **voice_input**: CLI client that communicates with daemon via Unix socket
+- **voice_inputd**: Background daemon handling audio recording, transcription, and text input
+- **Audio Processing**: Memory-only processing (no temporary files)
+- **IPC**: JSON communication over Unix Domain Socket (`/tmp/voice_input.sock`)
+
+### Audio Data Flow
+
+```
+[User] → [CLI] → [UDS] → [Daemon] → [Audio Recording] → [Memory Buffer] → [WAV Generation] → [OpenAI API] → [Text Output]
+```
+
 ## Build and Run Commands
 
 - Build: `cargo build`
@@ -41,17 +56,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Testing
 
 ### Local Development
+
 - Run all tests: `cargo test`
 - Run specific test: `cargo test test_name`
 - Run tests with output: `cargo test -- --nocapture`
 - Run ignored tests: `cargo test -- --ignored`
 
 ### CI Environment
+
 - CI uses `cargo test --features ci-test` to skip environment-dependent tests
 - Tests requiring audio devices, daemon processes, or GUI are marked with `#[cfg_attr(feature = "ci-test", ignore)]`
 - This ensures CI runs only tests that can execute reliably in GitHub Actions environment
 
 ### Test Categories
+
 1. **Unit tests**: Always run in CI
 2. **Integration tests**: Run if they don't require external resources
 3. **E2E tests**: Skipped in CI if they require:
@@ -63,6 +81,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Version Management
 
 The project uses `rust-toolchain.toml` to ensure consistent Rust version across environments:
+
 - Rust version: 1.86.0
 - Includes rustfmt and clippy components
 - Both local and CI environments use the same version
@@ -70,6 +89,7 @@ The project uses `rust-toolchain.toml` to ensure consistent Rust version across 
 ## CI/CD Pipeline
 
 GitHub Actions workflow (`.github/workflows/ci.yml`) performs:
+
 1. Code formatting check (`cargo fmt -- --check`)
 2. Clippy analysis with all warnings as errors (`cargo clippy -- -D warnings`)
 3. Test execution with CI-safe tests only (`cargo test --features ci-test`)
@@ -77,11 +97,13 @@ GitHub Actions workflow (`.github/workflows/ci.yml`) performs:
 
 ### Common CI Issues and Solutions
 
-1. **Clippy version differences**: 
+1. **Clippy version differences**:
+
    - Use `rust-toolchain.toml` to pin Rust version
    - Ensures local and CI use same clippy rules
 
 2. **Test failures in CI**:
+
    - Use `ci-test` feature to skip environment-dependent tests
    - Mark flaky tests with `#[cfg_attr(feature = "ci-test", ignore)]`
 

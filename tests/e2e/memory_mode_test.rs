@@ -5,7 +5,7 @@ use super::*;
 #[cfg_attr(feature = "ci-test", ignore)]
 async fn test_memory_mode_end_to_end() -> Result<(), Box<dyn std::error::Error>> {
     // デーモン起動（メモリモード）
-    let daemon = start_voice_inputd(false)?;
+    let daemon = start_voice_inputd()?;
     wait_for_daemon_ready()?;
     
     // 録音開始
@@ -48,7 +48,7 @@ async fn test_memory_mode_end_to_end() -> Result<(), Box<dyn std::error::Error>>
 #[cfg_attr(feature = "ci-test", ignore)]
 async fn test_memory_mode_long_recording() -> Result<(), Box<dyn std::error::Error>> {
     // デーモン起動（メモリモード）
-    let daemon = start_voice_inputd(false)?;
+    let daemon = start_voice_inputd()?;
     wait_for_daemon_ready()?;
     
     // 録音開始
@@ -77,7 +77,7 @@ async fn test_memory_mode_long_recording() -> Result<(), Box<dyn std::error::Err
 #[cfg_attr(feature = "ci-test", ignore)]
 async fn test_memory_mode_multiple_recordings() -> Result<(), Box<dyn std::error::Error>> {
     // デーモン起動（メモリモード）
-    let daemon = start_voice_inputd(false)?;
+    let daemon = start_voice_inputd()?;
     wait_for_daemon_ready()?;
     
     // 複数回の録音を実行
@@ -116,7 +116,7 @@ async fn test_memory_mode_multiple_recordings() -> Result<(), Box<dyn std::error
 #[cfg_attr(feature = "ci-test", ignore)]
 async fn test_memory_mode_error_handling() -> Result<(), Box<dyn std::error::Error>> {
     // デーモン起動（メモリモード）
-    let daemon = start_voice_inputd(false)?;
+    let daemon = start_voice_inputd()?;
     wait_for_daemon_ready()?;
     
     // 録音開始

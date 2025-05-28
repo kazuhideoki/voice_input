@@ -10,15 +10,13 @@ use voice_input::infrastructure::audio::{AudioBackend, AudioData};
 #[derive(Clone)]
 struct BenchmarkAudioBackend {
     recording: Arc<AtomicBool>,
-    use_memory: bool,
     simulated_size: Arc<AtomicUsize>,
 }
 
 impl BenchmarkAudioBackend {
-    fn new(use_memory: bool) -> Self {
+    fn new() -> Self {
         Self {
             recording: Arc::new(AtomicBool::new(false)),
-            use_memory,
             simulated_size: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -35,39 +33,11 @@ impl AudioBackend for BenchmarkAudioBackend {
     }
 
     fn stop_recording(&self) -> Result<AudioData, Box<dyn Error>> {
-        use std::io::{Seek, SeekFrom, Write};
-        use tempfile::NamedTempFile;
-
         self.recording.store(false, Ordering::SeqCst);
         let size = self.simulated_size.load(Ordering::SeqCst);
 
-        if self.use_memory {
-            // メモリモード: 実際のサイズのデータを生成
-            Ok(AudioData::Memory(vec![0u8; size]))
-        } else {
-            // ファイルモード: 実際のファイルI/Oを実行
-            let mut tmp = NamedTempFile::new()?;
-
-            // 事前にファイルサイズを確保（フラグメンテーション防止）
-            tmp.as_file_mut().set_len(size as u64)?;
-
-            // ファイルの先頭にシーク
-            tmp.seek(SeekFrom::Start(0))?;
-
-            // 実際のデータを書き込み
-            tmp.as_file_mut().write_all(&vec![0u8; size])?;
-
-            // OSバッファをフラッシュして実際のディスクI/Oを確実に発生させる
-            tmp.as_file_mut().sync_all()?;
-
-            // ファイルパスを保持（NamedTempFileがドロップされるまで有効）
-            let path = tmp.path().to_path_buf();
-
-            // ファイルを永続化（自動削除を防ぐ）
-            let _ = tmp.persist(&path);
-
-            Ok(AudioData::File(path))
-        }
+        // メモリモードのみサポート
+        Ok(AudioData(vec![0u8; size]))
     }
 
     fn is_recording(&self) -> bool {
@@ -96,7 +66,7 @@ fn benchmark_recording_modes(c: &mut Criterion) {
             BenchmarkId::new("memory_mode", duration_secs),
             duration_secs,
             |b, &_duration| {
-                let backend = BenchmarkAudioBackend::new(true);
+                let backend = BenchmarkAudioBackend::new();
                 backend.set_simulated_size(audio_size);
 
                 b.iter(|| {
@@ -106,26 +76,21 @@ fn benchmark_recording_modes(c: &mut Criterion) {
                     recorder.start().expect("Failed to start recording");
 
                     // 録音停止とデータ取得
-                    let result = recorder.stop_raw().expect("Failed to stop recording");
+                    let result = recorder.stop().expect("Failed to stop recording");
 
                     // 結果の検証（black_boxで最適化を防ぐ）
-                    match result {
-                        AudioData::Memory(data) => {
-                            assert_eq!(data.len(), audio_size);
-                            black_box(data);
-                        }
-                        _ => panic!("Expected memory mode"),
-                    }
+                    assert_eq!(result.0.len(), audio_size);
+                    black_box(result);
                 });
             },
         );
 
-        // ファイルモードのベンチマーク
+        // 統一されたメモリモードのベンチマーク（旧ファイルモード）
         group.bench_with_input(
-            BenchmarkId::new("file_mode", duration_secs),
+            BenchmarkId::new("unified_mode", duration_secs),
             duration_secs,
             |b, &_duration| {
-                let backend = BenchmarkAudioBackend::new(false);
+                let backend = BenchmarkAudioBackend::new();
                 backend.set_simulated_size(audio_size);
 
                 b.iter(|| {
@@ -135,19 +100,11 @@ fn benchmark_recording_modes(c: &mut Criterion) {
                     recorder.start().expect("Failed to start recording");
 
                     // 録音停止とデータ取得
-                    let result = recorder.stop_raw().expect("Failed to stop recording");
+                    let result = recorder.stop().expect("Failed to stop recording");
 
-                    // 結果の検証とクリーンアップ
-                    match result {
-                        AudioData::File(path) => {
-                            // ファイルが実際に作成されたことを確認
-                            assert!(path.exists());
-                            // クリーンアップ
-                            let _ = std::fs::remove_file(&path);
-                            black_box(path);
-                        }
-                        _ => panic!("Expected file mode"),
-                    }
+                    // 結果の検証（ファイルモードはもう存在しないので、メモリモードとして動作）
+                    assert_eq!(result.0.len(), audio_size);
+                    black_box(result);
                 });
             },
         );
@@ -190,13 +147,13 @@ fn benchmark_with_monitoring(c: &mut Criterion) {
             BenchmarkId::new("without_monitor", duration_secs),
             duration_secs,
             |b, &_duration| {
-                let backend = BenchmarkAudioBackend::new(true);
+                let backend = BenchmarkAudioBackend::new();
                 backend.set_simulated_size(audio_size);
 
                 b.iter(|| {
                     let mut recorder = Recorder::new(backend.clone());
                     recorder.start().unwrap();
-                    let _ = recorder.stop_raw().unwrap();
+                    let _ = recorder.stop().unwrap();
                 });
             },
         );
@@ -206,7 +163,7 @@ fn benchmark_with_monitoring(c: &mut Criterion) {
             BenchmarkId::new("with_monitor", duration_secs),
             duration_secs,
             |b, &_duration| {
-                let backend = BenchmarkAudioBackend::new(true);
+                let backend = BenchmarkAudioBackend::new();
                 backend.set_simulated_size(audio_size);
                 let monitor = Arc::new(MemoryMonitor::new(500)); // 500MB threshold
 
@@ -214,7 +171,7 @@ fn benchmark_with_monitoring(c: &mut Criterion) {
                     let mut recorder =
                         Recorder::new(backend.clone()).with_memory_monitor(monitor.clone());
                     recorder.start().unwrap();
-                    let _ = recorder.stop_raw().unwrap();
+                    let _ = recorder.stop().unwrap();
                 });
             },
         );
