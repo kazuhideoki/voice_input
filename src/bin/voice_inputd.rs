@@ -264,7 +264,7 @@ async fn start_recording(
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(max_secs)) => {
                 if recorder.borrow().is_recording() {
-                    if let Ok(audio_data) = recorder.borrow_mut().stop_raw() {
+                    if let Ok(audio_data) = recorder.borrow_mut().stop() {
                         let result = RecordingResult {
                             audio_data: audio_data.into(),
                             duration_ms: 0, // Duration tracking not implemented yet
@@ -330,7 +330,7 @@ async fn stop_recording(
     }
 
     play_stop_sound();
-    let audio_data = recorder.borrow_mut().stop_raw()?;
+    let audio_data = recorder.borrow_mut().stop()?;
     c.state = RecState::Idle;
 
     // 開始時の保存値→引数→現在の選択の順でプロンプトを決定

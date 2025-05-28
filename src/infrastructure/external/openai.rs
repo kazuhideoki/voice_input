@@ -4,9 +4,6 @@ use crate::infrastructure::audio::cpal_backend::AudioData;
 use reqwest::multipart;
 use serde::Deserialize;
 use std::env;
-use std::path::Path;
-use tokio::fs::File;
-use tokio::io::AsyncReadExt;
 
 /// STT API のレスポンス JSON。
 #[derive(Debug, Deserialize)]
@@ -57,40 +54,6 @@ impl OpenAiClient {
         self.transcribe_with_part(part, None).await
     }
 
-    /// 既存のファイルパスベースのAPI（後方互換性）
-    pub async fn transcribe(&self, audio_file_path: &str) -> Result<String, String> {
-        self.transcribe_with_prompt(audio_file_path, None).await
-    }
-
-    /// ファイルパスとプロンプトで転写
-    pub async fn transcribe_with_prompt(
-        &self,
-        audio_file_path: &str,
-        prompt: Option<&str>,
-    ) -> Result<String, String> {
-        // ファイル読み込み
-        let path = Path::new(audio_file_path);
-        let file_name = path
-            .file_name()
-            .ok_or("Invalid file path")?
-            .to_string_lossy()
-            .into_owned();
-
-        let mut file = File::open(path)
-            .await
-            .map_err(|e| format!("Failed to open file: {}", e))?;
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)
-            .await
-            .map_err(|e| format!("Failed to read file: {}", e))?;
-
-        let file_part = multipart::Part::bytes(buffer)
-            .file_name(file_name)
-            .mime_str("audio/wav")
-            .map_err(|e| format!("Failed to create multipart: {}", e))?;
-
-        self.transcribe_with_part(file_part, prompt).await
-    }
 
     /// 共通の転写処理
     async fn transcribe_with_part(
@@ -143,28 +106,6 @@ impl OpenAiClient {
     }
 }
 
-/// WAV ファイルを STT API で文字起こしします。
-///
-/// * `audio_file_path` – 入力 WAV ファイルパス
-/// * `prompt`           – コンテキストプロンプト (任意)
-///
-/// STT モデルは `OPENAI_TRANSCRIBE_MODEL` が存在しない場合 `gpt-4o-mini-transcribe` を使用します。
-pub async fn transcribe_audio(
-    audio_file_path: &str,
-    prompt: Option<&str>,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let client = OpenAiClient::new().map_err(|e| {
-        Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error>
-    })?;
-
-    client
-        .transcribe_with_prompt(audio_file_path, prompt)
-        .await
-        .map_err(|e| {
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))
-                as Box<dyn std::error::Error>
-        })
-}
 
 // === Unit tests ==========================================================
 #[cfg(test)]
@@ -240,16 +181,4 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[tokio::test]
-    async fn test_backward_compatibility() {
-        unsafe { env::set_var("OPENAI_API_KEY", "test-key") };
-
-        let client = OpenAiClient::new().unwrap();
-
-        // Test that the old transcribe method still works
-        let result = client.transcribe("/tmp/test.wav").await;
-
-        // We expect an error since the file doesn't exist
-        assert!(result.is_err());
-    }
 }

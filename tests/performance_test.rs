@@ -68,7 +68,7 @@ async fn measure_performance(use_legacy: bool) -> Result<PerformanceMetrics, Box
     thread::sleep(Duration::from_secs(5));
 
     let recording_end = Instant::now();
-    let audio_data = recorder.stop_raw()?;
+    let audio_data = recorder.stop()?;
 
     // OpenAI API呼び出し
     let client = OpenAiClient::new()?;
@@ -213,7 +213,7 @@ async fn test_memory_usage() {
     // 30秒録音
     thread::sleep(Duration::from_secs(30));
 
-    match recorder.stop_raw() {
+    match recorder.stop() {
         Ok(audio_data) => {
             let data = audio_data.0;
             let size_mb = data.len() as f64 / (1024.0 * 1024.0);
