@@ -11,6 +11,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Audio Processing**: Memory-only processing (no temporary files)
 - **IPC**: JSON communication over Unix Domain Socket (`/tmp/voice_input.sock`)
 
+### Layered Architecture
+
+```
+Application Layer   - Business logic and use cases (StackService)
+Domain Layer       - Business rules and entities (Stack, StackInfo)
+Infrastructure Layer - External dependencies (Audio, OpenAI, UI)
+```
+
+- **Data Management**: In-memory only (no persistence by design)
+- **Separation of Concerns**: Clear boundaries between layers
+- **Testability**: Each layer can be tested independently
+
 ### Audio Data Flow
 
 ```
