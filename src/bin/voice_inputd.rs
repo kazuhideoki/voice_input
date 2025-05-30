@@ -201,6 +201,27 @@ async fn handle_client(
                 })
             }
             IpcCmd::Health => health_check().await,
+            // スタック関連のコマンド（Phase S1-1では未実装）
+            IpcCmd::EnableStackMode => Ok(IpcResp {
+                ok: false,
+                msg: "Stack mode not implemented yet".to_string(),
+            }),
+            IpcCmd::DisableStackMode => Ok(IpcResp {
+                ok: false,
+                msg: "Stack mode not implemented yet".to_string(),
+            }),
+            IpcCmd::PasteStack { number } => Ok(IpcResp {
+                ok: false,
+                msg: format!("Stack paste not implemented yet (requested: {})", number),
+            }),
+            IpcCmd::ListStacks => Ok(IpcResp {
+                ok: false,
+                msg: "Stack listing not implemented yet".to_string(),
+            }),
+            IpcCmd::ClearStacks => Ok(IpcResp {
+                ok: false,
+                msg: "Stack clearing not implemented yet".to_string(),
+            }),
         }
         .unwrap_or_else(|e| IpcResp {
             ok: false,
