@@ -206,3 +206,59 @@ fn config_set_moves_dict() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+#[test]
+fn test_stack_mode_command_parsing() {
+    use clap::Parser;
+    use voice_input::cli::Cli;
+
+    // Test CLI parsing without running the actual command
+    // This just tests the argument parsing logic
+    let args = ["voice_input", "stack-mode", "on"];
+    match Cli::try_parse_from(&args) {
+        Ok(_) => {} // Success - command structure is correct
+        Err(e) => panic!("Failed to parse stack-mode on command: {}", e),
+    }
+
+    let args = ["voice_input", "stack-mode", "off"];
+    match Cli::try_parse_from(&args) {
+        Ok(_) => {}
+        Err(e) => panic!("Failed to parse stack-mode off command: {}", e),
+    }
+}
+
+#[test]
+fn test_paste_command_parsing() {
+    use clap::Parser;
+    use voice_input::cli::Cli;
+
+    let args = ["voice_input", "paste", "5"];
+    match Cli::try_parse_from(&args) {
+        Ok(_) => {}
+        Err(e) => panic!("Failed to parse paste command: {}", e),
+    }
+}
+
+#[test]
+fn test_list_stacks_command_parsing() {
+    use clap::Parser;
+    use voice_input::cli::Cli;
+
+    let args = ["voice_input", "list-stacks"];
+    match Cli::try_parse_from(&args) {
+        Ok(_) => {}
+        Err(e) => panic!("Failed to parse list-stacks command: {}", e),
+    }
+}
+
+#[test]
+fn test_clear_stacks_command_parsing() {
+    use clap::Parser;
+    use voice_input::cli::Cli;
+
+    let args = ["voice_input", "clear-stacks"];
+    match Cli::try_parse_from(&args) {
+        Ok(_) => {}
+        Err(e) => panic!("Failed to parse clear-stacks command: {}", e),
+    }
+}

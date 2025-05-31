@@ -15,6 +15,7 @@
 //! - 最大同時転写数を `Semaphore` で制御
 
 use std::{
+    cell::RefCell,
     error::Error,
     fs,
     rc::Rc,
@@ -31,6 +32,7 @@ use tokio::{
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 use voice_input::{
+    application::StackService,
     domain::dict::{DictRepository, apply_replacements},
     domain::recorder::Recorder,
     infrastructure::{
@@ -111,6 +113,9 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         direct_input: false,
     }));
 
+    // StackService for multi-stacking functionality (single-thread with LocalSet)
+    let stack_service = Rc::new(RefCell::new(StackService::new()));
+
     // 転写ジョブ用チャンネルと同時実行セマフォ
     let (tx, rx) = mpsc::unbounded_channel::<(RecordingResult, bool, bool, bool)>();
     let sem = Arc::new(Semaphore::new(2));
@@ -141,9 +146,10 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         let (stream, _) = listener.accept().await?;
         let rec = recorder.clone();
         let ctx2 = ctx.clone();
+        let stack_service2 = stack_service.clone();
         let tx2 = tx.clone();
         spawn_local(async move {
-            let _ = handle_client(stream, rec, ctx2, tx2).await;
+            let _ = handle_client(stream, rec, ctx2, stack_service2, tx2).await;
         });
     }
 }
@@ -159,6 +165,7 @@ async fn handle_client(
     stream: UnixStream,
     recorder: Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>>,
     ctx: Arc<Mutex<RecCtx>>,
+    stack_service: Rc<RefCell<StackService>>,
     tx: mpsc::UnboundedSender<(RecordingResult, bool, bool, bool)>,
 ) -> Result<(), Box<dyn Error>> {
     let (r, w) = stream.into_split();
@@ -201,27 +208,86 @@ async fn handle_client(
                 })
             }
             IpcCmd::Health => health_check().await,
-            // スタック関連のコマンド（Phase S1-1では未実装）
-            IpcCmd::EnableStackMode => Ok(IpcResp {
-                ok: false,
-                msg: "Stack mode not implemented yet".to_string(),
-            }),
-            IpcCmd::DisableStackMode => Ok(IpcResp {
-                ok: false,
-                msg: "Stack mode not implemented yet".to_string(),
-            }),
-            IpcCmd::PasteStack { number } => Ok(IpcResp {
-                ok: false,
-                msg: format!("Stack paste not implemented yet (requested: {})", number),
-            }),
-            IpcCmd::ListStacks => Ok(IpcResp {
-                ok: false,
-                msg: "Stack listing not implemented yet".to_string(),
-            }),
-            IpcCmd::ClearStacks => Ok(IpcResp {
-                ok: false,
-                msg: "Stack clearing not implemented yet".to_string(),
-            }),
+            // スタック関連のコマンド
+            IpcCmd::EnableStackMode => {
+                let mut service = stack_service.borrow_mut();
+                service.enable_stack_mode();
+                Ok(IpcResp {
+                    ok: true,
+                    msg: "Stack mode enabled".to_string(),
+                })
+            }
+            IpcCmd::DisableStackMode => {
+                let mut service = stack_service.borrow_mut();
+                service.disable_stack_mode();
+                Ok(IpcResp {
+                    ok: true,
+                    msg: "Stack mode disabled".to_string(),
+                })
+            }
+            IpcCmd::PasteStack { number } => {
+                let stack_text = {
+                    let service = stack_service.borrow();
+                    service.get_stack(number).map(|stack| stack.text.clone())
+                };
+
+                if let Some(text) = stack_text {
+                    // Use the existing text_input functionality
+                    match text_input::type_text(&text).await {
+                        Ok(_) => Ok(IpcResp {
+                            ok: true,
+                            msg: format!("Pasted stack {}", number),
+                        }),
+                        Err(e) => Ok(IpcResp {
+                            ok: false,
+                            msg: format!("Failed to paste stack {}: {}", number, e),
+                        }),
+                    }
+                } else {
+                    Ok(IpcResp {
+                        ok: false,
+                        msg: format!("Stack {} not found", number),
+                    })
+                }
+            }
+            IpcCmd::ListStacks => {
+                let service = stack_service.borrow();
+                let stacks = service.list_stacks();
+                let mode_enabled = service.is_stack_mode_enabled();
+
+                if stacks.is_empty() {
+                    Ok(IpcResp {
+                        ok: true,
+                        msg: format!(
+                            "Stack mode: {} | No stacks",
+                            if mode_enabled { "enabled" } else { "disabled" }
+                        ),
+                    })
+                } else {
+                    let mut lines = vec![format!(
+                        "Stack mode: {}",
+                        if mode_enabled { "enabled" } else { "disabled" }
+                    )];
+                    for stack in stacks {
+                        lines.push(format!(
+                            "[{}] {} ({})",
+                            stack.number, stack.preview, stack.created_at
+                        ));
+                    }
+                    Ok(IpcResp {
+                        ok: true,
+                        msg: lines.join("\n"),
+                    })
+                }
+            }
+            IpcCmd::ClearStacks => {
+                let mut service = stack_service.borrow_mut();
+                service.clear_stacks();
+                Ok(IpcResp {
+                    ok: true,
+                    msg: "All stacks cleared".to_string(),
+                })
+            }
         }
         .unwrap_or_else(|e| IpcResp {
             ok: false,
