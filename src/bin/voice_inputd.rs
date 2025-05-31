@@ -117,7 +117,13 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     let stack_service = Rc::new(RefCell::new(StackService::new()));
 
     // 転写ジョブ用チャンネルと同時実行セマフォ
-    let (tx, rx) = mpsc::unbounded_channel::<(RecordingResult, bool, bool, bool)>();
+    let (tx, rx) = mpsc::unbounded_channel::<(
+        RecordingResult,
+        bool,
+        bool,
+        bool,
+        Option<Rc<RefCell<StackService>>>,
+    )>();
     let sem = Arc::new(Semaphore::new(2));
 
     // ─── 転写ワーカー ─────────────────────────────
@@ -125,7 +131,9 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         let worker_sem = sem.clone();
         let mut rx = rx;
         spawn_local(async move {
-            while let Some((result, paste, resume_music, direct_input)) = rx.recv().await {
+            while let Some((result, paste, resume_music, direct_input, stack_service)) =
+                rx.recv().await
+            {
                 let permit = match worker_sem.clone().acquire_owned().await {
                     Ok(p) => p,
                     Err(e) => {
@@ -134,7 +142,14 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                     }
                 };
                 spawn_local(async move {
-                    let _ = handle_transcription(result, paste, resume_music, direct_input).await;
+                    let _ = handle_transcription(
+                        result,
+                        paste,
+                        resume_music,
+                        direct_input,
+                        stack_service,
+                    )
+                    .await;
                     drop(permit);
                 });
             }
@@ -166,7 +181,13 @@ async fn handle_client(
     recorder: Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>>,
     ctx: Arc<Mutex<RecCtx>>,
     stack_service: Rc<RefCell<StackService>>,
-    tx: mpsc::UnboundedSender<(RecordingResult, bool, bool, bool)>,
+    tx: mpsc::UnboundedSender<(
+        RecordingResult,
+        bool,
+        bool,
+        bool,
+        Option<Rc<RefCell<StackService>>>,
+    )>,
 ) -> Result<(), Box<dyn Error>> {
     let (r, w) = stream.into_split();
     let mut reader = FramedRead::new(r, LinesCodec::new());
@@ -179,17 +200,57 @@ async fn handle_client(
                 paste,
                 prompt,
                 direct_input,
-            } => start_recording(recorder.clone(), &ctx, &tx, paste, prompt, direct_input).await,
-            IpcCmd::Stop => stop_recording(recorder.clone(), &ctx, &tx, true, None, false).await,
+            } => {
+                start_recording(
+                    recorder.clone(),
+                    &ctx,
+                    &tx,
+                    &stack_service,
+                    paste,
+                    prompt,
+                    direct_input,
+                )
+                .await
+            }
+            IpcCmd::Stop => {
+                stop_recording(
+                    recorder.clone(),
+                    &ctx,
+                    &tx,
+                    &stack_service,
+                    true,
+                    None,
+                    false,
+                )
+                .await
+            }
             IpcCmd::Toggle {
                 paste,
                 prompt,
                 direct_input,
             } => {
                 if ctx.lock().map_err(|e| e.to_string())?.state == RecState::Idle {
-                    start_recording(recorder.clone(), &ctx, &tx, paste, prompt, direct_input).await
+                    start_recording(
+                        recorder.clone(),
+                        &ctx,
+                        &tx,
+                        &stack_service,
+                        paste,
+                        prompt,
+                        direct_input,
+                    )
+                    .await
                 } else {
-                    stop_recording(recorder.clone(), &ctx, &tx, paste, prompt, direct_input).await
+                    stop_recording(
+                        recorder.clone(),
+                        &ctx,
+                        &tx,
+                        &stack_service,
+                        paste,
+                        prompt,
+                        direct_input,
+                    )
+                    .await
                 }
             }
             IpcCmd::Status => Ok(IpcResp {
@@ -309,7 +370,14 @@ async fn handle_client(
 async fn start_recording(
     recorder: Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>>,
     ctx: &Arc<Mutex<RecCtx>>,
-    tx: &mpsc::UnboundedSender<(RecordingResult, bool, bool, bool)>,
+    tx: &mpsc::UnboundedSender<(
+        RecordingResult,
+        bool,
+        bool,
+        bool,
+        Option<Rc<RefCell<StackService>>>,
+    )>,
+    stack_service: &Rc<RefCell<StackService>>,
     paste: bool,
     prompt: Option<String>,
     direct_input: bool,
@@ -346,6 +414,7 @@ async fn start_recording(
 
     let ctx_clone = ctx.clone();
     let tx_clone = tx.clone();
+    let stack_service_clone = stack_service.clone();
     spawn_local(async move {
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(max_secs)) => {
@@ -378,7 +447,13 @@ async fn start_recording(
                             // メモリモードではメタデータファイルを作成しない
                         }
 
-                        let _ = tx_clone.send((result, stored_paste, was_playing, stored_direct_input));
+                        // スタックモードが有効な場合はstack_serviceを渡す
+                        let stack_for_transcription = if stack_service_clone.borrow().is_stack_mode_enabled() {
+                            Some(stack_service_clone.clone())
+                        } else {
+                            None
+                        };
+                        let _ = tx_clone.send((result, stored_paste, was_playing, stored_direct_input, stack_for_transcription));
                         play_stop_sound();
                     }
                 }
@@ -400,7 +475,14 @@ async fn start_recording(
 async fn stop_recording(
     recorder: Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>>,
     ctx: &Arc<Mutex<RecCtx>>,
-    tx: &mpsc::UnboundedSender<(RecordingResult, bool, bool, bool)>,
+    tx: &mpsc::UnboundedSender<(
+        RecordingResult,
+        bool,
+        bool,
+        bool,
+        Option<Rc<RefCell<StackService>>>,
+    )>,
+    stack_service: &Rc<RefCell<StackService>>,
     paste: bool,
     prompt: Option<String>,
     direct_input: bool,
@@ -435,7 +517,20 @@ async fn stop_recording(
 
     let was_playing = c.music_was_playing;
     c.music_was_playing = false;
-    tx.send((result, paste, was_playing, direct_input))?;
+
+    // スタックモードが有効な場合はstack_serviceを渡す
+    let stack_for_transcription = if stack_service.borrow().is_stack_mode_enabled() {
+        Some(stack_service.clone())
+    } else {
+        None
+    };
+    tx.send((
+        result,
+        paste,
+        was_playing,
+        direct_input,
+        stack_for_transcription,
+    ))?;
 
     Ok(IpcResp {
         ok: true,
@@ -448,11 +543,13 @@ async fn stop_recording(
 /// WAV データを OpenAI STT API で文字起こしし、結果をクリップボードへ保存。
 /// `paste` フラグが `true` の場合は 80ms 後に ⌘V を送信して即貼り付けを行います。
 /// `direct_input` フラグが `true` の場合は直接入力を使用します。
+/// スタックモードが有効な場合、転写結果を自動的にスタックに保存します。
 async fn handle_transcription(
     result: RecordingResult,
     paste: bool,
     resume_music: bool,
     direct_input: bool,
+    stack_service: Option<Rc<RefCell<StackService>>>,
 ) -> Result<(), Box<dyn Error>> {
     // エラーが発生しても確実に音楽を再開するためにdeferパターンで実装
     let _defer_guard = scopeguard::guard(resume_music, |should_resume| {
@@ -491,6 +588,18 @@ async fn handle_transcription(
             let replaced = apply_replacements(&text, &mut entries);
             if let Err(e) = repo.save(&entries) {
                 eprintln!("dict save error: {e}");
+            }
+
+            // スタックモードが有効な場合は自動保存
+            if let Some(stack_service_ref) = &stack_service {
+                if stack_service_ref.borrow().is_stack_mode_enabled() {
+                    let stack_id = stack_service_ref.borrow_mut().save_stack(replaced.clone());
+                    println!(
+                        "Stack {} saved: {}",
+                        stack_id,
+                        replaced.chars().take(30).collect::<String>()
+                    );
+                }
             }
 
             // direct_inputでない場合のみクリップボードへコピー
@@ -641,12 +750,20 @@ mod tests {
             paste: false,
             direct_input: false,
         }));
-        let (tx, mut rx) = mpsc::unbounded_channel::<(RecordingResult, bool, bool, bool)>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<(
+            RecordingResult,
+            bool,
+            bool,
+            bool,
+            Option<Rc<RefCell<StackService>>>,
+        )>();
+        let stack_service = Rc::new(RefCell::new(StackService::new()));
 
         if start_recording(
             recorder.clone(),
             &ctx,
             &tx,
+            &stack_service,
             false,
             Some("hello".into()),
             false,
@@ -657,9 +774,9 @@ mod tests {
             eprintln!("⚠️  No audio device – prompt meta test skipped");
             return Ok(());
         }
-        stop_recording(recorder, &ctx, &tx, false, None, false).await?;
+        stop_recording(recorder, &ctx, &tx, &stack_service, false, None, false).await?;
 
-        let (result, _, _, _) = rx.recv().await.expect("result not queued");
+        let (result, _, _, _, _) = rx.recv().await.expect("result not queued");
         // メモリモードではメタデータファイルは作成されない
         assert!(result.audio_data.0.len() > 0); // 音声データが存在することのみ確認
         Ok(())
@@ -683,11 +800,26 @@ mod tests {
             paste: false,
             direct_input: false,
         }));
-        let (tx, mut rx) = mpsc::unbounded_channel::<(RecordingResult, bool, bool, bool)>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<(
+            RecordingResult,
+            bool,
+            bool,
+            bool,
+            Option<Rc<RefCell<StackService>>>,
+        )>();
+        let stack_service = Rc::new(RefCell::new(StackService::new()));
 
-        if start_recording(recorder.clone(), &ctx, &tx, false, None, false)
-            .await
-            .is_err()
+        if start_recording(
+            recorder.clone(),
+            &ctx,
+            &tx,
+            &stack_service,
+            false,
+            None,
+            false,
+        )
+        .await
+        .is_err()
         {
             eprintln!("⚠️  No audio device – timeout test skipped");
             return Ok(());
