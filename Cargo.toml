@@ -21,6 +21,10 @@ path = "src/bin/voice_inputd.rs"
 name = "migrate_dict"           # 辞書マイグレーション
 path = "src/bin/migrate_dict.rs"
 
+[[bin]]
+name = "voice_input_ui"         # UI専用プロセス
+path = "src/bin/voice_input_ui.rs"
+
 # ─────────────────────────────────────────
 # 依存クレート ― ご指定をそのまま使用
 # ─────────────────────────────────────────
@@ -38,6 +42,9 @@ tokio-util = { version = "0.7", features = ["codec"] }
 directories = "6.0.0"
 scopeguard = "1.2.0"
 enigo = "0.2.0"
+egui = "0.24"
+eframe = "0.24"
+chrono = "0.4"
 
 [features]
 default = []

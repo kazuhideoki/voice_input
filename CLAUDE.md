@@ -47,7 +47,7 @@ Infrastructure Layer - External dependencies (Audio, OpenAI, UI)
 - Use Rust 2024 edition
 - Follow Rust naming conventions: snake_case for variables/functions, CamelCase for types/structs
 - Error handling: Use Result type for functions that can fail, with descriptive error messages
-- Comments: Use doc comments (///) for public API and regular comments (//) for implementation details
+- Comments: Use doc comments (///) for public API, regular comments (//) for implementation details, and file comments (//!) at the top of files to describe the module's purpose
 - Organize imports: std first, then external crates, then local modules
 - Prefer Arc/Mutex for shared state in multithreaded contexts
 - Use proper error propagation with ? operator

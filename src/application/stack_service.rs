@@ -1,6 +1,9 @@
 use crate::domain::stack::{Stack, StackInfo};
+use crate::infrastructure::ui::{StackDisplayInfo, UiNotification};
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Weak;
+use std::time::SystemTime;
 
 /// スタック管理エラー型
 #[derive(Debug, Clone)]
@@ -56,10 +59,14 @@ impl fmt::Display for StackServiceError {
 
 impl std::error::Error for StackServiceError {}
 
+/// UI通知ハンドラーのトレイト
+pub trait UiNotificationHandler: Send + Sync {
+    fn notify(&self, notification: UiNotification) -> Result<(), String>;
+}
+
 /// スタック管理サービス
 ///
 /// **重要**: 完全にオンメモリ管理。スタックモード無効化またはデーモン再起動時に全データ消失。
-#[derive(Debug, Default)]
 pub struct StackService {
     /// スタックモードが有効かどうか
     mode_enabled: bool,
@@ -67,6 +74,14 @@ pub struct StackService {
     stacks: HashMap<u32, Stack>,
     /// 次に割り当てるスタック番号
     next_id: u32,
+    /// UI通知ハンドラー（オプショナル）
+    ui_handler: Option<Weak<dyn UiNotificationHandler>>,
+}
+
+impl Default for StackService {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StackService {
@@ -82,6 +97,51 @@ impl StackService {
             mode_enabled: false,
             stacks: HashMap::new(),
             next_id: 1,
+            ui_handler: None,
+        }
+    }
+
+    /// UI通知ハンドラーを設定
+    pub fn set_ui_handler(&mut self, handler: Weak<dyn UiNotificationHandler>) {
+        self.ui_handler = Some(handler);
+    }
+
+    /// UI通知を送信
+    fn notify_ui(&self, notification: UiNotification) {
+        if let Some(handler_weak) = &self.ui_handler {
+            if let Some(handler) = handler_weak.upgrade() {
+                let _ = handler.notify(notification);
+            }
+        }
+    }
+
+    /// StackをStackDisplayInfoに変換
+    fn stack_to_display_info(&self, stack: &Stack, is_active: bool) -> StackDisplayInfo {
+        let preview = if stack.text.chars().count() > Self::PREVIEW_LENGTH {
+            let truncated: String = stack.text.chars().take(Self::PREVIEW_LENGTH).collect();
+            format!("{}...", truncated)
+        } else {
+            stack.text.clone()
+        };
+
+        // SystemTimeを簡易的にフォーマット
+        let created_at =
+            if let Ok(duration) = stack.created_at.duration_since(SystemTime::UNIX_EPOCH) {
+                let secs = duration.as_secs();
+                let hours = (secs / 3600) % 24;
+                let minutes = (secs / 60) % 60;
+                let seconds = secs % 60;
+                format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+            } else {
+                "00:00:00".to_string()
+            };
+
+        StackDisplayInfo {
+            number: stack.id,
+            preview,
+            created_at,
+            is_active,
+            char_count: stack.text.len(),
         }
     }
 
@@ -93,6 +153,7 @@ impl StackService {
     /// スタックモードを有効化
     pub fn enable_stack_mode(&mut self) -> bool {
         self.mode_enabled = true;
+        self.notify_ui(UiNotification::ModeChanged(true));
         true
     }
 
@@ -101,6 +162,7 @@ impl StackService {
         self.mode_enabled = false;
         self.stacks.clear();
         self.next_id = 1;
+        self.notify_ui(UiNotification::ModeChanged(false));
         true
     }
 
@@ -108,8 +170,11 @@ impl StackService {
     pub fn save_stack(&mut self, text: String) -> u32 {
         let id = self.next_id;
         let stack = Stack::new(id, text);
+        let display_info = self.stack_to_display_info(&stack, false);
         self.stacks.insert(id, stack);
         self.next_id += 1;
+
+        self.notify_ui(UiNotification::StackAdded(display_info));
         id
     }
 
@@ -127,9 +192,11 @@ impl StackService {
 
         let id = self.next_id;
         let stack = Stack::new(id, text);
+        let display_info = self.stack_to_display_info(&stack, false);
         self.stacks.insert(id, stack);
         self.next_id += 1;
 
+        self.notify_ui(UiNotification::StackAdded(display_info));
         Ok(id)
     }
 
@@ -152,7 +219,10 @@ impl StackService {
         }
 
         match self.stacks.get(&number) {
-            Some(stack) => Ok(stack),
+            Some(stack) => {
+                self.notify_ui(UiNotification::StackAccessed(number));
+                Ok(stack)
+            }
             None => {
                 let available: Vec<u32> = self.stacks.keys().cloned().collect();
                 Err(StackServiceError::StackNotFound(number, available))
@@ -171,6 +241,7 @@ impl StackService {
     pub fn clear_stacks(&mut self) {
         self.stacks.clear();
         self.next_id = 1;
+        self.notify_ui(UiNotification::StacksCleared);
     }
 
     /// 確認メッセージ付きクリア
