@@ -582,8 +582,11 @@ async fn handle_transcription(
                 }
             }
 
+            // スタックモードが有効な場合は自動ペーストを無効化
+            let should_paste = paste && (stack_service.is_none() || !stack_service.as_ref().unwrap().borrow().is_stack_mode_enabled());
+
             // 即貼り付け
-            if paste {
+            if should_paste {
                 tokio::time::sleep(Duration::from_millis(80)).await;
 
                 if direct_input {

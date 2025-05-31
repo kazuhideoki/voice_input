@@ -187,8 +187,68 @@ Phase 3の完了により、マルチスタッキング機能は**Production Rea
 - 包括的テストカバレッジ
 - Production級の品質保証
 
+## 追加修正: スタッキングモード時の自動ペースト無効化
+
+### 🐛 問題の発見
+Phase 3完了後に発見された重要な動作問題：
+- スタッキングモードON時でも従来通り自動ペーストが実行される
+- 理想動作：スタッキングモード時は保存のみ、ペーストは手動実行
+
+### ✅ 修正内容
+
+#### 根本原因
+`handle_transcription`関数でスタック保存とペースト処理が独立して実行されていた
+
+#### 解決策実装
+`voice_inputd.rs:585-586`に条件分岐ロジックを追加：
+
+```rust
+// スタックモードが有効な場合は自動ペーストを無効化
+let should_paste = paste && (stack_service.is_none() || !stack_service.as_ref().unwrap().borrow().is_stack_mode_enabled());
+
+// 即貼り付け
+if should_paste {
+    // ペースト処理
+}
+```
+
+#### 動作確認
+- **スタッキングモードON**: 転写結果がスタックに保存のみ（ペーストなし）
+- **スタッキングモードOFF**: 従来通り自動ペースト実行
+
+### ✅ テスト追加
+
+新規テストファイル追加：`tests/stack_integration_test.rs`
+
+#### テストケース
+1. `test_stack_mode_prevents_auto_paste`: 基本動作確認
+2. `test_stack_mode_paste_logic_comprehensive`: 包括的なロジック検証
+   - paste=false時の動作
+   - スタックモードOFF + paste=true
+   - スタックモードON + paste=true（修正対象）
+   - レガシーモード（stack_service=None）
+
+#### テスト実行結果
+```bash
+cargo test test_stack_mode_prevents_auto_paste
+test test_stack_mode_prevents_auto_paste ... ok
+
+cargo test test_stack_mode_paste_logic_comprehensive  
+test test_stack_mode_paste_logic_comprehensive ... ok
+```
+
+### 📋 修正完了確認
+
+- ✅ 動作修正：スタッキングモード時の自動ペースト抑制
+- ✅ テスト追加：動作保証のための自動テスト実装
+- ✅ 型チェック：`cargo check`通過確認
+- ✅ 後方互換：既存機能への影響なし
+
+この修正により、マルチスタッキング機能の理想的な動作が実現されました。
+
 ---
 
 **Phase 3 完了日**: 2025年1月31日  
+**追加修正日**: 2025年1月31日  
 **次フェーズ**: Phase 4 - UI実装  
-**ステータス**: ✅ 完了 (100%)
+**ステータス**: ✅ 完了 (100%) + 追加修正完了
