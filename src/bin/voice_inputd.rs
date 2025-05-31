@@ -32,7 +32,7 @@ use tokio::{
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 use voice_input::{
-    application::StackService,
+    application::{StackService, UserFeedback},
     domain::dict::{DictRepository, apply_replacements},
     domain::recorder::Recorder,
     infrastructure::{
@@ -51,6 +51,15 @@ use voice_input::{
 
 /// デフォルトの最大録音秒数 (`VOICE_INPUT_MAX_SECS` が未設定の場合に適用)。
 pub const DEFAULT_MAX_RECORD_SECS: u64 = 30;
+
+/// 転写結果チャネルのメッセージ型
+type TranscriptionMessage = (
+    RecordingResult,
+    bool,
+    bool,
+    bool,
+    Option<Rc<RefCell<StackService>>>,
+);
 
 // ────────────────────────────────────────────────────────
 
@@ -181,13 +190,7 @@ async fn handle_client(
     recorder: Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>>,
     ctx: Arc<Mutex<RecCtx>>,
     stack_service: Rc<RefCell<StackService>>,
-    tx: mpsc::UnboundedSender<(
-        RecordingResult,
-        bool,
-        bool,
-        bool,
-        Option<Rc<RefCell<StackService>>>,
-    )>,
+    tx: mpsc::UnboundedSender<TranscriptionMessage>,
 ) -> Result<(), Box<dyn Error>> {
     let (r, w) = stream.into_split();
     let mut reader = FramedRead::new(r, LinesCodec::new());
@@ -273,9 +276,10 @@ async fn handle_client(
             IpcCmd::EnableStackMode => {
                 let mut service = stack_service.borrow_mut();
                 service.enable_stack_mode();
+                let count = service.list_stacks().len();
                 Ok(IpcResp {
                     ok: true,
-                    msg: "Stack mode enabled".to_string(),
+                    msg: UserFeedback::mode_status(true, count),
                 })
             }
             IpcCmd::DisableStackMode => {
@@ -283,21 +287,28 @@ async fn handle_client(
                 service.disable_stack_mode();
                 Ok(IpcResp {
                     ok: true,
-                    msg: "Stack mode disabled".to_string(),
+                    msg: UserFeedback::mode_status(false, 0),
                 })
             }
             IpcCmd::PasteStack { number } => {
-                let stack_text = {
+                let (stack_text, char_count, error) = {
                     let service = stack_service.borrow();
-                    service.get_stack(number).map(|stack| stack.text.clone())
+                    match service.get_stack_with_context(number) {
+                        Ok(stack) => (Some(stack.text.clone()), stack.text.len(), None),
+                        Err(e) => (None, 0, Some(e.to_string())),
+                    }
                 };
 
-                if let Some(text) = stack_text {
-                    // Use the existing text_input functionality
+                if let Some(error_msg) = error {
+                    Ok(IpcResp {
+                        ok: false,
+                        msg: error_msg,
+                    })
+                } else if let Some(text) = stack_text {
                     match text_input::type_text(&text).await {
                         Ok(_) => Ok(IpcResp {
                             ok: true,
-                            msg: format!("Pasted stack {}", number),
+                            msg: UserFeedback::paste_success(number, char_count),
                         }),
                         Err(e) => Ok(IpcResp {
                             ok: false,
@@ -307,46 +318,23 @@ async fn handle_client(
                 } else {
                     Ok(IpcResp {
                         ok: false,
-                        msg: format!("Stack {} not found", number),
+                        msg: format!("Unexpected error: stack {} not found", number),
                     })
                 }
             }
             IpcCmd::ListStacks => {
                 let service = stack_service.borrow();
-                let stacks = service.list_stacks();
-                let mode_enabled = service.is_stack_mode_enabled();
-
-                if stacks.is_empty() {
-                    Ok(IpcResp {
-                        ok: true,
-                        msg: format!(
-                            "Stack mode: {} | No stacks",
-                            if mode_enabled { "enabled" } else { "disabled" }
-                        ),
-                    })
-                } else {
-                    let mut lines = vec![format!(
-                        "Stack mode: {}",
-                        if mode_enabled { "enabled" } else { "disabled" }
-                    )];
-                    for stack in stacks {
-                        lines.push(format!(
-                            "[{}] {} ({})",
-                            stack.number, stack.preview, stack.created_at
-                        ));
-                    }
-                    Ok(IpcResp {
-                        ok: true,
-                        msg: lines.join("\n"),
-                    })
-                }
+                Ok(IpcResp {
+                    ok: true,
+                    msg: service.list_stacks_formatted(),
+                })
             }
             IpcCmd::ClearStacks => {
                 let mut service = stack_service.borrow_mut();
-                service.clear_stacks();
+                let (_, message) = service.clear_stacks_with_confirmation();
                 Ok(IpcResp {
                     ok: true,
-                    msg: "All stacks cleared".to_string(),
+                    msg: message,
                 })
             }
         }
@@ -370,13 +358,7 @@ async fn handle_client(
 async fn start_recording(
     recorder: Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>>,
     ctx: &Arc<Mutex<RecCtx>>,
-    tx: &mpsc::UnboundedSender<(
-        RecordingResult,
-        bool,
-        bool,
-        bool,
-        Option<Rc<RefCell<StackService>>>,
-    )>,
+    tx: &mpsc::UnboundedSender<TranscriptionMessage>,
     stack_service: &Rc<RefCell<StackService>>,
     paste: bool,
     prompt: Option<String>,
@@ -475,13 +457,7 @@ async fn start_recording(
 async fn stop_recording(
     recorder: Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>>,
     ctx: &Arc<Mutex<RecCtx>>,
-    tx: &mpsc::UnboundedSender<(
-        RecordingResult,
-        bool,
-        bool,
-        bool,
-        Option<Rc<RefCell<StackService>>>,
-    )>,
+    tx: &mpsc::UnboundedSender<TranscriptionMessage>,
     stack_service: &Rc<RefCell<StackService>>,
     paste: bool,
     prompt: Option<String>,
@@ -594,11 +570,8 @@ async fn handle_transcription(
             if let Some(stack_service_ref) = &stack_service {
                 if stack_service_ref.borrow().is_stack_mode_enabled() {
                     let stack_id = stack_service_ref.borrow_mut().save_stack(replaced.clone());
-                    println!(
-                        "Stack {} saved: {}",
-                        stack_id,
-                        replaced.chars().take(30).collect::<String>()
-                    );
+                    let preview = replaced.chars().take(30).collect::<String>();
+                    println!("{}", UserFeedback::stack_saved(stack_id, &preview));
                 }
             }
 

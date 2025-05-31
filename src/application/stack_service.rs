@@ -1,5 +1,60 @@
 use crate::domain::stack::{Stack, StackInfo};
 use std::collections::HashMap;
+use std::fmt;
+
+/// スタック管理エラー型
+#[derive(Debug, Clone)]
+pub enum StackServiceError {
+    /// 指定されたスタックが見つからない (requested_id, available_ids)
+    StackNotFound(u32, Vec<u32>),
+    /// スタックモードが無効
+    StackModeDisabled,
+    /// テキストが大きすぎる (text_size)
+    TextTooLarge(usize),
+}
+
+impl fmt::Display for StackServiceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StackServiceError::StackNotFound(id, available) => {
+                if available.is_empty() {
+                    write!(
+                        f,
+                        "❌ Stack {} not found. No stacks saved. Use 'voice_input start' to create stacks.",
+                        id
+                    )
+                } else {
+                    let available_str = available
+                        .iter()
+                        .map(|n| n.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    write!(
+                        f,
+                        "❌ Stack {} not found. Available stacks: {}",
+                        id, available_str
+                    )
+                }
+            }
+            StackServiceError::StackModeDisabled => {
+                write!(
+                    f,
+                    "❌ Stack mode is not enabled. Run 'voice_input stack-mode on' first."
+                )
+            }
+            StackServiceError::TextTooLarge(size) => {
+                write!(
+                    f,
+                    "❌ Text too large ({} characters). Maximum size is {} characters.",
+                    size,
+                    StackService::MAX_STACK_SIZE
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for StackServiceError {}
 
 /// スタック管理サービス
 ///
@@ -15,6 +70,13 @@ pub struct StackService {
 }
 
 impl StackService {
+    /// 最大スタック数（メモリ保護）
+    pub const MAX_STACKS: usize = 50;
+    /// 最大スタックサイズ（大容量テキスト制限）
+    pub const MAX_STACK_SIZE: usize = 10_000;
+    /// プレビュー長さ
+    pub const PREVIEW_LENGTH: usize = 40;
+
     pub fn new() -> Self {
         Self {
             mode_enabled: false,
@@ -51,9 +113,51 @@ impl StackService {
         id
     }
 
+    /// 最適化されたスタック保存（サイズチェック付き）
+    pub fn save_stack_optimized(&mut self, text: String) -> Result<u32, StackServiceError> {
+        // サイズチェック
+        if text.len() > Self::MAX_STACK_SIZE {
+            return Err(StackServiceError::TextTooLarge(text.len()));
+        }
+
+        // 容量チェック・自動削除
+        if self.stacks.len() >= Self::MAX_STACKS {
+            self.remove_oldest_stack();
+        }
+
+        let id = self.next_id;
+        let stack = Stack::new(id, text);
+        self.stacks.insert(id, stack);
+        self.next_id += 1;
+
+        Ok(id)
+    }
+
+    /// 最古のスタックを削除
+    fn remove_oldest_stack(&mut self) {
+        if let Some(&oldest_id) = self.stacks.keys().min() {
+            self.stacks.remove(&oldest_id);
+        }
+    }
+
     /// 指定番号のスタックを取得
     pub fn get_stack(&self, number: u32) -> Option<&Stack> {
         self.stacks.get(&number)
+    }
+
+    /// 指定番号のスタックを取得（エラーコンテキスト付き）
+    pub fn get_stack_with_context(&self, number: u32) -> Result<&Stack, StackServiceError> {
+        if !self.mode_enabled {
+            return Err(StackServiceError::StackModeDisabled);
+        }
+
+        match self.stacks.get(&number) {
+            Some(stack) => Ok(stack),
+            None => {
+                let available: Vec<u32> = self.stacks.keys().cloned().collect();
+                Err(StackServiceError::StackNotFound(number, available))
+            }
+        }
     }
 
     /// 全スタックの情報を取得
@@ -67,6 +171,69 @@ impl StackService {
     pub fn clear_stacks(&mut self) {
         self.stacks.clear();
         self.next_id = 1;
+    }
+
+    /// 確認メッセージ付きクリア
+    pub fn clear_stacks_with_confirmation(&mut self) -> (usize, String) {
+        let count = self.stacks.len();
+        self.clear_stacks();
+
+        let message = if count > 0 {
+            format!("✅ Cleared {} stack(s) from memory.", count)
+        } else {
+            "📝 No stacks to clear.".to_string()
+        };
+
+        (count, message)
+    }
+
+    /// フォーマット済み一覧表示
+    pub fn list_stacks_formatted(&self) -> String {
+        if self.stacks.is_empty() {
+            return "📝 No stacks saved. Use 'voice_input start' to create stacks.".to_string();
+        }
+
+        let mut output = format!("📚 {} stack(s) in memory:\n", self.stacks.len());
+
+        for info in self.list_stacks() {
+            output.push_str(&format!(
+                "  [{}] {} ({})\n",
+                info.number, info.preview, info.created_at
+            ));
+        }
+
+        output.push_str("\n💡 Use 'voice_input paste <number>' to paste any stack.");
+        output
+    }
+}
+
+/// ユーザーフィードバック
+pub struct UserFeedback;
+
+impl UserFeedback {
+    pub fn stack_saved(id: u32, preview: &str) -> String {
+        format!("📝 Stack {} saved: {}", id, preview)
+    }
+
+    pub fn paste_success(id: u32, chars: usize) -> String {
+        format!("✅ Pasted stack {} ({} characters)", id, chars)
+    }
+
+    pub fn stack_not_found(id: u32, available: &[u32]) -> String {
+        let list = available
+            .iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("❌ Stack {} not found. Available: [{}]", id, list)
+    }
+
+    pub fn mode_status(enabled: bool, count: usize) -> String {
+        if enabled {
+            format!("🟢 Stack mode ON ({} stacks in memory)", count)
+        } else {
+            "🔴 Stack mode OFF".to_string()
+        }
     }
 }
 
