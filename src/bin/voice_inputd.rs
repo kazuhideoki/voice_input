@@ -54,11 +54,11 @@ pub const DEFAULT_MAX_RECORD_SECS: u64 = 30;
 
 /// 転写結果チャネルのメッセージ型
 type TranscriptionMessage = (
-    RecordingResult,
-    bool,
-    bool,
-    bool,
-    Option<Rc<RefCell<StackService>>>,
+    RecordingResult,                       // 録音結果（音声データと録音時間）
+    bool,                                  // paste: 転写完了後に自動ペーストするか
+    bool,                                  // resume_music: 録音前にApple Musicが再生中だった場合、再開するか
+    bool,                                  // direct_input: 直接入力モード（クリップボード経由ではなくEnigoライブラリを使用）
+    Option<Rc<RefCell<StackService>>>,     // stack_service: スタックモード有効時のStackServiceインスタンス
 );
 
 // ────────────────────────────────────────────────────────
