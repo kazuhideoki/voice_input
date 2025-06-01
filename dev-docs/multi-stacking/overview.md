@@ -55,15 +55,34 @@ src/
 ├── infrastructure/
 │   ├── audio/
 │   ├── external/
-│   ├── storage/                    # 新規: スタック永続化層
+│   ├── storage/                    # 新規: スタック永続化層（将来実装）
 │   │   └── stack_storage.rs
 │   └── ui/                         # 新規: UI関連
 │       └── stack_manager_ui.rs
 ├── application/                    # 新規: アプリケーション層
 │   ├── mod.rs
-│   └── stack_service.rs            # スタック操作のビジネスロジック
+│   └── stack_service.rs            # スタック操作のビジネスロジック（オンメモリ管理）
 └── main.rs
 ```
+
+### アーキテクチャ設計方針
+
+#### レイヤードアーキテクチャの採用
+```
+Application Layer   (ビジネスロジック)
+    ↓
+Domain Layer       (ビジネスルール・エンティティ) 
+    ↓
+Infrastructure Layer (外部依存・実装詳細)
+```
+
+- **Domain Layer**: ビジネスルールとエンティティ（Stack, StackInfo等）
+- **Application Layer**: ユースケース実装とサービス（StackService等）
+- **Infrastructure Layer**: 外部依存（Audio, OpenAI, UI等）
+
+#### データ管理方針
+- **現在**: 完全オンメモリ管理（パフォーマンス優先）
+- **将来**: オプションとして永続化機能追加予定
 
 ### フロー図
 

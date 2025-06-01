@@ -15,6 +15,7 @@
 //! - 最大同時転写数を `Semaphore` で制御
 
 use std::{
+    cell::RefCell,
     error::Error,
     fs,
     rc::Rc,
@@ -31,6 +32,7 @@ use tokio::{
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 use voice_input::{
+    application::{StackService, UserFeedback},
     domain::dict::{DictRepository, apply_replacements},
     domain::recorder::Recorder,
     infrastructure::{
@@ -42,6 +44,7 @@ use voice_input::{
             sound::{pause_apple_music, play_start_sound, play_stop_sound, resume_apple_music},
             text_input,
         },
+        ui::{StackDisplayInfo, UiError, UiNotification, UiProcessManager},
     },
     ipc::{IpcCmd, IpcResp, RecordingResult, socket_path},
     load_env,
@@ -49,6 +52,16 @@ use voice_input::{
 
 /// デフォルトの最大録音秒数 (`VOICE_INPUT_MAX_SECS` が未設定の場合に適用)。
 pub const DEFAULT_MAX_RECORD_SECS: u64 = 30;
+
+/// 転写結果チャネルのメッセージ型
+type TranscriptionMessage = (
+    RecordingResult,                       // 録音結果（音声データと録音時間）
+    bool,                                  // paste: 転写完了後に自動ペーストするか
+    bool, // resume_music: 録音前にApple Musicが再生中だった場合、再開するか
+    bool, // direct_input: 直接入力モード（クリップボード経由ではなくEnigoライブラリを使用）
+    Option<Rc<RefCell<StackService>>>, // stack_service: スタックモード有効時のStackServiceインスタンス
+    Option<Rc<RefCell<UiProcessManager>>>, // ui_manager: UI通知用
+);
 
 // ────────────────────────────────────────────────────────
 
@@ -111,8 +124,18 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         direct_input: false,
     }));
 
+    // StackService for multi-stacking functionality (single-thread with LocalSet)
+    let stack_service = Rc::new(RefCell::new(StackService::new()));
+
+    // UI Process Manager for stack visualization (separate process - gracefully handles failure)
+    let ui_manager = Rc::new(RefCell::new(UiProcessManager::new()));
+
+    // Note: UI integration is complex due to thread safety requirements
+    // For Phase 4, we'll implement basic UI without full integration
+    // Full integration will be completed in subsequent phases
+
     // 転写ジョブ用チャンネルと同時実行セマフォ
-    let (tx, rx) = mpsc::unbounded_channel::<(RecordingResult, bool, bool, bool)>();
+    let (tx, rx) = mpsc::unbounded_channel::<TranscriptionMessage>();
     let sem = Arc::new(Semaphore::new(2));
 
     // ─── 転写ワーカー ─────────────────────────────
@@ -120,7 +143,9 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         let worker_sem = sem.clone();
         let mut rx = rx;
         spawn_local(async move {
-            while let Some((result, paste, resume_music, direct_input)) = rx.recv().await {
+            while let Some((result, paste, resume_music, direct_input, stack_service, ui_manager)) =
+                rx.recv().await
+            {
                 let permit = match worker_sem.clone().acquire_owned().await {
                     Ok(p) => p,
                     Err(e) => {
@@ -129,7 +154,15 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                     }
                 };
                 spawn_local(async move {
-                    let _ = handle_transcription(result, paste, resume_music, direct_input).await;
+                    let _ = handle_transcription(
+                        result,
+                        paste,
+                        resume_music,
+                        direct_input,
+                        stack_service,
+                        ui_manager,
+                    )
+                    .await;
                     drop(permit);
                 });
             }
@@ -141,9 +174,11 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         let (stream, _) = listener.accept().await?;
         let rec = recorder.clone();
         let ctx2 = ctx.clone();
+        let stack_service2 = stack_service.clone();
+        let ui_manager2 = ui_manager.clone();
         let tx2 = tx.clone();
         spawn_local(async move {
-            let _ = handle_client(stream, rec, ctx2, tx2).await;
+            let _ = handle_client(stream, rec, ctx2, stack_service2, ui_manager2, tx2).await;
         });
     }
 }
@@ -155,11 +190,14 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
 /// 1 クライアントとの IPC セッションを処理します。
 /// CLI からの JSON 文字列を `IpcCmd` にデシリアライズし、
 /// 状態とレコーダを操作して `IpcResp` を返送します。
+#[allow(clippy::await_holding_refcell_ref)]
 async fn handle_client(
     stream: UnixStream,
     recorder: Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>>,
     ctx: Arc<Mutex<RecCtx>>,
-    tx: mpsc::UnboundedSender<(RecordingResult, bool, bool, bool)>,
+    stack_service: Rc<RefCell<StackService>>,
+    ui_manager: Rc<RefCell<UiProcessManager>>,
+    tx: mpsc::UnboundedSender<TranscriptionMessage>,
 ) -> Result<(), Box<dyn Error>> {
     let (r, w) = stream.into_split();
     let mut reader = FramedRead::new(r, LinesCodec::new());
@@ -172,17 +210,61 @@ async fn handle_client(
                 paste,
                 prompt,
                 direct_input,
-            } => start_recording(recorder.clone(), &ctx, &tx, paste, prompt, direct_input).await,
-            IpcCmd::Stop => stop_recording(recorder.clone(), &ctx, &tx, true, None, false).await,
+            } => {
+                start_recording(
+                    recorder.clone(),
+                    &ctx,
+                    &tx,
+                    &stack_service,
+                    &ui_manager,
+                    paste,
+                    prompt,
+                    direct_input,
+                )
+                .await
+            }
+            IpcCmd::Stop => {
+                stop_recording(
+                    recorder.clone(),
+                    &ctx,
+                    &tx,
+                    &stack_service,
+                    &ui_manager,
+                    true,
+                    None,
+                    false,
+                )
+                .await
+            }
             IpcCmd::Toggle {
                 paste,
                 prompt,
                 direct_input,
             } => {
                 if ctx.lock().map_err(|e| e.to_string())?.state == RecState::Idle {
-                    start_recording(recorder.clone(), &ctx, &tx, paste, prompt, direct_input).await
+                    start_recording(
+                        recorder.clone(),
+                        &ctx,
+                        &tx,
+                        &stack_service,
+                        &ui_manager,
+                        paste,
+                        prompt,
+                        direct_input,
+                    )
+                    .await
                 } else {
-                    stop_recording(recorder.clone(), &ctx, &tx, paste, prompt, direct_input).await
+                    stop_recording(
+                        recorder.clone(),
+                        &ctx,
+                        &tx,
+                        &stack_service,
+                        &ui_manager,
+                        paste,
+                        prompt,
+                        direct_input,
+                    )
+                    .await
                 }
             }
             IpcCmd::Status => Ok(IpcResp {
@@ -201,6 +283,118 @@ async fn handle_client(
                 })
             }
             IpcCmd::Health => health_check().await,
+            // スタック関連のコマンド
+            IpcCmd::EnableStackMode => {
+                let count = {
+                    let mut service = stack_service.borrow_mut();
+                    service.enable_stack_mode();
+                    service.list_stacks().len()
+                };
+
+                // UI別プロセスとして起動（macOS EventLoop制約を回避）
+                let ui_start_result = {
+                    if let Ok(mut manager) = ui_manager.try_borrow_mut() {
+                        let result = manager.start_ui().await;
+                        drop(manager); // 明示的にドロップ
+                        result
+                    } else {
+                        Err(UiError::ChannelClosed)
+                    }
+                };
+
+                if let Err(e) = ui_start_result {
+                    eprintln!("UI process start failed (continuing without UI): {}", e);
+                } else {
+                    // UI起動後に状態変更を通知
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    if let Ok(manager) = ui_manager.try_borrow() {
+                        if let Err(e) = manager.notify(UiNotification::ModeChanged(true)) {
+                            eprintln!("Failed to notify UI of mode change: {:?}", e);
+                        }
+                    }
+                }
+
+                Ok(IpcResp {
+                    ok: true,
+                    msg: UserFeedback::mode_status(true, count),
+                })
+            }
+            IpcCmd::DisableStackMode => {
+                let mut service = stack_service.borrow_mut();
+                service.disable_stack_mode();
+
+                // UI プロセス停止を試行
+                if let Ok(mut manager) = ui_manager.try_borrow_mut() {
+                    // 状態変更を通知してからプロセス停止
+                    let _ = manager.notify(UiNotification::ModeChanged(false));
+                    if let Err(e) = manager.stop_ui() {
+                        eprintln!("UI process stop failed: {}", e);
+                    }
+                }
+
+                Ok(IpcResp {
+                    ok: true,
+                    msg: UserFeedback::mode_status(false, 0),
+                })
+            }
+            IpcCmd::PasteStack { number } => {
+                let (stack_text, char_count, error) = {
+                    let service = stack_service.borrow();
+                    match service.get_stack_with_context(number) {
+                        Ok(stack) => (Some(stack.text.clone()), stack.text.len(), None),
+                        Err(e) => (None, 0, Some(e.to_string())),
+                    }
+                };
+
+                if let Some(error_msg) = error {
+                    Ok(IpcResp {
+                        ok: false,
+                        msg: error_msg,
+                    })
+                } else if let Some(text) = stack_text {
+                    // ペースト実行前にUI通知
+                    if let Ok(manager) = ui_manager.try_borrow() {
+                        let _ = manager.notify(UiNotification::StackAccessed(number));
+                    }
+
+                    match text_input::type_text(&text).await {
+                        Ok(_) => Ok(IpcResp {
+                            ok: true,
+                            msg: UserFeedback::paste_success(number, char_count),
+                        }),
+                        Err(e) => Ok(IpcResp {
+                            ok: false,
+                            msg: format!("Failed to paste stack {}: {}", number, e),
+                        }),
+                    }
+                } else {
+                    Ok(IpcResp {
+                        ok: false,
+                        msg: format!("Unexpected error: stack {} not found", number),
+                    })
+                }
+            }
+            IpcCmd::ListStacks => {
+                let service = stack_service.borrow();
+                Ok(IpcResp {
+                    ok: true,
+                    msg: service.list_stacks_formatted(),
+                })
+            }
+            IpcCmd::ClearStacks => {
+                let mut service = stack_service.borrow_mut();
+                let (_, message) = service.clear_stacks_with_confirmation();
+
+                // UI にクリア通知
+                if let Ok(manager) = ui_manager.try_borrow() {
+                    let _ = manager.notify(UiNotification::StacksCleared);
+                }
+
+                Ok(IpcResp {
+                    ok: true,
+                    msg: message,
+                })
+            }
         }
         .unwrap_or_else(|e| IpcResp {
             ok: false,
@@ -219,10 +413,13 @@ async fn handle_client(
 /// * `paste` – 転写完了後に ⌘V ペーストを行うか
 /// * `prompt` – 追加プロンプト。選択テキストより優先される
 /// * `direct_input` – 直接入力を使用するか（クリップボードを使わない）
+#[allow(clippy::too_many_arguments)]
 async fn start_recording(
     recorder: Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>>,
     ctx: &Arc<Mutex<RecCtx>>,
-    tx: &mpsc::UnboundedSender<(RecordingResult, bool, bool, bool)>,
+    tx: &mpsc::UnboundedSender<TranscriptionMessage>,
+    stack_service: &Rc<RefCell<StackService>>,
+    ui_manager: &Rc<RefCell<UiProcessManager>>,
     paste: bool,
     prompt: Option<String>,
     direct_input: bool,
@@ -259,6 +456,8 @@ async fn start_recording(
 
     let ctx_clone = ctx.clone();
     let tx_clone = tx.clone();
+    let stack_service_clone = stack_service.clone();
+    let ui_manager_clone = ui_manager.clone();
     spawn_local(async move {
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(max_secs)) => {
@@ -291,7 +490,13 @@ async fn start_recording(
                             // メモリモードではメタデータファイルを作成しない
                         }
 
-                        let _ = tx_clone.send((result, stored_paste, was_playing, stored_direct_input));
+                        // スタックモードが有効な場合はstack_serviceを渡す
+                        let stack_for_transcription = if stack_service_clone.borrow().is_stack_mode_enabled() {
+                            Some(stack_service_clone.clone())
+                        } else {
+                            None
+                        };
+                        let _ = tx_clone.send((result, stored_paste, was_playing, stored_direct_input, stack_for_transcription, Some(ui_manager_clone)));
                         play_stop_sound();
                     }
                 }
@@ -310,10 +515,13 @@ async fn start_recording(
 
 /// 録音停止処理。WAV を保存して転写キューに送信します。
 /// プロンプトは開始時に取得したもの → 引数 → 停止時の選択テキストの順で使われます。
+#[allow(clippy::too_many_arguments)]
 async fn stop_recording(
     recorder: Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>>,
     ctx: &Arc<Mutex<RecCtx>>,
-    tx: &mpsc::UnboundedSender<(RecordingResult, bool, bool, bool)>,
+    tx: &mpsc::UnboundedSender<TranscriptionMessage>,
+    stack_service: &Rc<RefCell<StackService>>,
+    ui_manager: &Rc<RefCell<UiProcessManager>>,
     paste: bool,
     prompt: Option<String>,
     direct_input: bool,
@@ -348,7 +556,21 @@ async fn stop_recording(
 
     let was_playing = c.music_was_playing;
     c.music_was_playing = false;
-    tx.send((result, paste, was_playing, direct_input))?;
+
+    // スタックモードが有効な場合はstack_serviceを渡す
+    let stack_for_transcription = if stack_service.borrow().is_stack_mode_enabled() {
+        Some(stack_service.clone())
+    } else {
+        None
+    };
+    tx.send((
+        result,
+        paste,
+        was_playing,
+        direct_input,
+        stack_for_transcription,
+        Some(ui_manager.clone()),
+    ))?;
 
     Ok(IpcResp {
         ok: true,
@@ -361,11 +583,14 @@ async fn stop_recording(
 /// WAV データを OpenAI STT API で文字起こしし、結果をクリップボードへ保存。
 /// `paste` フラグが `true` の場合は 80ms 後に ⌘V を送信して即貼り付けを行います。
 /// `direct_input` フラグが `true` の場合は直接入力を使用します。
+/// スタックモードが有効な場合、転写結果を自動的にスタックに保存します。
 async fn handle_transcription(
     result: RecordingResult,
     paste: bool,
     resume_music: bool,
     direct_input: bool,
+    stack_service: Option<Rc<RefCell<StackService>>>,
+    ui_manager: Option<Rc<RefCell<UiProcessManager>>>,
 ) -> Result<(), Box<dyn Error>> {
     // エラーが発生しても確実に音楽を再開するためにdeferパターンで実装
     let _defer_guard = scopeguard::guard(resume_music, |should_resume| {
@@ -406,6 +631,33 @@ async fn handle_transcription(
                 eprintln!("dict save error: {e}");
             }
 
+            // スタックモードが有効な場合は自動保存
+            if let Some(stack_service_ref) = &stack_service {
+                if stack_service_ref.borrow().is_stack_mode_enabled() {
+                    let stack_id = stack_service_ref.borrow_mut().save_stack(replaced.clone());
+                    let preview = replaced.chars().take(30).collect::<String>();
+                    println!("{}", UserFeedback::stack_saved(stack_id, &preview));
+
+                    // UI にスタック追加を通知
+                    if let Some(ui_manager_ref) = &ui_manager {
+                        if let Ok(manager) = ui_manager_ref.try_borrow() {
+                            let stack_info = StackDisplayInfo {
+                                number: stack_id,
+                                preview: preview.clone(),
+                                created_at: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs()
+                                    .to_string(),
+                                is_active: false,
+                                char_count: replaced.len(),
+                            };
+                            let _ = manager.notify(UiNotification::StackAdded(stack_info));
+                        }
+                    }
+                }
+            }
+
             // direct_inputでない場合のみクリップボードへコピー
             if !direct_input {
                 if let Err(e) = set_clipboard(&replaced).await {
@@ -413,8 +665,17 @@ async fn handle_transcription(
                 }
             }
 
+            // スタックモードが有効な場合は自動ペーストを無効化
+            let should_paste = paste
+                && (stack_service.is_none()
+                    || !stack_service
+                        .as_ref()
+                        .unwrap()
+                        .borrow()
+                        .is_stack_mode_enabled());
+
             // 即貼り付け
-            if paste {
+            if should_paste {
                 tokio::time::sleep(Duration::from_millis(80)).await;
 
                 if direct_input {
@@ -554,12 +815,16 @@ mod tests {
             paste: false,
             direct_input: false,
         }));
-        let (tx, mut rx) = mpsc::unbounded_channel::<(RecordingResult, bool, bool, bool)>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<TranscriptionMessage>();
+        let stack_service = Rc::new(RefCell::new(StackService::new()));
+        let ui_manager = Rc::new(RefCell::new(UiProcessManager::new()));
 
         if start_recording(
             recorder.clone(),
             &ctx,
             &tx,
+            &stack_service,
+            &ui_manager,
             false,
             Some("hello".into()),
             false,
@@ -570,9 +835,19 @@ mod tests {
             eprintln!("⚠️  No audio device – prompt meta test skipped");
             return Ok(());
         }
-        stop_recording(recorder, &ctx, &tx, false, None, false).await?;
+        stop_recording(
+            recorder,
+            &ctx,
+            &tx,
+            &stack_service,
+            &ui_manager,
+            false,
+            None,
+            false,
+        )
+        .await?;
 
-        let (result, _, _, _) = rx.recv().await.expect("result not queued");
+        let (result, _, _, _, _, _) = rx.recv().await.expect("result not queued");
         // メモリモードではメタデータファイルは作成されない
         assert!(result.audio_data.0.len() > 0); // 音声データが存在することのみ確認
         Ok(())
@@ -596,11 +871,22 @@ mod tests {
             paste: false,
             direct_input: false,
         }));
-        let (tx, mut rx) = mpsc::unbounded_channel::<(RecordingResult, bool, bool, bool)>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<TranscriptionMessage>();
+        let stack_service = Rc::new(RefCell::new(StackService::new()));
+        let ui_manager = Rc::new(RefCell::new(UiProcessManager::new()));
 
-        if start_recording(recorder.clone(), &ctx, &tx, false, None, false)
-            .await
-            .is_err()
+        if start_recording(
+            recorder.clone(),
+            &ctx,
+            &tx,
+            &stack_service,
+            &ui_manager,
+            false,
+            None,
+            false,
+        )
+        .await
+        .is_err()
         {
             eprintln!("⚠️  No audio device – timeout test skipped");
             return Ok(());
