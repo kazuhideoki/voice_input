@@ -2,7 +2,7 @@
 
 ## 概要
 
-現在のCLIベースのコマンド制御から、StackingModeをより効率的に操作するためのショートカットキー制御機能を追加する設計案。
+StackingMode有効時に自動でショートカットキー制御を連動させ、スタック操作の効率性を劇的に向上させる設計案。スタッキングモード時の課題に特化したソリューションを提供する。
 
 ## 現状の課題分析
 
@@ -25,42 +25,60 @@ StackingModeでは以下のコマンドが頻繁に使用される：
 ### 解決後の簡素化
 
 **現在**: 5つのコマンド × 複数の番号 = 多数のキーバインド設定
-**提案後**: `voice_input shortcut-mode toggle` の1つのキーバインド設定のみ
+**提案後**: `voice_input stack-mode on` の1つのキーバインド設定のみ（ショートカットキーが自動連動）
 
-## ショートカットキーモードの提案
+## ショートカットキーモード連動の提案
 
-### 設計コンセプト
+### 設計コンセプト（問題特化型アプローチ）
 
-デーモン側でグローバルキーボードフックを実装し、以下のワークフローを実現：
+**核心思想**: スタッキングモード時にキー操作が増加する問題を、その発生時点で自動解決
 
-1. **統合されたスタック操作UI**: 一つのキーでスタック一覧表示 + 数字キーでダイレクトペースト
-2. **モード切り替え**: ショートカットキーモードの有効/無効を単一キーで制御
-3. **視覚的フィードバック**: 現在のモード状態とスタック情報をオーバーレイ表示
+1. **自動連動**: スタックモード有効時にショートカットキーも自動有効化
+2. **問題特化**: 通常音声入力は既存ワークフローを維持
+3. **操作一元化**: 必要な時に必要な機能が自動提供される
 
-### 提案するキーバインディング
+### Why: 根本課題の解決
 
-#### モード切り替え（CLI経由）
+**従来の問題**:
+
+- スタッキングモード時のみキー操作増加
+- 2つのモード管理（スタック + ショートカット）が認知負荷
+
+**解決アプローチ**:
+
+- 課題発生時点（スタック有効化）で自動的に解決策提供
+- ユーザーは「スタッキングモード」のみを意識
+- 通常音声入力への影響ゼロ
+
+### What: 自動連動システム
+
+#### 操作構造（簡素化）
 
 ```bash
-voice_input shortcut-mode toggle  # ショートカットキーモードのon/off切り替え
+# 通常音声入力（変更なし）
+voice_input toggle
+
+# スタッキング（ショートカットキー自動連動）
+voice_input stack-mode on/off
+
+# フォールバック（既存CLI併用可能）
+voice_input paste <number>
 ```
 
-#### ショートカット操作（ショートカットキーモード有効時のみ）
+#### ショートカットキー（スタックモード有効時に自動有効化）
 
-**重要**: 以下のキーは ショートカットキーモード有効時のみ機能し、無効時は通常のキー入力として動作
+**自動連動**: スタックモード有効時のみ以下のキーが機能
 
 - `cmd + R` : 録音開始/停止（トグル）
-- `cmd + M` : スタックモード有効/無効（トグル）
 - `cmd + S` : スタック一覧表示オーバーレイ
 - `cmd + 1-9` : 対応する番号のスタックを直接ペースト
 - `cmd + C` : 全スタッククリア
 
-**設計方針**:
+**利点**:
 
-- **シンプル**: モード切り替えは全てCLI経由で統一
-- **安全**: 誤操作でキーフックが残る心配なし
-- **完結**: ショートカットモード内で録音・スタック操作が完結
-- **一貫性**: 既存のstack-mode等と同じパターン
+- **操作削減**: 2操作 → 1操作（`stack-mode on` + `shortcut-mode toggle` → `stack-mode on`のみ）
+- **認知軽減**: スタッキングモードのみ管理、ショートカット意識不要
+- **自動最適化**: 必要な時に必要な機能が自動提供
 
 **キー上書きの制限**:
 
@@ -82,19 +100,25 @@ voice_input shortcut-mode toggle  # ショートカットキーモードのon/of
 ##### 1. Rust native approach
 
 - **ライブラリ**: `rdev` または `device_query`
-- **実装詳細**:
+- **インターフェース**:
+
   ```rust
-  // OSの低レベルキーボードAPIを直接呼び出し
-  rdev::listen(move |event| {
-      match event.event_type {
-          EventType::KeyPress(key) => {
-              if shortcut_mode_enabled && key == Key::KeyS {
-                  show_stack_overlay();
-              }
-          }
+  // StackServiceでの自動連動
+  impl StackService {
+      pub fn enable_stack_mode(&mut self) -> bool {
+          self.mode_enabled = true;
+          self.hotkey_manager.enable_shortcuts(); // 自動連動
+          true
       }
-  });
+
+      pub fn disable_stack_mode(&mut self) -> bool {
+          self.mode_enabled = false;
+          self.hotkey_manager.disable_shortcuts(); // 自動連動
+          true
+      }
+  }
   ```
+
 - **仕組み**: OSの低レベルキーボードAPIを直接呼び出してグローバルキーイベントをキャプチャ
 - **pros**: 単一バイナリ、最高性能、他プロセス不要
 - **cons**: macOSアクセシビリティ権限必須、実装が複雑、権限エラー時の対応が困難
@@ -108,15 +132,24 @@ voice_input shortcut-mode toggle  # ショートカットキーモードのon/of
 ##### 3. Hybrid approach (推奨)
 
 - **組み合わせ**: Rustベースの軽量キーフック + 既存IPC
-- **実装詳細**:
+- **インターフェース**:
 
   ```rust
-  // voice_input_hotkey バイナリ
-  fn main() {
-      setup_global_hooks(); // 基本的なキーフックのみ
+  // HotkeyManagerトレイト
+  trait HotkeyManager {
+      fn enable_shortcuts(&mut self) -> Result<(), HotkeyError>;
+      fn disable_shortcuts(&mut self) -> Result<(), HotkeyError>;
+      fn is_enabled(&self) -> bool;
+  }
 
-      // 検出したキーを既存IPCで送信
-      send_cmd(&IpcCmd::PasteStack { number: 1 });
+  // IPCとの連携
+  fn handle_shortcut_key(key: Key) {
+      match key {
+          Key::R => send_cmd(&IpcCmd::Toggle { /* ... */ }),
+          Key::S => show_stack_overlay(),
+          Key::Num(n) => send_cmd(&IpcCmd::PasteStack { number: n }),
+          _ => {}
+      }
   }
   ```
 
@@ -194,31 +227,33 @@ src/
 
 **合計推定**: 11-17日
 
-## 段階的実装計画
+## 実装方針
 
-### Phase 1: Basic Hotkey Support
+### 自動連動アーキテクチャ
 
-- グローバルキーフック基盤実装
-- 基本的な録音開始/停止のショートカット
-- IPC経由での既存コマンド呼び出し
+**核心設計**:
 
-### Phase 2: Stack Operations
+1. **StackService拡張**: スタックモード切り替え時にショートカットキーを自動制御
+2. **透明性**: ユーザーからはスタッキングモードのみが見える
+3. **フォールバック**: 既存CLIコマンドとの併用可能
 
-- スタック一覧表示オーバーレイ
-- 数字キーによる直接ペースト
-- 視覚的フィードバック機能
+### 状態管理
 
-### Phase 3: Advanced Features
+```rust
+// 統合状態管理
+pub struct VoiceInputState {
+    stack_mode: bool,
+    shortcuts_enabled: bool, // stack_modeに自動連動
+    recording: bool,
+}
 
-- モード切り替えの統合
-- カスタマイズ可能キーバインド
-- パフォーマンス最適化
-
-### Phase 4: Polish & Integration
-
-- エラーハンドリング強化
-- ドキュメント整備
-- 既存CLIとの併用最適化
+impl VoiceInputState {
+    fn enable_stack_mode(&mut self) {
+        self.stack_mode = true;
+        self.shortcuts_enabled = true; // 自動連動
+    }
+}
+```
 
 ## リスク評価
 
@@ -256,20 +291,37 @@ src/
 - **pros**: 高いカスタマイズ性
 - **cons**: 起動コスト、セキュリティ考慮
 
-## 結論
+## 結論: 問題特化型ソリューション
 
-ショートカットキーモードは **技術的に実現可能** であり、**ユーザビリティの大幅な向上** が期待できる。
+**核心価値**: スタッキング時の課題に特化した根本解決
 
-**推奨アプローチ:**
+### 設計の優位性
 
+1. **問題の本質解決**: キー操作増加の発生時点で自動的に解決策提供
+2. **操作効率の劇的改善**: 2操作 → 1操作への簡素化
+3. **認知負荷軽減**: スタッキングモードのみ管理、ショートカット意識不要
+4. **通常音声入力への影響ゼロ**: 既存ワークフローを完全保持
+
+### 推奨実装アプローチ
+
+**自動連動システム**:
+
+- StackServiceでの統合状態管理
 - Hybrid approach（Rust + 既存IPC）
-- 段階的実装による リスク軽減
-- 既存CLIとの併用によるフォールバック確保
+- 透明な自動制御とフォールバック確保
 
-**次のステップ:**
+### 期待効果
 
-1. Phase 1の技術検証（キーフック基盤）
-2. macOSアクセシビリティ権限のUX設計
-3. プロトタイプ実装とユーザビリティテスト
+**ユーザビリティ**: ★★★★★
 
-実装により、StackingModeの使用体験は劇的に改善され、voice_inputの付加価値を大幅に向上させる可能性が高い。
+- スタッキングモード使用体験の劇的改善
+- 学習コスト最小化（既存概念の拡張）
+- 直感的な問題解決
+
+**技術的価値**: ★★★★☆
+
+- 既存アーキテクチャとの自然な統合
+- 段階的実装による安全性確保
+- voice_inputの差別化要素強化
+
+この自動連動設計により、スタッキングモードが実用的で魅力的な機能となり、voice_inputの付加価値を大幅に向上させることができる。
