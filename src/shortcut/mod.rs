@@ -74,19 +74,15 @@ impl ShortcutService {
         {
             // アクセシビリティ権限の詳細チェック
             use crate::infrastructure::permissions::{PermissionChecker, PermissionStatus};
-            
+
             match AccessibilityPermissions::check_status() {
                 PermissionStatus::Granted => Ok(()),
-                PermissionStatus::Denied => {
-                    Err(ShortcutError::PermissionDenied(
-                        AccessibilityPermissions::get_error_message()
-                    ))
-                }
-                PermissionStatus::NotDetermined => {
-                    Err(ShortcutError::PermissionDenied(
-                        "アクセシビリティ権限が未確定です。初回設定が必要です。".to_string()
-                    ))
-                }
+                PermissionStatus::Denied => Err(ShortcutError::PermissionDenied(
+                    AccessibilityPermissions::get_error_message(),
+                )),
+                PermissionStatus::NotDetermined => Err(ShortcutError::PermissionDenied(
+                    "アクセシビリティ権限が未確定です。初回設定が必要です。".to_string(),
+                )),
             }
         }
     }
@@ -94,7 +90,7 @@ impl ShortcutService {
     /// 権限拒否時のユーザーガイダンス文字列を取得
     pub fn handle_permission_denied() -> String {
         use crate::infrastructure::permissions::PermissionChecker;
-        
+
         format!(
             "{}\n\n{}",
             AccessibilityPermissions::get_error_message(),
@@ -110,7 +106,10 @@ impl ShortcutService {
     /// # Returns
     /// * `Ok(())` - 正常に開始された場合
     /// * `Err(ShortcutError)` - 各種エラー（権限、システム要件、初期化失敗等）
-    pub async fn start(&mut self, ipc_sender: mpsc::UnboundedSender<IpcCmd>) -> Result<(), ShortcutError> {
+    pub async fn start(
+        &mut self,
+        ipc_sender: mpsc::UnboundedSender<IpcCmd>,
+    ) -> Result<(), ShortcutError> {
         // 既に起動済みの場合はエラー
         if self.enabled {
             return Err(ShortcutError::SystemRequirementNotMet(
@@ -147,12 +146,9 @@ impl ShortcutService {
 
         if let Some(handle) = self.key_handler.take() {
             handle.abort();
-            
+
             // タスクの完了を待機（タイムアウト付き）
-            match tokio::time::timeout(
-                tokio::time::Duration::from_millis(1000),
-                handle
-            ).await {
+            match tokio::time::timeout(tokio::time::Duration::from_millis(1000), handle).await {
                 Ok(_) => {
                     println!("KeyHandler task completed gracefully");
                 }
@@ -216,15 +212,15 @@ mod tests {
     async fn test_ipc_channel_closed_error() {
         let mut service = ShortcutService::new();
         let (tx, rx) = mpsc::unbounded_channel();
-        
+
         // チャンネルを閉じる
         drop(rx);
-        
+
         let result = service.start(tx).await;
-        
+
         // CI環境では権限エラー、実環境ではチャンネルエラーまたは権限エラー
         assert!(result.is_err());
-        
+
         if let Err(error) = result {
             println!("Expected error occurred: {}", error);
         }
@@ -233,13 +229,13 @@ mod tests {
     #[test]
     fn test_system_requirements_check() {
         let result = ShortcutService::check_system_requirements();
-        
+
         #[cfg(feature = "ci-test")]
         {
             // CI環境では常に成功
             assert!(result.is_ok());
         }
-        
+
         #[cfg(not(feature = "ci-test"))]
         {
             // 実環境では権限状態次第
@@ -286,7 +282,7 @@ mod tests {
             // 成功した場合、2回目の起動はエラーになるべき
             let result2 = service.start(tx).await;
             assert!(result2.is_err());
-            
+
             if let Err(ShortcutError::SystemRequirementNotMet(msg)) = result2 {
                 assert!(msg.contains("already enabled"));
             } else {

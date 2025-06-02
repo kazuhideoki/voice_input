@@ -26,7 +26,7 @@ impl KeyHandler {
     /// # Arguments
     /// * `ipc_sender` - IPCコマンドを送信するためのSender
     pub fn new(ipc_sender: mpsc::UnboundedSender<IpcCmd>) -> Self {
-        Self { 
+        Self {
             ipc_sender,
             cmd_pressed: Arc::new(Mutex::new(false)),
         }
@@ -48,7 +48,7 @@ impl KeyHandler {
 
         // rdev::grab開始 - クロージャーで共有状態をキャプチャ
         let event_handler = Self::create_event_handler(shared_state);
-        
+
         if let Err(error) = grab(event_handler) {
             return Err(format!("キーイベント抑制の開始に失敗: {:?}", error));
         }
@@ -252,7 +252,7 @@ mod tests {
     fn test_key_handler_state_structure() {
         let (_tx, _rx) = mpsc::unbounded_channel();
         let handler = KeyHandler::new(_tx.clone());
-        
+
         // 共有状態が正しく作成されることを確認
         let shared_state = KeyHandlerState {
             cmd_pressed: handler.cmd_pressed.clone(),
@@ -261,7 +261,7 @@ mod tests {
 
         // 複製可能であることを確認
         let _cloned_state = shared_state.clone();
-        
+
         // 初期状態が正しく設定されることを確認
         assert!(!KeyHandler::is_cmd_pressed(&shared_state.cmd_pressed));
     }
@@ -271,7 +271,7 @@ mod tests {
         // 複数のKeyHandlerインスタンスが独立して動作することを確認
         let (_tx1, _rx1) = mpsc::unbounded_channel();
         let (_tx2, _rx2) = mpsc::unbounded_channel();
-        
+
         let handler1 = KeyHandler::new(_tx1);
         let handler2 = KeyHandler::new(_tx2);
 
@@ -280,7 +280,7 @@ mod tests {
             let mut pressed1 = handler1.cmd_pressed.lock().unwrap();
             *pressed1 = true;
         }
-        
+
         assert!(KeyHandler::is_cmd_pressed(&handler1.cmd_pressed));
         assert!(!KeyHandler::is_cmd_pressed(&handler2.cmd_pressed));
     }

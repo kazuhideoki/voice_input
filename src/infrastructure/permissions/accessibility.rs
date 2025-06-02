@@ -1,5 +1,5 @@
 //! macOSアクセシビリティ権限チェック専用実装
-//! 
+//!
 //! # 概要
 //! CoreFoundation FFIを使用してアクセシビリティ権限の状態確認と
 //! システム環境設定への誘導を行います。
@@ -31,7 +31,7 @@ impl PermissionChecker for AccessibilityPermissions {
         {
             use core_foundation::base::CFTypeRef;
             use std::ptr;
-            
+
             unsafe {
                 let trusted = ffi::AXIsProcessTrusted();
                 if trusted {
@@ -62,10 +62,12 @@ impl PermissionChecker for AccessibilityPermissions {
         #[cfg(not(feature = "ci-test"))]
         {
             use std::process::Command;
-            
+
             // macOS 13以降の新しいシステム設定
             let result = Command::new("open")
-                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+                .arg(
+                    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+                )
                 .output();
 
             match result {
@@ -75,7 +77,7 @@ impl PermissionChecker for AccessibilityPermissions {
                     let fallback = Command::new("open")
                         .arg("/System/Library/PreferencePanes/Security.prefPane")
                         .output();
-                    
+
                     match fallback {
                         Ok(fb_output) if fb_output.status.success() => Ok(()),
                         _ => Err("Failed to open System Preferences".to_string()),
@@ -90,14 +92,16 @@ impl PermissionChecker for AccessibilityPermissions {
     fn get_error_message() -> String {
         "❌ アクセシビリティ権限が必要です。\n\
          システム環境設定 → セキュリティとプライバシー → プライバシー → アクセシビリティ\n\
-         で本アプリケーションに権限を付与してください。".to_string()
+         で本アプリケーションに権限を付与してください。"
+            .to_string()
     }
 
     /// 権限要求の理由説明
     fn get_permission_description() -> String {
         "Voice Inputでキーボードショートカット機能を使用するために、\n\
          アクセシビリティ権限が必要です。\n\
-         この権限により、Cmd+Rでの録音開始/停止、Cmd+数字でのスタックペーストが可能になります。".to_string()
+         この権限により、Cmd+Rでの録音開始/停止、Cmd+数字でのスタックペーストが可能になります。"
+            .to_string()
     }
 }
 
@@ -109,7 +113,7 @@ mod ffi {
     unsafe extern "C" {
         /// アクセシビリティ権限が信頼されているかチェック
         pub fn AXIsProcessTrusted() -> bool;
-        
+
         /// アクセシビリティ権限要求付きチェック
         /// options: kAXTrustedCheckOptionPrompt を含むCFDictionary
         pub fn AXIsProcessTrustedWithOptions(options: CFTypeRef) -> bool;
@@ -124,10 +128,10 @@ mod tests {
     fn test_accessibility_permissions_simple_check() {
         // CI環境では常にtrue、実環境では実際の権限状態
         let result = AccessibilityPermissions::check();
-        
+
         #[cfg(feature = "ci-test")]
         assert!(result, "CI mode should always return true");
-        
+
         #[cfg(not(feature = "ci-test"))]
         {
             // 実環境では結果は権限状態次第
@@ -138,10 +142,14 @@ mod tests {
     #[test]
     fn test_permission_status_check() {
         let status = AccessibilityPermissions::check_status();
-        
+
         #[cfg(feature = "ci-test")]
-        assert_eq!(status, PermissionStatus::Granted, "CI mode should return Granted");
-        
+        assert_eq!(
+            status,
+            PermissionStatus::Granted,
+            "CI mode should return Granted"
+        );
+
         #[cfg(not(feature = "ci-test"))]
         {
             // 実環境では結果は実際の権限状態次第

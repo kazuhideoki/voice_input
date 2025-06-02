@@ -1,5 +1,5 @@
 //! 権限管理モジュール - macOS権限システムの統一インターフェース
-//! 
+//!
 //! # 概要
 //! macOS権限システムの複雑性を抽象化し、将来的な拡張性を提供します。
 //! Phase 2では`AccessibilityPermissions`のみを実装しますが、
@@ -24,13 +24,13 @@ pub enum PermissionStatus {
 pub trait PermissionChecker {
     /// 権限状態を確認
     fn check_status() -> PermissionStatus;
-    
+
     /// システム環境設定を開く
     fn open_system_preferences() -> Result<(), String>;
-    
+
     /// ユーザー向けエラーメッセージを取得
     fn get_error_message() -> String;
-    
+
     /// 権限要求の理由説明を取得
     fn get_permission_description() -> String;
 }

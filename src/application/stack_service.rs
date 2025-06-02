@@ -276,43 +276,6 @@ impl StackService {
         output.push_str("\n💡 Use 'voice_input paste <number>' to paste any stack.");
         output
     }
-
-    /// ショートカット機能が有効化されたことを通知
-    /// Phase 2で追加: ショートカット連携インターフェース
-    pub fn notify_shortcut_enabled(&mut self) -> Result<(), String> {
-        if !self.mode_enabled {
-            return Err("Stack mode is not enabled".to_string());
-        }
-
-        println!("📍 Shortcut functionality enabled for stack mode");
-        self.notify_ui(UiNotification::ModeChanged(true));
-        Ok(())
-    }
-
-    /// ショートカット機能が無効化されたことを通知
-    /// Phase 2で追加: ショートカット連携インターフェース
-    pub fn notify_shortcut_disabled(&mut self) -> Result<(), String> {
-        println!("📍 Shortcut functionality disabled");
-        // ショートカット無効化はスタックモード自体には影響しない
-        Ok(())
-    }
-
-    /// 指定番号のショートカットペースト対象テキストを取得
-    /// Phase 2で追加: ショートカット連携インターフェース
-    pub fn get_shortcut_paste_target(&self, number: u32) -> Option<String> {
-        if !self.mode_enabled {
-            return None;
-        }
-
-        self.stacks.get(&number).map(|stack| stack.text.clone())
-    }
-
-    /// ショートカット統合の整合性を検証
-    /// Phase 2で追加: ショートカット連携インターフェース
-    pub fn validate_shortcut_integration(&self) -> bool {
-        // スタックモードが有効で、スタックが存在する場合に統合が有効
-        self.mode_enabled && !self.stacks.is_empty()
-    }
 }
 
 /// ユーザーフィードバック
@@ -388,75 +351,5 @@ mod tests {
 
         service.clear_stacks();
         assert_eq!(service.list_stacks().len(), 0);
-    }
-
-    #[test]
-    fn test_shortcut_integration_methods() {
-        let mut service = StackService::new();
-        
-        // スタックモード無効時のテスト
-        assert!(service.notify_shortcut_enabled().is_err());
-        assert_eq!(service.get_shortcut_paste_target(1), None);
-        assert!(!service.validate_shortcut_integration());
-        
-        // スタックモード有効化
-        service.enable_stack_mode();
-        
-        // スタック無し状態
-        assert!(service.notify_shortcut_enabled().is_ok());
-        assert!(!service.validate_shortcut_integration());
-        
-        // スタック追加後
-        service.save_stack("Test content".to_string());
-        assert!(service.validate_shortcut_integration());
-        assert_eq!(service.get_shortcut_paste_target(1), Some("Test content".to_string()));
-        assert_eq!(service.get_shortcut_paste_target(999), None);
-        
-        // ショートカット無効化テスト
-        assert!(service.notify_shortcut_disabled().is_ok());
-    }
-
-    #[test]
-    fn test_shortcut_paste_target_retrieval() {
-        let mut service = StackService::new();
-        service.enable_stack_mode();
-        
-        // 複数スタック追加
-        service.save_stack("First stack content".to_string());
-        service.save_stack("Second stack content".to_string());
-        service.save_stack("Third stack content".to_string());
-        
-        // 各スタックの取得確認
-        assert_eq!(service.get_shortcut_paste_target(1), Some("First stack content".to_string()));
-        assert_eq!(service.get_shortcut_paste_target(2), Some("Second stack content".to_string()));
-        assert_eq!(service.get_shortcut_paste_target(3), Some("Third stack content".to_string()));
-        
-        // 存在しないスタック
-        assert_eq!(service.get_shortcut_paste_target(4), None);
-        assert_eq!(service.get_shortcut_paste_target(0), None);
-    }
-
-    #[test]
-    fn test_shortcut_integration_with_mode_changes() {
-        let mut service = StackService::new();
-        
-        // スタック追加してからモード有効化
-        service.save_stack("Test".to_string());
-        assert!(!service.validate_shortcut_integration()); // モード無効
-        assert_eq!(service.get_shortcut_paste_target(1), None); // モード無効
-        
-        // モード有効化
-        service.enable_stack_mode();
-        assert!(service.validate_shortcut_integration()); // モード有効+スタックあり
-        assert!(service.get_shortcut_paste_target(1).is_some()); // モード有効
-        
-        // スタッククリア
-        service.clear_stacks();
-        assert!(!service.validate_shortcut_integration()); // モード有効だがスタック無し
-        
-        // モード無効化
-        service.disable_stack_mode();
-        service.save_stack("Another test".to_string());
-        assert!(!service.validate_shortcut_integration()); // モード無効
     }
 }

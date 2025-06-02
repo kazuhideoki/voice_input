@@ -27,7 +27,7 @@ use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use tokio::{
     net::{UnixListener, UnixStream},
-    sync::{Semaphore, mpsc, oneshot, Mutex as TokioMutex},
+    sync::{Mutex as TokioMutex, Semaphore, mpsc, oneshot},
     task::{LocalSet, spawn_local},
     time::Duration,
 };
@@ -453,17 +453,14 @@ async fn handle_client(
                 }
 
                 // ショートカットサービス自動起動（スタックモード連動）
-                let should_start = !shortcut_service
-                    .lock()
-                    .await
-                    .is_enabled();
-                    
+                let should_start = !shortcut_service.lock().await.is_enabled();
+
                 if should_start {
                     println!("Starting shortcut service with stack mode...");
                     let tx_guard = shortcut_tx.lock().await;
                     let tx_clone = tx_guard.clone();
                     drop(tx_guard); // Explicitly drop the guard before calling start
-                    
+
                     let mut service = shortcut_service.lock().await;
                     if let Err(e) = service.start(tx_clone).await {
                         eprintln!("Failed to start shortcut service: {}", e);
@@ -492,11 +489,8 @@ async fn handle_client(
                 }
 
                 // ショートカットサービス自動停止（スタックモード連動）
-                let should_stop = shortcut_service
-                    .lock()
-                    .await
-                    .is_enabled();
-                    
+                let should_stop = shortcut_service.lock().await.is_enabled();
+
                 if should_stop {
                     println!("Stopping shortcut service with stack mode...");
                     let mut service = shortcut_service.lock().await;
