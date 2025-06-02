@@ -1,8 +1,8 @@
 //! キーイベント抑制テストプログラム
-//! 
+//!
 //! rdev unstable_grab機能を使用してキーイベントを抑制するプロトタイプ実装
 
-use rdev::{grab, Event, EventType, Key};
+use rdev::{Event, EventType, Key, grab};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
@@ -36,7 +36,7 @@ fn main() {
 
 fn handle_key_event(event: Event) -> Option<Event> {
     let cmd_state = CMD_PRESSED.get().unwrap();
-    
+
     match event.event_type {
         EventType::KeyPress(key) => {
             // Cmdキーの状態を更新
@@ -45,7 +45,7 @@ fn handle_key_event(event: Event) -> Option<Event> {
                     *pressed = true;
                 }
             }
-            
+
             // Cmdキーが押されているかチェックしてイベント抑制判定
             if is_cmd_pressed(cmd_state) {
                 match key {
@@ -125,7 +125,7 @@ fn handle_key_event(event: Event) -> Option<Event> {
         }
         _ => {}
     }
-    
+
     // デフォルトはパススルー（イベントを他のアプリケーションに送信）
     Some(event)
 }
@@ -151,7 +151,10 @@ fn trigger_voice_recording_simulation() {
 
 // スタックアクセス機能のシミュレーション
 fn trigger_stack_access_simulation(number: u8) {
-    println!("  → スタック {} アクセス機能を実行（シミュレーション）", number);
+    println!(
+        "  → スタック {} アクセス機能を実行（シミュレーション）",
+        number
+    );
 }
 
 fn check_accessibility_permission() {

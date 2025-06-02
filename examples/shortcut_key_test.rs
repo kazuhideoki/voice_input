@@ -1,4 +1,4 @@
-use rdev::{listen, Event, EventType, Key};
+use rdev::{Event, EventType, Key, listen};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
@@ -34,7 +34,7 @@ fn main() {
 
 fn callback(event: Event) {
     let cmd_state = CMD_PRESSED.get().unwrap();
-    
+
     match event.event_type {
         EventType::KeyPress(key) => {
             // Cmdキーの状態を更新
@@ -43,7 +43,7 @@ fn callback(event: Event) {
                     *pressed = true;
                 }
             }
-            
+
             // Cmdキーが押されているかチェック
             if is_cmd_pressed(cmd_state) {
                 match key {
@@ -119,7 +119,7 @@ fn is_cmd_pressed(cmd_state: &Arc<Mutex<bool>>) -> bool {
 
 fn check_accessibility_permission() {
     println!("アクセシビリティ権限の確認...");
-    
+
     // macOSのアクセシビリティ権限確認は通常CoreFoundationを使用しますが、
     // rdevライブラリが内部的に処理するため、ここでは基本的な情報のみ表示
     println!("注意: このプログラムを実行するには、アクセシビリティ権限が必要です。");

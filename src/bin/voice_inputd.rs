@@ -23,6 +23,7 @@ use std::{
 };
 
 use arboard::Clipboard;
+use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use tokio::{
     net::{UnixListener, UnixStream},
@@ -48,10 +49,24 @@ use voice_input::{
     },
     ipc::{IpcCmd, IpcResp, RecordingResult, socket_path},
     load_env,
+    shortcut::ShortcutService,
 };
 
 /// デフォルトの最大録音秒数 (`VOICE_INPUT_MAX_SECS` が未設定の場合に適用)。
 pub const DEFAULT_MAX_RECORD_SECS: u64 = 30;
+
+/// voice_inputdのCLI引数
+#[derive(Parser)]
+#[command(name = "voice_inputd")]
+#[command(about = "Voice Input Daemon - Background service for voice input processing")]
+struct Args {
+    /// ショートカットキー機能を有効化
+    #[arg(
+        long,
+        help = "Enable shortcut key functionality (requires accessibility permissions)"
+    )]
+    enable_shortcuts: bool,
+}
 
 /// 転写結果チャネルのメッセージ型
 type TranscriptionMessage = (
@@ -99,13 +114,15 @@ struct RecCtx {
 async fn main() -> Result<(), Box<dyn Error>> {
     load_env();
 
+    let args = Args::parse();
+
     // `spawn_local` はこのスレッドだけで動かしたい非同期ジョブを登録する。LocalSet はその実行エンジン
     let local = LocalSet::new();
-    local.run_until(async_main()).await
+    local.run_until(async_main(args)).await
 }
 
 /// ソケット待受・クライアントハンドリング・転写ワーカーを起動する本体。
-async fn async_main() -> Result<(), Box<dyn Error>> {
+async fn async_main(args: Args) -> Result<(), Box<dyn Error>> {
     // 既存ソケットがあれば削除して再バインド
     let path = socket_path();
     let _ = fs::remove_file(&path);
@@ -134,9 +151,130 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     // For Phase 4, we'll implement basic UI without full integration
     // Full integration will be completed in subsequent phases
 
+    // ShortcutService for keyboard shortcut handling
+    let mut shortcut_service = ShortcutService::new();
+
     // 転写ジョブ用チャンネルと同時実行セマフォ
     let (tx, rx) = mpsc::unbounded_channel::<TranscriptionMessage>();
     let sem = Arc::new(Semaphore::new(2));
+
+    // ショートカットキー機能の初期化（CLI引数で有効化された場合）
+    if args.enable_shortcuts {
+        println!("Initializing shortcut service...");
+
+        // IPCコマンド用チャンネル（ショートカットキー→IPC）
+        let (shortcut_tx, shortcut_rx) = mpsc::unbounded_channel::<IpcCmd>();
+
+        // ShortcutServiceを起動
+        match shortcut_service.start(shortcut_tx).await {
+            Ok(_) => {
+                println!("Shortcut service started successfully");
+
+                // ショートカットからのIPCコマンド処理ワーカーを起動
+                let recorder_clone = recorder.clone();
+                let ctx_clone = ctx.clone();
+                let stack_service_clone = stack_service.clone();
+                let ui_manager_clone = ui_manager.clone();
+                let tx_clone = tx.clone();
+
+                spawn_local(async move {
+                    let mut rx = shortcut_rx;
+                    while let Some(cmd) = rx.recv().await {
+                        println!("Processing shortcut command: {:?}", cmd);
+
+                        // IPCコマンドを処理（handle_clientと同じロジック）
+                        let _result = match cmd {
+                            IpcCmd::Toggle {
+                                paste,
+                                prompt,
+                                direct_input,
+                            } => {
+                                if ctx_clone.lock().map_err(|e| e.to_string()).unwrap().state
+                                    == RecState::Idle
+                                {
+                                    start_recording(
+                                        recorder_clone.clone(),
+                                        &ctx_clone,
+                                        &tx_clone,
+                                        &stack_service_clone,
+                                        &ui_manager_clone,
+                                        paste,
+                                        prompt,
+                                        direct_input,
+                                    )
+                                    .await
+                                } else {
+                                    stop_recording(
+                                        recorder_clone.clone(),
+                                        &ctx_clone,
+                                        &tx_clone,
+                                        &stack_service_clone,
+                                        &ui_manager_clone,
+                                        paste,
+                                        prompt,
+                                        direct_input,
+                                    )
+                                    .await
+                                }
+                            }
+                            IpcCmd::PasteStack { number } => {
+                                let (stack_text, char_count, error) = {
+                                    let service = stack_service_clone.borrow();
+                                    match service.get_stack_with_context(number) {
+                                        Ok(stack) => {
+                                            (Some(stack.text.clone()), stack.text.len(), None)
+                                        }
+                                        Err(e) => (None, 0, Some(e.to_string())),
+                                    }
+                                };
+
+                                if let Some(error_msg) = error {
+                                    Err(error_msg.into())
+                                } else if let Some(text) = stack_text {
+                                    // ペースト実行前にUI通知
+                                    if let Ok(manager) = ui_manager_clone.try_borrow() {
+                                        let _ =
+                                            manager.notify(UiNotification::StackAccessed(number));
+                                    }
+
+                                    match text_input::type_text(&text).await {
+                                        Ok(_) => {
+                                            println!(
+                                                "{}",
+                                                UserFeedback::paste_success(number, char_count)
+                                            );
+                                            Ok(IpcResp {
+                                                ok: true,
+                                                msg: format!("Pasted stack {}", number),
+                                            })
+                                        }
+                                        Err(e) => {
+                                            Err(format!("Failed to paste stack {}: {}", number, e)
+                                                .into())
+                                        }
+                                    }
+                                } else {
+                                    Err(format!("Unexpected error: stack {} not found", number)
+                                        .into())
+                                }
+                            }
+                            _ => {
+                                println!("Unsupported shortcut command: {:?}", cmd);
+                                Ok(IpcResp {
+                                    ok: false,
+                                    msg: "Unsupported command".to_string(),
+                                })
+                            }
+                        };
+                    }
+                });
+            }
+            Err(e) => {
+                eprintln!("Failed to start shortcut service: {}", e);
+                eprintln!("Continuing without shortcut functionality...");
+            }
+        }
+    }
 
     // ─── 転写ワーカー ─────────────────────────────
     {
