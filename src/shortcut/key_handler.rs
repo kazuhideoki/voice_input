@@ -1,18 +1,23 @@
 //! キーイベント処理とIPC送信を担当するKeyHandler
 //! rdev unstable_grab機能を使用してキーイベントを抑制し、IPCコマンドに変換
+//! Phase 2: グローバル状態を排除してインスタンスベースのアーキテクチャに変更
 
 use crate::ipc::IpcCmd;
 use rdev::{Event, EventType, Key, grab};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
-// グローバル状態管理（Phase 0パターンを踏襲）
-static CMD_PRESSED: OnceLock<Arc<Mutex<bool>>> = OnceLock::new();
-static IPC_SENDER: OnceLock<mpsc::UnboundedSender<IpcCmd>> = OnceLock::new();
+/// コールバック関数で使用する共有状態
+#[derive(Clone)]
+struct KeyHandlerState {
+    cmd_pressed: Arc<Mutex<bool>>,
+    ipc_sender: mpsc::UnboundedSender<IpcCmd>,
+}
 
 /// キーイベントを処理してIPCコマンドに変換するハンドラー
 pub struct KeyHandler {
     ipc_sender: mpsc::UnboundedSender<IpcCmd>,
+    cmd_pressed: Arc<Mutex<bool>>,
 }
 
 impl KeyHandler {
@@ -21,7 +26,10 @@ impl KeyHandler {
     /// # Arguments
     /// * `ipc_sender` - IPCコマンドを送信するためのSender
     pub fn new(ipc_sender: mpsc::UnboundedSender<IpcCmd>) -> Self {
-        Self { ipc_sender }
+        Self { 
+            ipc_sender,
+            cmd_pressed: Arc::new(Mutex::new(false)),
+        }
     }
 
     /// キーイベントの抑制を開始
@@ -30,97 +38,97 @@ impl KeyHandler {
     /// * `Ok(())` - 正常に開始された場合
     /// * `Err(String)` - rdev::grabの開始に失敗した場合
     pub fn start_grab(self) -> Result<(), String> {
-        // グローバル状態の初期化（Phase 0のパターンを踏襲）
-        CMD_PRESSED
-            .set(Arc::new(Mutex::new(false)))
-            .map_err(|_| "CMD_PRESSED already initialized".to_string())?;
-
-        IPC_SENDER
-            .set(self.ipc_sender)
-            .map_err(|_| "IPC_SENDER already initialized".to_string())?;
-
         println!("Starting keyboard event grabbing...");
 
-        // rdev::grab開始（Phase 0のkey_suppression_test.rsと同じ）
-        if let Err(error) = grab(Self::handle_key_event) {
+        // インスタンスベースの共有状態を作成
+        let shared_state = KeyHandlerState {
+            cmd_pressed: self.cmd_pressed,
+            ipc_sender: self.ipc_sender,
+        };
+
+        // rdev::grab開始 - クロージャーで共有状態をキャプチャ
+        let event_handler = Self::create_event_handler(shared_state);
+        
+        if let Err(error) = grab(event_handler) {
             return Err(format!("キーイベント抑制の開始に失敗: {:?}", error));
         }
 
         Ok(())
     }
 
-    /// キーイベントのハンドリング関数（rdev::grabのコールバック）
+    /// イベントハンドラー関数を作成（クロージャーベース）
     ///
     /// # Arguments
-    /// * `event` - rdevから受信したキーイベント
+    /// * `shared_state` - コールバック間で共有する状態
     ///
     /// # Returns
-    /// * `Some(event)` - イベントをパススルーする場合
-    /// * `None` - イベントを抑制する場合
-    fn handle_key_event(event: Event) -> Option<Event> {
-        let cmd_state = CMD_PRESSED.get().unwrap();
-        let ipc_sender = IPC_SENDER.get().unwrap();
+    /// * イベントハンドラー関数
+    fn create_event_handler(shared_state: KeyHandlerState) -> impl Fn(Event) -> Option<Event> {
+        move |event: Event| -> Option<Event> {
+            let cmd_state = &shared_state.cmd_pressed;
+            let ipc_sender = &shared_state.ipc_sender;
 
-        match event.event_type {
-            EventType::KeyPress(key) => {
-                // Cmdキー状態更新（Phase 0と同じ）
-                if Self::is_cmd_key(&key) {
-                    if let Ok(mut pressed) = cmd_state.lock() {
-                        *pressed = true;
+            match event.event_type {
+                EventType::KeyPress(key) => {
+                    // Cmdキー状態更新
+                    if Self::is_cmd_key(&key) {
+                        if let Ok(mut pressed) = cmd_state.lock() {
+                            *pressed = true;
+                        }
                     }
-                }
 
-                // ショートカットキー判定とIPC送信（既存コマンドを使用）
-                if Self::is_cmd_pressed(cmd_state) {
-                    match key {
-                        Key::KeyR => {
-                            // 既存のToggleコマンドを送信
-                            let cmd = IpcCmd::Toggle {
-                                paste: false,
-                                prompt: None,
-                                direct_input: false,
-                            };
-                            if let Err(e) = ipc_sender.send(cmd) {
-                                eprintln!("Failed to send Toggle command: {}", e);
-                            } else {
-                                println!("Sent Toggle command (Cmd+R)");
+                    // ショートカットキー判定とIPC送信
+                    if Self::is_cmd_pressed(cmd_state) {
+                        match key {
+                            Key::KeyR => {
+                                // 既存のToggleコマンドを送信
+                                let cmd = IpcCmd::Toggle {
+                                    paste: false,
+                                    prompt: None,
+                                    direct_input: false,
+                                };
+                                if let Err(e) = ipc_sender.send(cmd) {
+                                    eprintln!("Failed to send Toggle command: {}", e);
+                                } else {
+                                    println!("Sent Toggle command (Cmd+R)");
+                                }
+                                return None; // イベント抑制
                             }
-                            return None; // イベント抑制
-                        }
-                        Key::Num1
-                        | Key::Num2
-                        | Key::Num3
-                        | Key::Num4
-                        | Key::Num5
-                        | Key::Num6
-                        | Key::Num7
-                        | Key::Num8
-                        | Key::Num9 => {
-                            // 既存のPasteStackコマンドを送信
-                            let number = Self::key_to_number(&key);
-                            let cmd = IpcCmd::PasteStack { number };
-                            if let Err(e) = ipc_sender.send(cmd) {
-                                eprintln!("Failed to send PasteStack command: {}", e);
-                            } else {
-                                println!("Sent PasteStack command (Cmd+{})", number);
+                            Key::Num1
+                            | Key::Num2
+                            | Key::Num3
+                            | Key::Num4
+                            | Key::Num5
+                            | Key::Num6
+                            | Key::Num7
+                            | Key::Num8
+                            | Key::Num9 => {
+                                // 既存のPasteStackコマンドを送信
+                                let number = Self::key_to_number(&key);
+                                let cmd = IpcCmd::PasteStack { number };
+                                if let Err(e) = ipc_sender.send(cmd) {
+                                    eprintln!("Failed to send PasteStack command: {}", e);
+                                } else {
+                                    println!("Sent PasteStack command (Cmd+{})", number);
+                                }
+                                return None; // イベント抑制
                             }
-                            return None; // イベント抑制
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
-            }
-            EventType::KeyRelease(key) => {
-                if Self::is_cmd_key(&key) {
-                    if let Ok(mut pressed) = cmd_state.lock() {
-                        *pressed = false;
+                EventType::KeyRelease(key) => {
+                    if Self::is_cmd_key(&key) {
+                        if let Ok(mut pressed) = cmd_state.lock() {
+                            *pressed = false;
+                        }
                     }
                 }
+                _ => {}
             }
-            _ => {}
+
+            Some(event) // パススルー
         }
-
-        Some(event) // パススルー
     }
 
     /// Cmdキー（Meta）の判定
@@ -212,10 +220,10 @@ mod tests {
     #[test]
     fn test_key_handler_creation() {
         let (_tx, _rx) = mpsc::unbounded_channel();
-        let _handler = KeyHandler::new(_tx);
+        let handler = KeyHandler::new(_tx);
 
         // KeyHandlerが正常に作成されることを確認
-        // 実際のgrab機能はテストしない（アクセシビリティ権限が必要）
+        assert!(!KeyHandler::is_cmd_pressed(&handler.cmd_pressed));
     }
 
     #[test]
@@ -238,5 +246,42 @@ mod tests {
             *pressed = false;
         }
         assert!(!KeyHandler::is_cmd_pressed(&cmd_state));
+    }
+
+    #[test]
+    fn test_key_handler_state_structure() {
+        let (_tx, _rx) = mpsc::unbounded_channel();
+        let handler = KeyHandler::new(_tx.clone());
+        
+        // 共有状態が正しく作成されることを確認
+        let shared_state = KeyHandlerState {
+            cmd_pressed: handler.cmd_pressed.clone(),
+            ipc_sender: _tx,
+        };
+
+        // 複製可能であることを確認
+        let _cloned_state = shared_state.clone();
+        
+        // 初期状態が正しく設定されることを確認
+        assert!(!KeyHandler::is_cmd_pressed(&shared_state.cmd_pressed));
+    }
+
+    #[test]
+    fn test_multiple_key_handler_instances() {
+        // 複数のKeyHandlerインスタンスが独立して動作することを確認
+        let (_tx1, _rx1) = mpsc::unbounded_channel();
+        let (_tx2, _rx2) = mpsc::unbounded_channel();
+        
+        let handler1 = KeyHandler::new(_tx1);
+        let handler2 = KeyHandler::new(_tx2);
+
+        // 各インスタンスが独立したcmd_pressedを持つことを確認
+        {
+            let mut pressed1 = handler1.cmd_pressed.lock().unwrap();
+            *pressed1 = true;
+        }
+        
+        assert!(KeyHandler::is_cmd_pressed(&handler1.cmd_pressed));
+        assert!(!KeyHandler::is_cmd_pressed(&handler2.cmd_pressed));
     }
 }

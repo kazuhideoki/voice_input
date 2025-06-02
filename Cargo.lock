@@ -4057,6 +4057,8 @@ dependencies = [
  "arboard",
  "chrono",
  "clap",
+ "core-foundation 0.9.4",
+ "core-foundation-sys 0.8.7",
  "cpal",
  "criterion",
  "directories",

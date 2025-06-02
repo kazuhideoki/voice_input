@@ -27,7 +27,7 @@ use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use tokio::{
     net::{UnixListener, UnixStream},
-    sync::{Semaphore, mpsc, oneshot},
+    sync::{Semaphore, mpsc, oneshot, Mutex as TokioMutex},
     task::{LocalSet, spawn_local},
     time::Duration,
 };
@@ -73,6 +73,17 @@ type TranscriptionMessage = (
     Option<Rc<RefCell<StackService>>>, // stack_service: スタックモード有効時のStackServiceインスタンス
     Option<Rc<RefCell<UiProcessManager>>>, // ui_manager: UI通知用
 );
+
+/// handle_client関数で使用する共有リソースをまとめた構造体
+struct ClientResources {
+    recorder: Rc<RefCell<Recorder<CpalAudioBackend>>>,
+    ctx: Arc<Mutex<RecCtx>>,
+    stack_service: Rc<RefCell<StackService>>,
+    ui_manager: Rc<RefCell<UiProcessManager>>,
+    tx: mpsc::UnboundedSender<TranscriptionMessage>,
+    shortcut_service: Arc<TokioMutex<ShortcutService>>,
+    shortcut_tx: Arc<TokioMutex<mpsc::UnboundedSender<IpcCmd>>>,
+}
 
 // ────────────────────────────────────────────────────────
 
@@ -146,11 +157,11 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     // Full integration will be completed in subsequent phases
 
     // ShortcutService for keyboard shortcut handling (wrapped for sharing)
-    let shortcut_service = Arc::new(Mutex::new(ShortcutService::new()));
+    let shortcut_service = Arc::new(TokioMutex::new(ShortcutService::new()));
 
     // IPCコマンド用チャンネル（ショートカットキー→IPC）
     let (shortcut_tx, shortcut_rx) = mpsc::unbounded_channel::<IpcCmd>();
-    let shortcut_tx = Arc::new(Mutex::new(shortcut_tx));
+    let shortcut_tx = Arc::new(TokioMutex::new(shortcut_tx));
 
     // 転写ジョブ用チャンネルと同時実行セマフォ
     let (tx, rx) = mpsc::unbounded_channel::<TranscriptionMessage>();
@@ -290,13 +301,15 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         spawn_local(async move {
             let _ = handle_client(
                 stream,
-                rec,
-                ctx2,
-                stack_service2,
-                ui_manager2,
-                tx2,
-                shortcut_service2,
-                shortcut_tx2,
+                ClientResources {
+                    recorder: rec,
+                    ctx: ctx2,
+                    stack_service: stack_service2,
+                    ui_manager: ui_manager2,
+                    tx: tx2,
+                    shortcut_service: shortcut_service2,
+                    shortcut_tx: shortcut_tx2,
+                },
             )
             .await;
         });
@@ -313,14 +326,17 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
 #[allow(clippy::await_holding_refcell_ref)]
 async fn handle_client(
     stream: UnixStream,
-    recorder: Rc<std::cell::RefCell<Recorder<CpalAudioBackend>>>,
-    ctx: Arc<Mutex<RecCtx>>,
-    stack_service: Rc<RefCell<StackService>>,
-    ui_manager: Rc<RefCell<UiProcessManager>>,
-    tx: mpsc::UnboundedSender<TranscriptionMessage>,
-    shortcut_service: Arc<Mutex<ShortcutService>>,
-    shortcut_tx: Arc<Mutex<mpsc::UnboundedSender<IpcCmd>>>,
+    resources: ClientResources,
 ) -> Result<(), Box<dyn Error>> {
+    let ClientResources {
+        recorder,
+        ctx,
+        stack_service,
+        ui_manager,
+        tx,
+        shortcut_service,
+        shortcut_tx,
+    } = resources;
     let (r, w) = stream.into_split();
     let mut reader = FramedRead::new(r, LinesCodec::new());
     let mut writer = FramedWrite::new(w, LinesCodec::new());
@@ -437,17 +453,23 @@ async fn handle_client(
                 }
 
                 // ショートカットサービス自動起動（スタックモード連動）
-                if let Ok(mut service) = shortcut_service.lock() {
-                    if !service.is_enabled() {
-                        println!("Starting shortcut service with stack mode...");
-                        if let Ok(tx_guard) = shortcut_tx.lock() {
-                            if let Err(e) = service.start(tx_guard.clone()).await {
-                                eprintln!("Failed to start shortcut service: {}", e);
-                                eprintln!("Continuing without shortcut functionality...");
-                            } else {
-                                println!("Shortcut service started successfully");
-                            }
-                        }
+                let should_start = !shortcut_service
+                    .lock()
+                    .await
+                    .is_enabled();
+                    
+                if should_start {
+                    println!("Starting shortcut service with stack mode...");
+                    let tx_guard = shortcut_tx.lock().await;
+                    let tx_clone = tx_guard.clone();
+                    drop(tx_guard); // Explicitly drop the guard before calling start
+                    
+                    let mut service = shortcut_service.lock().await;
+                    if let Err(e) = service.start(tx_clone).await {
+                        eprintln!("Failed to start shortcut service: {}", e);
+                        eprintln!("Continuing without shortcut functionality...");
+                    } else {
+                        println!("Shortcut service started successfully");
                     }
                 }
 
@@ -470,14 +492,18 @@ async fn handle_client(
                 }
 
                 // ショートカットサービス自動停止（スタックモード連動）
-                if let Ok(mut service) = shortcut_service.lock() {
-                    if service.is_enabled() {
-                        println!("Stopping shortcut service with stack mode...");
-                        if let Err(e) = service.stop().await {
-                            eprintln!("Failed to stop shortcut service: {}", e);
-                        } else {
-                            println!("Shortcut service stopped successfully");
-                        }
+                let should_stop = shortcut_service
+                    .lock()
+                    .await
+                    .is_enabled();
+                    
+                if should_stop {
+                    println!("Stopping shortcut service with stack mode...");
+                    let mut service = shortcut_service.lock().await;
+                    if let Err(e) = service.stop().await {
+                        eprintln!("Failed to stop shortcut service: {}", e);
+                    } else {
+                        println!("Shortcut service stopped successfully");
                     }
                 }
 

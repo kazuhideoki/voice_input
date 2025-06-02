@@ -94,7 +94,7 @@ async fn test_shortcut_service_start_with_accessibility_check() {
         }
         Err(e) => {
             println!("Expected accessibility permission error: {}", e);
-            assert!(e.contains("アクセシビリティ権限"));
+            assert!(e.to_string().contains("アクセシビリティ権限"));
             assert!(!service.is_enabled());
         }
     }
