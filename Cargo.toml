@@ -45,7 +45,7 @@ enigo = "0.2.0"
 egui = "0.24"
 eframe = "0.24"
 chrono = "0.4"
-rdev = "0.4"
+rdev = { version = "0.5", features = ["unstable_grab"] }
 
 [features]
 default = []
