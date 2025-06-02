@@ -61,7 +61,7 @@ src/
 graph TD
     A[ユーザー: stack-mode on] --> B[StackService]
     B --> C[自動的にショートカットキー有効化]
-    C --> D[HotkeyManager.enable_shortcuts]
+    C --> D[ShortcutService.start]
     B --> E[UiProcessManager.start_ui]
     E --> F[オーバーレイUI自動表示]
 
@@ -75,7 +75,7 @@ graph TD
 
     O[ユーザー: stack-mode off] --> P[StackService]
     P --> Q[自動的にショートカットキー無効化]
-    Q --> R[HotkeyManager.disable_shortcuts]
+    Q --> R[ShortcutService.stop]
 ```
 
 ### 成果物（機能要件）
