@@ -14,7 +14,7 @@ pub fn socket_path() -> PathBuf {
 }
 
 /// CLI からデーモンへ送るコマンド列挙。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum IpcCmd {
     /// 録音開始
     Start {

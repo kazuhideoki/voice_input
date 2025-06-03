@@ -77,6 +77,17 @@ impl KeyHandler {
                         }
                     }
 
+                    // ESCキー処理（Cmdキー不要）
+                    if key == Key::Escape {
+                        let cmd = IpcCmd::DisableStackMode;
+                        if let Err(e) = ipc_sender.send(cmd) {
+                            eprintln!("Failed to send DisableStackMode command: {}", e);
+                        } else {
+                            println!("Sent DisableStackMode command (ESC)");
+                        }
+                        return None; // イベント抑制
+                    }
+
                     // ショートカットキー判定とIPC送信
                     if Self::is_cmd_pressed(cmd_state) {
                         match key {
@@ -283,5 +294,69 @@ mod tests {
 
         assert!(KeyHandler::is_cmd_pressed(&handler1.cmd_pressed));
         assert!(!KeyHandler::is_cmd_pressed(&handler2.cmd_pressed));
+    }
+
+    #[test]
+    fn test_escape_key_event_handling() {
+        use rdev::{Event, EventType};
+
+        // テスト用のチャンネル作成
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handler = KeyHandler::new(tx.clone());
+
+        // 共有状態を作成
+        let shared_state = KeyHandlerState {
+            cmd_pressed: handler.cmd_pressed.clone(),
+            ipc_sender: tx,
+        };
+
+        // イベントハンドラーを作成
+        let event_handler = KeyHandler::create_event_handler(shared_state);
+
+        // ESCキーイベントを作成
+        let esc_event = Event {
+            event_type: EventType::KeyPress(Key::Escape),
+            time: std::time::SystemTime::now(),
+            name: None,
+        };
+
+        // ESCキーイベントを処理
+        let result = event_handler(esc_event);
+        
+        // ESCキーは抑制されるべき（None）
+        assert!(result.is_none(), "ESCキーイベントは抑制されるべき");
+
+        // DisableStackModeコマンドが送信されたことを確認
+        let cmd = rx.blocking_recv();
+        assert!(cmd.is_some());
+        assert_eq!(cmd.unwrap(), IpcCmd::DisableStackMode);
+    }
+
+    #[test]
+    fn test_escape_key_without_cmd() {
+        use rdev::{Event, EventType};
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handler = KeyHandler::new(tx.clone());
+
+        let shared_state = KeyHandlerState {
+            cmd_pressed: handler.cmd_pressed.clone(),
+            ipc_sender: tx,
+        };
+
+        let event_handler = KeyHandler::create_event_handler(shared_state);
+
+        // Cmdが押されていない状態でもESCキーは機能することを確認
+        let esc_event = Event {
+            event_type: EventType::KeyPress(Key::Escape),
+            time: std::time::SystemTime::now(),
+            name: None,
+        };
+
+        let result = event_handler(esc_event);
+        assert!(result.is_none());
+
+        let cmd = rx.blocking_recv();
+        assert_eq!(cmd.unwrap(), IpcCmd::DisableStackMode);
     }
 }
