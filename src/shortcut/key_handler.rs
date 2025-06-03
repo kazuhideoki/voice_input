@@ -322,7 +322,7 @@ mod tests {
 
         // ESCキーイベントを処理
         let result = event_handler(esc_event);
-        
+
         // ESCキーは抑制されるべき（None）
         assert!(result.is_none(), "ESCキーイベントは抑制されるべき");
 

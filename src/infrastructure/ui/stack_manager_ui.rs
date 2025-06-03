@@ -5,7 +5,7 @@
 //! リアルタイムで更新します。
 
 use egui::{Color32, Context, FontFamily, FontId, Frame, Margin, RichText, Vec2};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use super::types::{StackDisplayInfo, UiNotification, UiState};
@@ -13,17 +13,23 @@ use super::types::{StackDisplayInfo, UiNotification, UiState};
 pub struct StackManagerApp {
     rx: mpsc::UnboundedReceiver<UiNotification>,
     state: UiState,
+    last_accessed_stack: Option<u32>,
+    highlight_until: Option<Instant>,
 }
 
 impl StackManagerApp {
+    const HIGHLIGHT_DURATION_SECS: u64 = 3;
+
     pub fn new(rx: mpsc::UnboundedReceiver<UiNotification>) -> Self {
         Self {
             rx,
             state: UiState::default(),
+            last_accessed_stack: None,
+            highlight_until: None,
         }
     }
 
-    fn handle_notification(&mut self, notification: UiNotification) {
+    pub fn handle_notification(&mut self, notification: UiNotification) {
         match notification {
             UiNotification::StackAdded(stack_info) => {
                 self.state.stacks.push(stack_info);
@@ -34,6 +40,8 @@ impl StackManagerApp {
                 for stack in &mut self.state.stacks {
                     stack.is_active = stack.number == id;
                 }
+                // ハイライトタイマーの設定
+                self.on_stack_accessed(id);
             }
             UiNotification::StacksCleared => {
                 self.state.stacks.clear();
@@ -102,8 +110,13 @@ impl StackManagerApp {
     }
 
     fn render_stack_item(&self, ui: &mut egui::Ui, stack: &StackDisplayInfo) {
-        let bg_color = if stack.is_active {
-            Color32::from_rgba_unmultiplied(100, 150, 255, 80) // アクティブスタックのハイライト
+        // タイマーベースのハイライト判定
+        let is_highlighted = self.is_stack_highlighted(stack.number);
+
+        let bg_color = if is_highlighted {
+            Color32::from_rgba_unmultiplied(100, 200, 100, 120) // 3秒間の緑色ハイライト
+        } else if stack.is_active {
+            Color32::from_rgba_unmultiplied(100, 150, 255, 80) // 通常のアクティブスタック
         } else {
             Color32::from_rgba_unmultiplied(60, 60, 60, 80)
         };
@@ -148,6 +161,44 @@ impl StackManagerApp {
 
         ui.add_space(2.0);
     }
+
+    /// ハイライト状態の確認（タイマー管理）
+    pub fn is_stack_highlighted(&self, stack_number: u32) -> bool {
+        if self.last_accessed_stack == Some(stack_number) {
+            if let Some(until) = self.highlight_until {
+                return Instant::now() < until;
+            }
+        }
+        false
+    }
+
+    /// スタックアクセス時の処理
+    pub fn on_stack_accessed(&mut self, stack_number: u32) {
+        self.last_accessed_stack = Some(stack_number);
+        self.highlight_until =
+            Some(Instant::now() + Duration::from_secs(Self::HIGHLIGHT_DURATION_SECS));
+    }
+
+    #[cfg(test)]
+    pub fn get_last_accessed_stack(&self) -> Option<u32> {
+        self.last_accessed_stack
+    }
+
+    #[cfg(test)]
+    pub fn get_highlight_until(&self) -> Option<Instant> {
+        self.highlight_until
+    }
+
+    #[cfg(test)]
+    pub fn set_highlight_until(&mut self, until: Option<Instant>) {
+        self.highlight_until = until;
+    }
+
+    #[cfg(test)]
+    pub fn clear_highlight(&mut self) {
+        self.last_accessed_stack = None;
+        self.highlight_until = None;
+    }
 }
 
 impl eframe::App for StackManagerApp {
@@ -165,5 +216,105 @@ impl eframe::App for StackManagerApp {
         ctx.request_repaint_after(Duration::from_millis(16));
 
         self.render_ui(ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    #[test]
+    fn test_highlight_timer_setup() {
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let mut app = StackManagerApp::new(rx);
+
+        // スタックアクセスをシミュレート
+        app.on_stack_accessed(1);
+
+        // ハイライト状態を確認
+        assert!(app.is_stack_highlighted(1));
+        assert!(!app.is_stack_highlighted(2));
+        assert_eq!(app.last_accessed_stack, Some(1));
+        assert!(app.highlight_until.is_some());
+    }
+
+    #[test]
+    fn test_multiple_stack_highlight() {
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let mut app = StackManagerApp::new(rx);
+
+        // スタック1をアクセス
+        app.on_stack_accessed(1);
+        assert!(app.is_stack_highlighted(1));
+
+        // スタック2をアクセス（ハイライトが移動）
+        app.on_stack_accessed(2);
+        assert!(!app.is_stack_highlighted(1));
+        assert!(app.is_stack_highlighted(2));
+    }
+
+    #[test]
+    fn test_highlight_expiration_logic() {
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let mut app = StackManagerApp::new(rx);
+
+        // スタックアクセス
+        app.on_stack_accessed(1);
+
+        // 手動でタイマーを過去に設定
+        app.highlight_until = Some(Instant::now() - Duration::from_secs(1));
+
+        // ハイライトが期限切れであることを確認
+        assert!(!app.is_stack_highlighted(1));
+    }
+
+    #[test]
+    fn test_stack_accessed_notification() {
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let mut app = StackManagerApp::new(rx);
+
+        // スタック情報を追加
+        let stack_info = StackDisplayInfo {
+            number: 1,
+            preview: "Test stack".to_string(),
+            created_at: "2024-01-01 00:00:00".to_string(),
+            is_active: false,
+            char_count: 10,
+        };
+        app.handle_notification(UiNotification::StackAdded(stack_info));
+
+        // StackAccessedイベントを処理
+        app.handle_notification(UiNotification::StackAccessed(1));
+
+        // ハイライトが設定されていることを確認
+        assert!(app.is_stack_highlighted(1));
+        assert_eq!(app.state.last_accessed_id, Some(1));
+    }
+
+    #[test]
+    fn test_render_with_highlight() {
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let mut app = StackManagerApp::new(rx);
+
+        // スタックを追加
+        let stack_info = StackDisplayInfo {
+            number: 1,
+            preview: "Highlighted stack".to_string(),
+            created_at: "2024-01-01 00:00:00".to_string(),
+            is_active: false,
+            char_count: 17,
+        };
+        app.handle_notification(UiNotification::StackAdded(stack_info));
+
+        // ハイライトを設定
+        app.on_stack_accessed(1);
+
+        // この時点でスタック1がハイライトされていることを確認
+        assert!(app.is_stack_highlighted(1));
+
+        // 3秒後にハイライトが解除されることをシミュレート
+        app.highlight_until = Some(Instant::now() - Duration::from_secs(1));
+        assert!(!app.is_stack_highlighted(1));
     }
 }
