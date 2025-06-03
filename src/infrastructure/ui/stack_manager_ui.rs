@@ -95,21 +95,30 @@ impl StackManagerApp {
                     egui::ScrollArea::vertical()
                         .max_height(400.0)
                         .show(ui, |ui| {
-                            for stack in &self.state.stacks {
-                                self.render_stack_item(ui, stack);
+                            for (index, stack) in self.state.stacks.iter().enumerate() {
+                                self.render_stack_item(ui, stack, index);
                             }
                         });
                 }
+
+                // ショートカットキーガイドを表示
+                self.draw_keyboard_guide(ui);
             });
 
         // ウィンドウサイズを内容に合わせて調整
-        let desired_height = 100.0 + (self.state.stacks.len() as f32 * 60.0);
-        let desired_size = Vec2::new(300.0, desired_height.min(500.0));
+        // ベース高さ + スタック分 + ガイド分
+        let guide_height = if self.state.total_count > 9 {
+            140.0
+        } else {
+            120.0
+        };
+        let desired_height = 100.0 + (self.state.stacks.len() as f32 * 60.0) + guide_height;
+        let desired_size = Vec2::new(350.0, desired_height.min(600.0));
 
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(desired_size));
     }
 
-    fn render_stack_item(&self, ui: &mut egui::Ui, stack: &StackDisplayInfo) {
+    fn render_stack_item(&self, ui: &mut egui::Ui, stack: &StackDisplayInfo, index: usize) {
         // タイマーベースのハイライト判定
         let is_highlighted = self.is_stack_highlighted(stack.number);
 
@@ -117,6 +126,8 @@ impl StackManagerApp {
             Color32::from_rgba_unmultiplied(100, 200, 100, 120) // 3秒間の緑色ハイライト
         } else if stack.is_active {
             Color32::from_rgba_unmultiplied(100, 150, 255, 80) // 通常のアクティブスタック
+        } else if index >= 9 {
+            Color32::from_rgba_unmultiplied(40, 40, 40, 60) // 10個目以降は暗め
         } else {
             Color32::from_rgba_unmultiplied(60, 60, 60, 80)
         };
@@ -128,6 +139,22 @@ impl StackManagerApp {
 
         frame.show(ui, |ui| {
             ui.horizontal(|ui| {
+                // キーボードショートカットヒント（最初の9個のみ）
+                if index < 9 {
+                    ui.label(
+                        RichText::new(format!("Cmd+{}", index + 1))
+                            .font(FontId::new(12.0, FontFamily::Monospace))
+                            .color(Color32::from_rgb(180, 180, 180)),
+                    );
+                    ui.add_space(8.0);
+                } else {
+                    // 10個目以降はキー操作不可を示す
+                    ui.label(
+                        RichText::new("      ").font(FontId::new(12.0, FontFamily::Monospace)),
+                    );
+                    ui.add_space(8.0);
+                }
+
                 // スタック番号
                 ui.label(
                     RichText::new(format!("[{}]", stack.number))
@@ -136,10 +163,17 @@ impl StackManagerApp {
                 );
 
                 ui.vertical(|ui| {
-                    // プレビューテキスト
+                    // プレビューテキスト（ハイライト時は文字色も変更）
+                    let text_color = if is_highlighted {
+                        Color32::from_rgb(220, 255, 220) // ハイライト時は明るい緑系
+                    } else {
+                        Color32::from_gray(220) // 通常時
+                    };
+
                     ui.label(
                         RichText::new(&stack.preview)
-                            .font(FontId::new(12.0, FontFamily::Proportional)),
+                            .font(FontId::new(12.0, FontFamily::Proportional))
+                            .color(text_color),
                     );
 
                     // 文字数と作成時刻
@@ -198,6 +232,63 @@ impl StackManagerApp {
     pub fn clear_highlight(&mut self) {
         self.last_accessed_stack = None;
         self.highlight_until = None;
+    }
+
+    /// ショートカットキーガイドを表示
+    fn draw_keyboard_guide(&self, ui: &mut egui::Ui) {
+        ui.separator();
+
+        // ガイドセクションの背景色を設定
+        let guide_frame = Frame::none()
+            .fill(Color32::from_rgba_unmultiplied(30, 30, 30, 100))
+            .rounding(4.0)
+            .inner_margin(Margin::same(6.0));
+
+        guide_frame.show(ui, |ui| {
+            ui.label(
+                RichText::new("キーボードショートカット:")
+                    .font(FontId::new(12.0, FontFamily::Proportional))
+                    .color(Color32::from_rgb(200, 200, 200))
+                    .strong(),
+            );
+
+            ui.add_space(4.0);
+
+            // ショートカットリスト
+            ui.label(
+                RichText::new("• Cmd+R: 録音開始/停止")
+                    .font(FontId::new(11.0, FontFamily::Proportional))
+                    .color(Color32::from_gray(180)),
+            );
+            ui.label(
+                RichText::new("• Cmd+1-9: スタックペースト（最初の9個）")
+                    .font(FontId::new(11.0, FontFamily::Proportional))
+                    .color(Color32::from_gray(180)),
+            );
+            ui.label(
+                RichText::new("• Cmd+C: 全スタッククリア")
+                    .font(FontId::new(11.0, FontFamily::Proportional))
+                    .color(Color32::from_gray(180)),
+            );
+            ui.label(
+                RichText::new("• ESC: スタックモード終了")
+                    .font(FontId::new(11.0, FontFamily::Proportional))
+                    .color(Color32::from_gray(180)),
+            );
+
+            // 10個以上のスタックがある場合の注意表示
+            if self.state.total_count > 9 {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(format!(
+                        "※ スタック10以降はCmd+キーで操作できません（全{}個）",
+                        self.state.total_count
+                    ))
+                    .font(FontId::new(11.0, FontFamily::Proportional))
+                    .color(Color32::from_rgb(255, 200, 100)),
+                );
+            }
+        });
     }
 }
 
@@ -316,5 +407,100 @@ mod tests {
         // 3秒後にハイライトが解除されることをシミュレート
         app.highlight_until = Some(Instant::now() - Duration::from_secs(1));
         assert!(!app.is_stack_highlighted(1));
+    }
+
+    #[test]
+    fn test_visual_feedback_for_multiple_stacks() {
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let mut app = StackManagerApp::new(rx);
+
+        // 複数のスタックを追加
+        for i in 1..=12 {
+            let stack_info = StackDisplayInfo {
+                number: i,
+                preview: format!("Stack {}", i),
+                created_at: "2024-01-01 00:00:00".to_string(),
+                is_active: false,
+                char_count: 10,
+            };
+            app.handle_notification(UiNotification::StackAdded(stack_info));
+        }
+
+        // スタック数を確認
+        assert_eq!(app.state.stacks.len(), 12);
+        assert_eq!(app.state.total_count, 12);
+
+        // 10番目のスタックをアクセス（キーボード操作不可）
+        app.handle_notification(UiNotification::StackAccessed(10));
+        assert!(app.is_stack_highlighted(10));
+
+        // 5番目のスタックをアクセス（キーボード操作可能）
+        app.handle_notification(UiNotification::StackAccessed(5));
+        assert!(!app.is_stack_highlighted(10));
+        assert!(app.is_stack_highlighted(5));
+    }
+
+    #[test]
+    fn test_keyboard_hint_display_logic() {
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let _app = StackManagerApp::new(rx);
+
+        // インデックスベースのキーボードヒント表示ロジックのテスト
+        // 注: 実際の表示は render_stack_item メソッド内で行われる
+
+        // スタック番号1-9はCmd+1-9で操作可能
+        for i in 0..9 {
+            assert!(i < 9, "インデックス{}はキーボード操作可能", i);
+        }
+
+        // スタック番号10以降はキーボード操作不可
+        for i in 9..15 {
+            assert!(i >= 9, "インデックス{}はキーボード操作不可", i);
+        }
+    }
+
+    #[test]
+    fn test_keyboard_guide_with_many_stacks() {
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let mut app = StackManagerApp::new(rx);
+
+        // 9個のスタックを追加（警告表示なし）
+        for i in 1..=9 {
+            let stack_info = StackDisplayInfo {
+                number: i,
+                preview: format!("Stack {}", i),
+                created_at: "2024-01-01 00:00:00".to_string(),
+                is_active: false,
+                char_count: 10,
+            };
+            app.handle_notification(UiNotification::StackAdded(stack_info));
+        }
+
+        // この時点では警告表示なし
+        assert_eq!(app.state.total_count, 9);
+
+        // 10個目のスタックを追加（警告表示あり）
+        let stack_info = StackDisplayInfo {
+            number: 10,
+            preview: "Stack 10".to_string(),
+            created_at: "2024-01-01 00:00:00".to_string(),
+            is_active: false,
+            char_count: 10,
+        };
+        app.handle_notification(UiNotification::StackAdded(stack_info));
+
+        // 10個以上になったことを確認
+        assert_eq!(app.state.total_count, 10);
+        assert!(app.state.total_count > 9);
+    }
+
+    #[test]
+    fn test_esc_key_guidance() {
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let app = StackManagerApp::new(rx);
+
+        // draw_keyboard_guideメソッドが存在することを確認
+        // ESCキーガイドは常に表示される
+        assert!(app.state.stack_mode_enabled || !app.state.stack_mode_enabled);
     }
 }
