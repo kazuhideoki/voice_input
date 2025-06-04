@@ -3,7 +3,7 @@
 //! Enigoライブラリを使用してクリップボードを使わずに
 //! カーソル位置に直接テキストを入力する機能を提供
 
-use crate::infrastructure::external::text_input_enigo;
+use crate::infrastructure::external::text_input_subprocess;
 use std::error::Error;
 use std::fmt;
 
@@ -33,7 +33,8 @@ impl Error for TextInputError {}
 
 /// デフォルト設定でテキストを直接入力
 ///
-/// Enigoライブラリを使用して日本語を含む全ての文字を入力
+/// サブプロセスでEnigoを実行して日本語を含む全ての文字を入力
+/// rdevとの競合を避けるため、完全に独立したプロセスで実行
 ///
 /// # Example
 /// ```no_run
@@ -45,8 +46,8 @@ impl Error for TextInputError {}
 /// # }
 /// ```
 pub async fn type_text(text: &str) -> Result<(), TextInputError> {
-    // Enigoを使用して日本語を含むすべてのテキストを入力
-    text_input_enigo::type_text_default(text)
+    // サブプロセスを使用して日本語を含むすべてのテキストを入力
+    text_input_subprocess::type_text_via_subprocess(text)
         .await
         .map_err(|e| TextInputError::AppleScriptFailure(e.to_string()))
 }

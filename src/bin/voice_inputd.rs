@@ -49,7 +49,7 @@ use voice_input::{
     },
     ipc::{IpcCmd, IpcResp, RecordingResult, socket_path},
     load_env,
-    shortcut::ShortcutService,
+    shortcut::{ShortcutService, CmdReleaseDetector},
 };
 
 /// デフォルトの最大録音秒数 (`VOICE_INPUT_MAX_SECS` が未設定の場合に適用)。
@@ -83,6 +83,7 @@ struct ClientResources {
     tx: mpsc::UnboundedSender<TranscriptionMessage>,
     shortcut_service: Arc<TokioMutex<ShortcutService>>,
     shortcut_tx: Arc<TokioMutex<mpsc::UnboundedSender<IpcCmd>>>,
+    cmd_detector: CmdReleaseDetector,
 }
 
 // ────────────────────────────────────────────────────────
@@ -111,6 +112,8 @@ struct RecCtx {
     /// 直接入力を使用するか（クリップボードを使わない）
     direct_input: bool,
 }
+
+// ペースト処理中フラグは削除（サブプロセス方式では不要）
 
 // ────────────────────────────────────────────────────────
 // エントリポイント： single‑thread Tokio runtime
@@ -156,6 +159,9 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     // For Phase 4, we'll implement basic UI without full integration
     // Full integration will be completed in subsequent phases
 
+    // Cmdキーリリース検出器（全体で共有）
+    let cmd_detector = CmdReleaseDetector::new();
+
     // ShortcutService for keyboard shortcut handling (wrapped for sharing)
     let shortcut_service = Arc::new(TokioMutex::new(ShortcutService::new()));
 
@@ -173,6 +179,8 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     let stack_service_clone = stack_service.clone();
     let ui_manager_clone = ui_manager.clone();
     let tx_clone = tx.clone();
+    let shortcut_service_clone = shortcut_service.clone();
+    let cmd_detector_clone = cmd_detector.clone();
 
     spawn_local(async move {
         let mut rx = shortcut_rx;
@@ -230,6 +238,18 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                             let _ = manager.notify(UiNotification::StackAccessed(number));
                         }
 
+                        // Cmdキーがリリースされるのを待つ
+                        println!("Waiting for Cmd key release...");
+                        match cmd_detector_clone.wait_for_release(Duration::from_millis(500)).await {
+                            Ok(_) => {
+                                println!("Cmd key released, proceeding with paste");
+                            }
+                            Err(_) => {
+                                println!("Cmd key release timeout, proceeding anyway");
+                            }
+                        }
+                        
+                        // 直接入力方式で入力（サブプロセス実行）
                         match text_input::type_text(&text).await {
                             Ok(_) => {
                                 println!("{}", UserFeedback::paste_success(number, char_count));
@@ -239,12 +259,75 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                 })
                             }
                             Err(e) => {
-                                Err(format!("Failed to paste stack {}: {}", number, e).into())
+                                eprintln!("Direct input failed: {:?}", e);
+                                eprintln!("Text to input: {:?}", text);
+                                // フォールバック: クリップボード経由
+                                if let Err(clip_err) = set_clipboard(&text).await {
+                                    eprintln!("Clipboard fallback also failed: {}", clip_err);
+                                    Err(format!("Failed to paste stack {}: {}", number, e).into())
+                                } else {
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+                                    let _ = tokio::process::Command::new("osascript")
+                                        .arg("-e")
+                                        .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
+                                        .output()
+                                        .await;
+                                    println!("{} (via clipboard fallback)", UserFeedback::paste_success(number, char_count));
+                                    Ok(IpcResp {
+                                        ok: true,
+                                        msg: format!("Pasted stack {} via clipboard", number),
+                                    })
+                                }
                             }
                         }
                     } else {
                         Err(format!("Unexpected error: stack {} not found", number).into())
                     }
+                }
+                IpcCmd::DisableStackMode => {
+                    let mut service = stack_service_clone.borrow_mut();
+                    service.disable_stack_mode();
+
+                    // UI プロセス停止を試行
+                    if let Ok(mut manager) = ui_manager_clone.try_borrow_mut() {
+                        // 状態変更を通知してからプロセス停止
+                        let _ = manager.notify(UiNotification::ModeChanged(false));
+                        if let Err(e) = manager.stop_ui() {
+                            eprintln!("UI process stop failed: {}", e);
+                        }
+                    }
+
+                    // ショートカットサービスも停止
+                    let should_stop = shortcut_service_clone.lock().await.is_enabled();
+                    
+                    if should_stop {
+                        println!("Stopping shortcut service with stack mode...");
+                        let mut service = shortcut_service_clone.lock().await;
+                        if let Err(e) = service.stop().await {
+                            eprintln!("Failed to stop shortcut service: {}", e);
+                        } else {
+                            println!("Shortcut service stopped successfully");
+                        }
+                    }
+
+                    Ok(IpcResp {
+                        ok: true,
+                        msg: UserFeedback::mode_status(false, 0),
+                    })
+                }
+                IpcCmd::ClearStacks => {
+                    let mut service = stack_service_clone.borrow_mut();
+                    service.clear_stacks();
+                    
+                    // UI に通知
+                    if let Ok(manager) = ui_manager_clone.try_borrow() {
+                        let _ = manager.notify(UiNotification::StacksCleared);
+                    }
+                    
+                    Ok(IpcResp {
+                        ok: true,
+                        msg: "All stacks cleared".to_string(),
+                    })
                 }
                 _ => {
                     println!("Unsupported shortcut command: {:?}", cmd);
@@ -298,6 +381,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         let tx2 = tx.clone();
         let shortcut_service2 = shortcut_service.clone();
         let shortcut_tx2 = shortcut_tx.clone();
+        let cmd_detector2 = cmd_detector.clone();
         spawn_local(async move {
             let _ = handle_client(
                 stream,
@@ -309,6 +393,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                     tx: tx2,
                     shortcut_service: shortcut_service2,
                     shortcut_tx: shortcut_tx2,
+                    cmd_detector: cmd_detector2,
                 },
             )
             .await;
@@ -336,6 +421,7 @@ async fn handle_client(
         tx,
         shortcut_service,
         shortcut_tx,
+        cmd_detector,
     } = resources;
     let (r, w) = stream.into_split();
     let mut reader = FramedRead::new(r, LinesCodec::new());
@@ -462,7 +548,7 @@ async fn handle_client(
                     drop(tx_guard); // Explicitly drop the guard before calling start
 
                     let mut service = shortcut_service.lock().await;
-                    if let Err(e) = service.start(tx_clone).await {
+                    if let Err(e) = service.start_with_detector(tx_clone, cmd_detector.clone()).await {
                         eprintln!("Failed to start shortcut service: {}", e);
                         eprintln!("Continuing without shortcut functionality...");
                     } else {

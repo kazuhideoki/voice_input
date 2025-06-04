@@ -4077,6 +4077,7 @@ dependencies = [
  "egui",
  "enigo",
  "futures",
+ "once_cell",
  "rdev",
  "reqwest",
  "scopeguard",

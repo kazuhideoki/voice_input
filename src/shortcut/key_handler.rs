@@ -3,6 +3,7 @@
 //! Phase 2: グローバル状態を排除してインスタンスベースのアーキテクチャに変更
 
 use crate::ipc::IpcCmd;
+use crate::shortcut::cmd_release_detector::CmdReleaseDetector;
 use rdev::{Event, EventType, Key, grab};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -12,12 +13,14 @@ use tokio::sync::mpsc;
 struct KeyHandlerState {
     cmd_pressed: Arc<Mutex<bool>>,
     ipc_sender: mpsc::UnboundedSender<IpcCmd>,
+    cmd_detector: CmdReleaseDetector,
 }
 
 /// キーイベントを処理してIPCコマンドに変換するハンドラー
 pub struct KeyHandler {
     ipc_sender: mpsc::UnboundedSender<IpcCmd>,
     cmd_pressed: Arc<Mutex<bool>>,
+    cmd_detector: CmdReleaseDetector,
 }
 
 impl KeyHandler {
@@ -26,9 +29,22 @@ impl KeyHandler {
     /// # Arguments
     /// * `ipc_sender` - IPCコマンドを送信するためのSender
     pub fn new(ipc_sender: mpsc::UnboundedSender<IpcCmd>) -> Self {
+        Self::with_detector(ipc_sender, CmdReleaseDetector::new())
+    }
+
+    /// Cmdキー検出器を指定してKeyHandlerインスタンスを作成
+    ///
+    /// # Arguments
+    /// * `ipc_sender` - IPCコマンドを送信するためのSender
+    /// * `cmd_detector` - Cmdキーリリース検出器
+    pub fn with_detector(
+        ipc_sender: mpsc::UnboundedSender<IpcCmd>,
+        cmd_detector: CmdReleaseDetector,
+    ) -> Self {
         Self {
             ipc_sender,
             cmd_pressed: Arc::new(Mutex::new(false)),
+            cmd_detector,
         }
     }
 
@@ -44,6 +60,7 @@ impl KeyHandler {
         let shared_state = KeyHandlerState {
             cmd_pressed: self.cmd_pressed,
             ipc_sender: self.ipc_sender,
+            cmd_detector: self.cmd_detector,
         };
 
         // rdev::grab開始 - クロージャーで共有状態をキャプチャ
@@ -67,6 +84,7 @@ impl KeyHandler {
         move |event: Event| -> Option<Event> {
             let cmd_state = &shared_state.cmd_pressed;
             let ipc_sender = &shared_state.ipc_sender;
+            let cmd_detector = &shared_state.cmd_detector;
 
             match event.event_type {
                 EventType::KeyPress(key) => {
@@ -75,6 +93,7 @@ impl KeyHandler {
                         if let Ok(mut pressed) = cmd_state.lock() {
                             *pressed = true;
                         }
+                        cmd_detector.on_cmd_press();
                     }
 
                     // ESCキー処理（Cmdキー不要）
@@ -114,13 +133,23 @@ impl KeyHandler {
                             | Key::Num7
                             | Key::Num8
                             | Key::Num9 => {
-                                // 既存のPasteStackコマンドを送信
+                                // Cmdキー状態を含めてPasteStackコマンドを送信
                                 let number = Self::key_to_number(&key);
                                 let cmd = IpcCmd::PasteStack { number };
                                 if let Err(e) = ipc_sender.send(cmd) {
                                     eprintln!("Failed to send PasteStack command: {}", e);
                                 } else {
                                     println!("Sent PasteStack command (Cmd+{})", number);
+                                }
+                                return None; // イベント抑制
+                            }
+                            Key::KeyC => {
+                                // Cmd+Cで全スタッククリア
+                                let cmd = IpcCmd::ClearStacks;
+                                if let Err(e) = ipc_sender.send(cmd) {
+                                    eprintln!("Failed to send ClearStacks command: {}", e);
+                                } else {
+                                    println!("Sent ClearStacks command (Cmd+C)");
                                 }
                                 return None; // イベント抑制
                             }
@@ -133,6 +162,7 @@ impl KeyHandler {
                         if let Ok(mut pressed) = cmd_state.lock() {
                             *pressed = false;
                         }
+                        cmd_detector.on_cmd_release();
                     }
                 }
                 _ => {}
