@@ -351,11 +351,11 @@ pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
       - UIとの統合（Task 4で実装）
 
 - タスク分割:
-  - [ ] CoreFoundation依存関係をCargo.tomlに追加
-  - [ ] AXUIElement型とその関連型の定義
-  - [ ] AccessibilityError型の実装とError traitの実装
-  - [ ] 基本的なFFI関数の宣言（extern block）
-  - [ ] 単体テストの作成（モック使用）
+  - [x] CoreFoundation依存関係をCargo.tomlに追加
+  - [x] AXUIElement型とその関連型の定義
+  - [x] AccessibilityError型の実装とError traitの実装
+  - [x] 基本的なFFI関数の宣言（extern block）
+  - [x] 単体テストの作成（モック使用）
 
 ### Task 2: フォーカス要素検出機能実装
 
@@ -378,11 +378,11 @@ pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
       - パフォーマンス最適化
 
 - タスク分割:
-  - [ ] AXUIElementCopySystemWideの実装とテスト
-  - [ ] AXUIElementCopyAttributeValueの実装（kAXFocusedUIElementAttribute）
-  - [ ] Role属性の取得と判定ロジック実装
-  - [ ] 権限チェック機能の実装
-  - [ ] 統合テストの作成（実際のアプリケーションでのテスト）
+  - [x] AXUIElementCopySystemWideの実装とテスト
+  - [x] AXUIElementCopyAttributeValueの実装（kAXFocusedUIElementAttribute）
+  - [x] Role属性の取得と判定ロジック実装
+  - [x] 権限チェック機能の実装
+  - [x] 統合テストの作成（実際のアプリケーションでのテスト）
 
 ### Task 3: テキスト挿入機能実装
 
