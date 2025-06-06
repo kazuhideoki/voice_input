@@ -1,6 +1,9 @@
 //! サブプロセスを使用したテキスト入力モジュール
 //!
 //! rdevとの競合を避けるため、別プロセスでEnigo操作を実行
+//!
+//! ⚠️ DEPRECATED: このモジュールは移行期間後に削除予定です。
+//! 新規コードではtext_input_accessibility.rsを使用してください。
 
 use std::error::Error;
 use std::fmt;

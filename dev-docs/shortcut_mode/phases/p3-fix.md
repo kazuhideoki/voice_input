@@ -440,11 +440,11 @@ pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
       - 設定ファイルの追加（環境変数で制御）
 
 - タスク分割:
-  - [ ] TextInputError型の統一（Box<dyn Error>からの変更）
-  - [ ] type_text()関数のエラーハンドリング実装
-  - [ ] ログ出力の追加（どの方式が使われたか）
-  - [ ] 既存テストの更新と動作確認
-  - [ ] エラー時のユーザー向けガイダンス実装
+  - [x] TextInputError型の統一（Box<dyn Error>からの変更）
+  - [x] type_text()関数のエラーハンドリング実装
+  - [x] ログ出力の追加（どの方式が使われたか）
+  - [x] 既存テストの更新と動作確認
+  - [x] エラー時のユーザー向けガイダンス実装
 
 ### Task 5: ショートカットキー統合とstacking mode統一
 
@@ -470,11 +470,11 @@ pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
       - UIの変更
 
 - タスク分割:
-  - [ ] key_handler.rsでAccessibility APIの使用
-  - [ ] daemon設定の更新（常にAccessibility使用）
-  - [ ] cmd_release_detector.rsの動作確認（簡素化可能か実装時に判断）
-  - [ ] 統合テストの実行と修正
-  - [ ] 環境変数での旧実装切り替え機能（移行期間のみ）
+  - [x] key_handler.rsでAccessibility APIの使用
+  - [x] daemon設定の更新（常にAccessibility使用）
+  - [x] cmd_release_detector.rsの動作確認（簡素化可能か実装時に判断）
+  - [x] 統合テストの実行と修正
+  - [x] 環境変数での旧実装切り替え機能（移行期間のみ）
 
 ### Task 6: 実環境テストとドキュメント化
 

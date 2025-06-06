@@ -298,6 +298,7 @@ mod tests {
         let shared_state = KeyHandlerState {
             cmd_pressed: handler.cmd_pressed.clone(),
             ipc_sender: _tx,
+            cmd_detector: handler.cmd_detector.clone(),
         };
 
         // 複製可能であることを確認
@@ -338,6 +339,7 @@ mod tests {
         let shared_state = KeyHandlerState {
             cmd_pressed: handler.cmd_pressed.clone(),
             ipc_sender: tx,
+            cmd_detector: handler.cmd_detector.clone(),
         };
 
         // イベントハンドラーを作成
@@ -372,6 +374,7 @@ mod tests {
         let shared_state = KeyHandlerState {
             cmd_pressed: handler.cmd_pressed.clone(),
             ipc_sender: tx,
+            cmd_detector: handler.cmd_detector.clone(),
         };
 
         let event_handler = KeyHandler::create_event_handler(shared_state);

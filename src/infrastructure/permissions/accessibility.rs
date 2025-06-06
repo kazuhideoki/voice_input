@@ -5,9 +5,7 @@
 //! システム環境設定への誘導を行います。
 
 use super::{PermissionChecker, PermissionStatus};
-use crate::infrastructure::external::accessibility_sys::{
-    AXIsProcessTrusted, AXIsProcessTrustedWithOptions,
-};
+use crate::infrastructure::external::accessibility_sys::AXIsProcessTrusted;
 
 /// アクセシビリティ権限管理構造体
 pub struct AccessibilityPermissions;
@@ -32,22 +30,13 @@ impl PermissionChecker for AccessibilityPermissions {
         // 実際のmacOS権限チェック
         #[cfg(not(feature = "ci-test"))]
         {
-            use core_foundation::base::CFTypeRef;
-            use std::ptr;
-
             unsafe {
                 let trusted = AXIsProcessTrusted();
                 if trusted != 0 {
                     PermissionStatus::Granted
                 } else {
-                    // 権限要求を行って状態を再確認
-                    AXIsProcessTrustedWithOptions(ptr::null() as CFTypeRef);
-                    let trusted_after_request = AXIsProcessTrusted();
-                    if trusted_after_request != 0 {
-                        PermissionStatus::Granted
-                    } else {
-                        PermissionStatus::Denied
-                    }
+                    // 権限要求は別途行う必要がある
+                    PermissionStatus::Denied
                 }
             }
         }
