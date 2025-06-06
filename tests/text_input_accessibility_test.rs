@@ -1,7 +1,7 @@
 //! text_input_accessibility モジュールの単体テスト
 
 use voice_input::infrastructure::external::text_input_accessibility::{
-    check_accessibility_permission, check_focused_element_is_text_field, TextInputError,
+    TextInputError, check_accessibility_permission, check_focused_element_is_text_field,
 };
 
 #[test]
@@ -68,7 +68,7 @@ async fn test_insert_text_at_cursor_basic() {
 fn test_check_focused_element() {
     println!("\n=== Focus Element Detection Test ===");
     println!("Please focus on different UI elements to test detection:");
-    
+
     match check_focused_element_is_text_field() {
         Ok(true) => {
             println!("✅ A text field is currently focused");
@@ -78,7 +78,9 @@ fn test_check_focused_element() {
         }
         Err(TextInputError::PermissionDenied) => {
             println!("❌ Accessibility permission denied");
-            println!("   Please grant permission in System Settings > Privacy & Security > Accessibility");
+            println!(
+                "   Please grant permission in System Settings > Privacy & Security > Accessibility"
+            );
         }
         Err(e) => {
             println!("❌ Error: {}", e);
@@ -105,7 +107,7 @@ fn test_multiple_applications() {
 
     for i in 1..=10 {
         thread::sleep(Duration::from_secs(2));
-        
+
         print!("Check #{}: ", i);
         match check_focused_element_is_text_field() {
             Ok(true) => println!("✅ Text field detected"),
@@ -119,14 +121,14 @@ fn test_multiple_applications() {
 #[cfg_attr(feature = "ci-test", ignore)]
 #[ignore] // 手動実行用: テキスト挿入の完全テスト
 async fn test_text_insertion_complete() {
-    use voice_input::infrastructure::external::text_input_accessibility::{
-        insert_text_at_cursor, check_accessibility_permission, check_focused_element_is_text_field
-    };
     use std::time::Duration;
     use tokio::time::sleep;
-    
+    use voice_input::infrastructure::external::text_input_accessibility::{
+        check_accessibility_permission, check_focused_element_is_text_field, insert_text_at_cursor,
+    };
+
     println!("\n=== Text Insertion Test ===");
-    
+
     // 1. 権限チェック
     match check_accessibility_permission() {
         Ok(()) => println!("✅ Accessibility permission granted"),
@@ -135,14 +137,14 @@ async fn test_text_insertion_complete() {
             return;
         }
     }
-    
+
     // 2. テキストフィールドにフォーカスするよう促す
     println!("\nPlease click on a text field within 5 seconds...");
     for i in (1..=5).rev() {
         println!("  Starting in {}...", i);
         sleep(Duration::from_secs(1)).await;
     }
-    
+
     // 3. フォーカス要素の確認
     match check_focused_element_is_text_field() {
         Ok(true) => println!("✅ Text field is focused"),
@@ -155,7 +157,7 @@ async fn test_text_insertion_complete() {
             return;
         }
     }
-    
+
     // 4. 各種テキストの挿入テスト
     let test_cases = vec![
         ("Hello, World! ", "ASCII text"),
@@ -164,7 +166,7 @@ async fn test_text_insertion_complete() {
         ("🚀✨🎉 ", "Emojis"),
         ("Mixed: ABC あいう 123 🎯 ", "Mixed content"),
     ];
-    
+
     for (text, description) in test_cases {
         println!("\nTesting {}: \"{}\"", description, text);
         match insert_text_at_cursor(text).await {
@@ -173,6 +175,6 @@ async fn test_text_insertion_complete() {
         }
         sleep(Duration::from_secs(1)).await;
     }
-    
+
     println!("\n✅ Test completed. Please verify the text was inserted correctly.");
 }

@@ -1,5 +1,5 @@
 //! macOS Accessibility API を使用したテキスト入力実装
-//! 
+//!
 //! CGEventTapとの競合を避けるため、キーボードイベントを生成せず
 //! 直接テキストフィールドにテキストを挿入する
 
@@ -9,10 +9,8 @@ use core_foundation_sys::base::{CFRelease, CFTypeRef};
 use std::error::Error;
 use std::fmt;
 
-// Import our sys module from a separate file
-#[path = "accessibility_sys.rs"]
-mod accessibility_sys;
-use accessibility_sys::*;
+// Import our sys module
+use super::accessibility_sys::*;
 
 /// テキスト入力エラー型（統一）
 #[derive(Debug)]
@@ -42,7 +40,10 @@ impl fmt::Display for TextInputError {
                 write!(f, "Accessibility API call failed: {}", msg)
             }
             TextInputError::PermissionDenied => {
-                write!(f, "Accessibility permission denied. Please grant accessibility access in System Settings.")
+                write!(
+                    f,
+                    "Accessibility permission denied. Please grant accessibility access in System Settings."
+                )
             }
             TextInputError::CursorPositionError(msg) => {
                 write!(f, "Failed to get cursor position: {}", msg)
@@ -106,23 +107,26 @@ fn extract_cursor_position_from_range(range_value: CFTypeRef) -> Result<usize, T
         location: core_foundation_sys::base::CFIndex,
         length: core_foundation_sys::base::CFIndex,
     }
-    
+
     unsafe {
         // CFTypeRefをCFRangeポインタとして扱う
         let range_ptr = range_value as *const CFRange;
         if range_ptr.is_null() {
-            return Err(TextInputError::CursorPositionError("Null range pointer".to_string()));
-        }
-        
-        let range = &*range_ptr;
-        
-        // locationが負の値の場合はエラー
-        if range.location < 0 {
             return Err(TextInputError::CursorPositionError(
-                format!("Invalid cursor position: {}", range.location)
+                "Null range pointer".to_string(),
             ));
         }
-        
+
+        let range = &*range_ptr;
+
+        // locationが負の値の場合はエラー
+        if range.location < 0 {
+            return Err(TextInputError::CursorPositionError(format!(
+                "Invalid cursor position: {}",
+                range.location
+            )));
+        }
+
         Ok(range.location as usize)
     }
 }
@@ -136,11 +140,12 @@ pub fn check_accessibility_permission() -> Result<(), TextInputError> {
             // 権限ダイアログを表示するオプション
             let prompt_key = CFString::from_static_string("AXTrustedCheckOptionPrompt");
             let cf_true = core_foundation::boolean::CFBoolean::true_value();
-            
-            let options = core_foundation::dictionary::CFDictionary::from_CFType_pairs(&[
-                (prompt_key.as_CFType(), cf_true.as_CFType())
-            ]);
-            
+
+            let options = core_foundation::dictionary::CFDictionary::from_CFType_pairs(&[(
+                prompt_key.as_CFType(),
+                cf_true.as_CFType(),
+            )]);
+
             AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef() as CFTypeRef);
             Err(TextInputError::PermissionDenied)
         }
@@ -162,13 +167,15 @@ pub async fn insert_text_at_cursor(text: &str) -> Result<(), TextInputError> {
 /// デバッグ用：フォーカス要素の情報を取得
 pub fn debug_focused_element() -> Result<String, TextInputError> {
     check_accessibility_permission()?;
-    
+
     unsafe {
         let system_wide = AXUIElementCreateSystemWide();
         if system_wide.is_null() {
-            return Err(TextInputError::ApiCallFailed("Failed to get system-wide element".to_string()));
+            return Err(TextInputError::ApiCallFailed(
+                "Failed to get system-wide element".to_string(),
+            ));
         }
-        
+
         let mut focused_element: CFTypeRef = std::ptr::null_mut();
         let attr_name = create_ax_focused_ui_element_attribute();
         let result = AXUIElementCopyAttributeValue(
@@ -176,13 +183,13 @@ pub fn debug_focused_element() -> Result<String, TextInputError> {
             attr_name.as_concrete_TypeRef(),
             &mut focused_element,
         );
-        
+
         CFRelease(system_wide as CFTypeRef);
-        
+
         if result != kAXErrorSuccess || focused_element.is_null() {
             return Err(TextInputError::NoFocusedElement);
         }
-        
+
         // Get role
         let mut role_value: CFTypeRef = std::ptr::null_mut();
         let role_attr = create_ax_role_attribute();
@@ -191,7 +198,7 @@ pub fn debug_focused_element() -> Result<String, TextInputError> {
             role_attr.as_concrete_TypeRef(),
             &mut role_value,
         );
-        
+
         let role = if role_result == kAXErrorSuccess && !role_value.is_null() {
             let cf_string = CFString::wrap_under_get_rule(role_value as CFStringRef);
             let role_str = cf_string.to_string();
@@ -200,9 +207,9 @@ pub fn debug_focused_element() -> Result<String, TextInputError> {
         } else {
             "Unknown".to_string()
         };
-        
+
         CFRelease(focused_element);
-        
+
         Ok(format!("Focused element role: {}", role))
     }
 }
@@ -211,20 +218,22 @@ pub fn debug_focused_element() -> Result<String, TextInputError> {
 pub fn check_focused_element_is_text_field() -> Result<bool, TextInputError> {
     // 権限チェック
     check_accessibility_permission()?;
-    
+
     // フォーカス要素を取得
     let element = match get_focused_element() {
         Ok(elem) => elem,
         Err(TextInputError::NoFocusedElement) => return Ok(false),
         Err(e) => return Err(e),
     };
-    
+
     // テキストフィールドかチェック
     let result = validate_text_element(&element);
-    
+
     // 要素をリリース
-    unsafe { CFRelease(element as CFTypeRef); }
-    
+    unsafe {
+        CFRelease(element as CFTypeRef);
+    }
+
     match result {
         Ok(()) => Ok(true),
         Err(TextInputError::NotTextElement) => Ok(false),
@@ -236,23 +245,27 @@ pub fn check_focused_element_is_text_field() -> Result<bool, TextInputError> {
 fn insert_text_sync(text: &str) -> Result<(), TextInputError> {
     // 1. 権限チェック
     check_accessibility_permission()?;
-    
+
     // 2. システム全体のフォーカス中要素を取得
     let focused_element = get_focused_element()?;
-    
+
     // 3. テキストフィールドかどうか確認
     let validation_result = validate_text_element(&focused_element);
     if validation_result.is_err() {
-        unsafe { CFRelease(focused_element as CFTypeRef); }
+        unsafe {
+            CFRelease(focused_element as CFTypeRef);
+        }
         return validation_result;
     }
-    
+
     // 4. カーソル位置に挿入
     let insert_result = insert_at_cursor_position(&focused_element, text);
-    
+
     // 5. 要素をリリース
-    unsafe { CFRelease(focused_element as CFTypeRef); }
-    
+    unsafe {
+        CFRelease(focused_element as CFTypeRef);
+    }
+
     insert_result
 }
 
@@ -261,34 +274,30 @@ fn get_focused_element() -> Result<AXUIElementRef, TextInputError> {
     unsafe {
         let system_wide = AXUIElementCreateSystemWide();
         if system_wide.is_null() {
-            return Err(TextInputError::ApiCallFailed("Failed to get system-wide element".to_string()));
+            return Err(TextInputError::ApiCallFailed(
+                "Failed to get system-wide element".to_string(),
+            ));
         }
-        
+
         let mut focused_element: CFTypeRef = std::ptr::null_mut();
-        
+
         let attr_name = create_ax_focused_ui_element_attribute();
         let result = AXUIElementCopyAttributeValue(
             system_wide,
             attr_name.as_concrete_TypeRef(),
             &mut focused_element,
         );
-        
+
         // system_wideのリリース
         CFRelease(system_wide as CFTypeRef);
-        
+
         match result {
             r if r == kAXErrorSuccess && !focused_element.is_null() => {
                 Ok(focused_element as AXUIElementRef)
             }
-            r if r == kAXErrorAPIDisabled => {
-                Err(TextInputError::PermissionDenied)
-            }
-            r if r == kAXErrorNoValue => {
-                Err(TextInputError::NoFocusedElement)
-            }
-            _ => {
-                Err(TextInputError::NoFocusedElement)
-            }
+            r if r == kAXErrorAPIDisabled => Err(TextInputError::PermissionDenied),
+            r if r == kAXErrorNoValue => Err(TextInputError::NoFocusedElement),
+            _ => Err(TextInputError::NoFocusedElement),
         }
     }
 }
@@ -297,30 +306,32 @@ fn get_focused_element() -> Result<AXUIElementRef, TextInputError> {
 fn validate_text_element(element: &AXUIElementRef) -> Result<(), TextInputError> {
     unsafe {
         let mut role_value: CFTypeRef = std::ptr::null_mut();
-        
+
         let role_attr = create_ax_role_attribute();
         let result = AXUIElementCopyAttributeValue(
             *element,
             role_attr.as_concrete_TypeRef(),
             &mut role_value,
         );
-        
+
         if result != kAXErrorSuccess || role_value.is_null() {
-            return Err(TextInputError::ApiCallFailed("Failed to get element role".to_string()));
+            return Err(TextInputError::ApiCallFailed(
+                "Failed to get element role".to_string(),
+            ));
         }
-        
+
         // roleをCFStringとして扱う
         let role_string = role_value as CFStringRef;
-        
+
         // テキスト入力可能なroleかチェック
         let is_text_element = cfstring_equals(role_string, &create_ax_text_field_role())
             || cfstring_equals(role_string, &create_ax_text_area_role())
             || cfstring_equals(role_string, &create_ax_combo_box_role())
             || cfstring_equals(role_string, &create_ax_search_field_role());
-        
+
         // roleのリリース
         CFRelease(role_value);
-        
+
         if is_text_element {
             // さらに編集可能かチェック（一部のテキストフィールドは読み取り専用の場合がある）
             let mut value: CFTypeRef = std::ptr::null_mut();
@@ -330,7 +341,7 @@ fn validate_text_element(element: &AXUIElementRef) -> Result<(), TextInputError>
                 value_attr.as_concrete_TypeRef(),
                 &mut value,
             );
-            
+
             if value_result == kAXErrorSuccess && !value.is_null() {
                 CFRelease(value);
                 Ok(())
@@ -358,7 +369,7 @@ fn insert_at_cursor_position(element: &AXUIElementRef, text: &str) -> Result<(),
             value_attr.as_concrete_TypeRef(),
             &mut current_value,
         );
-        
+
         let current_text = if value_result == kAXErrorSuccess && !current_value.is_null() {
             // CFStringとして扱い、文字列に変換
             let cf_string = CFString::wrap_under_get_rule(current_value as CFStringRef);
@@ -368,7 +379,7 @@ fn insert_at_cursor_position(element: &AXUIElementRef, text: &str) -> Result<(),
         } else {
             String::new()
         };
-        
+
         // 2. カーソル位置を取得
         let mut range_value: CFTypeRef = std::ptr::null_mut();
         let range_attr = create_ax_selected_text_range_attribute();
@@ -377,7 +388,7 @@ fn insert_at_cursor_position(element: &AXUIElementRef, text: &str) -> Result<(),
             range_attr.as_concrete_TypeRef(),
             &mut range_value,
         );
-        
+
         let cursor_position = if range_result == kAXErrorSuccess && !range_value.is_null() {
             // CFRangeからカーソル位置を取得
             let cursor_pos = extract_cursor_position_from_range(range_value)?;
@@ -387,10 +398,10 @@ fn insert_at_cursor_position(element: &AXUIElementRef, text: &str) -> Result<(),
             // カーソル位置が取得できない場合は末尾に追加
             current_text.len()
         };
-        
+
         // 3. 新しいテキストを構築（カーソル位置に挿入）
         let mut new_text = String::with_capacity(current_text.len() + text.len());
-        
+
         // UTF-8のバイト位置を正しく扱う
         let char_indices: Vec<(usize, char)> = current_text.char_indices().collect();
         let byte_position = if cursor_position >= char_indices.len() {
@@ -398,11 +409,11 @@ fn insert_at_cursor_position(element: &AXUIElementRef, text: &str) -> Result<(),
         } else {
             char_indices[cursor_position].0
         };
-        
+
         new_text.push_str(&current_text[..byte_position]);
         new_text.push_str(text);
         new_text.push_str(&current_text[byte_position..]);
-        
+
         // 4. 新しいテキストを設定
         let new_value = CFString::new(&new_text);
         let result = AXUIElementSetAttributeValue(
@@ -410,13 +421,16 @@ fn insert_at_cursor_position(element: &AXUIElementRef, text: &str) -> Result<(),
             value_attr.as_concrete_TypeRef(),
             new_value.as_concrete_TypeRef() as CFTypeRef,
         );
-        
+
         // 要素をリリース（insert_text_syncで行うので、ここでは不要）
-        
+
         if result == kAXErrorSuccess {
             Ok(())
         } else {
-            Err(TextInputError::ApiCallFailed(format!("Failed to set value: error code {}", result)))
+            Err(TextInputError::ApiCallFailed(format!(
+                "Failed to set value: error code {}",
+                result
+            )))
         }
     }
 }
@@ -447,7 +461,7 @@ mod tests {
             Err(e) => println!("Permission error: {}", e),
         }
     }
-    
+
     #[test]
     #[ignore] // 手動実行用
     fn test_focused_element() {
@@ -458,24 +472,26 @@ mod tests {
                 return;
             }
         }
-        
+
         // Test getting focused element
         match get_focused_element() {
             Ok(element) => {
                 println!("Got focused element: {:?}", element);
-                
+
                 // Test validation
                 match validate_text_element(&element) {
                     Ok(()) => println!("Element is a text field"),
                     Err(e) => println!("Not a text field: {}", e),
                 }
-                
-                unsafe { CFRelease(element as CFTypeRef); }
+
+                unsafe {
+                    CFRelease(element as CFTypeRef);
+                }
             }
             Err(e) => println!("Failed to get focused element: {}", e),
         }
     }
-    
+
     #[tokio::test]
     #[ignore] // 手動実行用
     async fn test_text_insertion() {

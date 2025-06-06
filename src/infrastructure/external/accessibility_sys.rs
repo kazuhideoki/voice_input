@@ -1,5 +1,5 @@
 //! Low-level macOS Accessibility API bindings
-//! 
+//!
 //! This module provides direct FFI bindings to the macOS Accessibility API functions
 //! that are not available in the standard crates.
 
@@ -48,58 +48,53 @@ pub const kAXErrorParameterizedAttributeUnsupported: AXError = -25213;
 pub const kAXErrorNotEnoughPrecision: AXError = -25214;
 
 // Link with the correct framework
-#[cfg_attr(target_os = "macos", link(name = "ApplicationServices", kind = "framework"))]
+#[cfg_attr(
+    target_os = "macos",
+    link(name = "ApplicationServices", kind = "framework")
+)]
 #[allow(dead_code)]
 unsafe extern "C" {
     // Basic accessibility functions
     pub fn AXIsProcessTrusted() -> Boolean;
     pub fn AXIsProcessTrustedWithOptions(options: CFTypeRef) -> Boolean;
-    
+
     // UIElement functions
     pub fn AXUIElementGetTypeID() -> CFTypeID;
     pub fn AXUIElementCreateSystemWide() -> AXUIElementRef;
     pub fn AXUIElementCreateApplication(pid: c_long) -> AXUIElementRef;
-    
+
     // Attribute functions
-    pub fn AXUIElementCopyAttributeNames(
-        element: AXUIElementRef,
-        names: *mut CFTypeRef,
-    ) -> AXError;
-    
+    pub fn AXUIElementCopyAttributeNames(element: AXUIElementRef, names: *mut CFTypeRef)
+    -> AXError;
+
     pub fn AXUIElementCopyAttributeValue(
         element: AXUIElementRef,
         attribute: CFStringRef,
         value: *mut CFTypeRef,
     ) -> AXError;
-    
+
     pub fn AXUIElementSetAttributeValue(
         element: AXUIElementRef,
         attribute: CFStringRef,
         value: CFTypeRef,
     ) -> AXError;
-    
+
     pub fn AXUIElementIsAttributeSettable(
         element: AXUIElementRef,
         attribute: CFStringRef,
         settable: *mut Boolean,
     ) -> AXError;
-    
+
     pub fn AXUIElementGetAttributeValueCount(
         element: AXUIElementRef,
         attribute: CFStringRef,
         count: *mut CFIndex,
     ) -> AXError;
-    
+
     // Action functions
-    pub fn AXUIElementCopyActionNames(
-        element: AXUIElementRef,
-        names: *mut CFTypeRef,
-    ) -> AXError;
-    
-    pub fn AXUIElementPerformAction(
-        element: AXUIElementRef,
-        action: CFStringRef,
-    ) -> AXError;
+    pub fn AXUIElementCopyActionNames(element: AXUIElementRef, names: *mut CFTypeRef) -> AXError;
+
+    pub fn AXUIElementPerformAction(element: AXUIElementRef, action: CFStringRef) -> AXError;
 }
 
 // Helper to check if an error is success

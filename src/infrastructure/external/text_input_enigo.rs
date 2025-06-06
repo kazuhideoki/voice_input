@@ -45,28 +45,30 @@ pub async fn type_text_with_enigo(text: &str) -> Result<(), EnigoInputError> {
     // tokioの非同期環境からブロッキング処理を実行
     tokio::task::spawn_blocking(move || {
         // Enigoインスタンスを作成（mac_delayを設定）
-        let mut settings = Settings::default();
-        settings.mac_delay = 20; // キーイベント間の遅延（ミリ秒）
-        
-        let mut enigo = Enigo::new(&settings)
-            .map_err(|e| EnigoInputError::InitError(e.to_string()))?;
+        let settings = Settings {
+            mac_delay: 20, // キーイベント間の遅延（ミリ秒）
+            ..Default::default()
+        };
+
+        let mut enigo =
+            Enigo::new(&settings).map_err(|e| EnigoInputError::InitError(e.to_string()))?;
 
         // 少し待機
         std::thread::sleep(std::time::Duration::from_millis(50));
-        
+
         // Metaキーのみリリース（最小限の修飾キー操作）
         use enigo::{Direction::Release, Key};
         let _ = enigo.key(Key::Meta, Release);
-        
+
         // リセット後の待機
         std::thread::sleep(std::time::Duration::from_millis(30));
-        
+
         // テキストを入力
         // enigoのtext()メソッドは、Unicode文字を含む全ての文字を正しく処理
         enigo
             .text(&text_owned)
             .map_err(|e| EnigoInputError::InputError(e.to_string()))?;
-            
+
         // Enigo処理完了後の待機（rdevの状態回復）
         std::thread::sleep(std::time::Duration::from_millis(30));
 

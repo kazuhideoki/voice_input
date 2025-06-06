@@ -49,7 +49,7 @@ use voice_input::{
     },
     ipc::{IpcCmd, IpcResp, RecordingResult, socket_path},
     load_env,
-    shortcut::{ShortcutService, CmdReleaseDetector},
+    shortcut::{CmdReleaseDetector, ShortcutService},
 };
 
 /// デフォルトの最大録音秒数 (`VOICE_INPUT_MAX_SECS` が未設定の場合に適用)。
@@ -240,7 +240,10 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
 
                         // Cmdキーがリリースされるのを待つ
                         println!("Waiting for Cmd key release...");
-                        match cmd_detector_clone.wait_for_release(Duration::from_millis(500)).await {
+                        match cmd_detector_clone
+                            .wait_for_release(Duration::from_millis(500))
+                            .await
+                        {
                             Ok(_) => {
                                 println!("Cmd key released, proceeding with paste");
                             }
@@ -248,7 +251,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                 println!("Cmd key release timeout, proceeding anyway");
                             }
                         }
-                        
+
                         // 直接入力方式で入力（サブプロセス実行）
                         match text_input::type_text(&text).await {
                             Ok(_) => {
@@ -266,13 +269,17 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                     eprintln!("Clipboard fallback also failed: {}", clip_err);
                                     Err(format!("Failed to paste stack {}: {}", number, e).into())
                                 } else {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(80))
+                                        .await;
                                     let _ = tokio::process::Command::new("osascript")
                                         .arg("-e")
                                         .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
                                         .output()
                                         .await;
-                                    println!("{} (via clipboard fallback)", UserFeedback::paste_success(number, char_count));
+                                    println!(
+                                        "{} (via clipboard fallback)",
+                                        UserFeedback::paste_success(number, char_count)
+                                    );
                                     Ok(IpcResp {
                                         ok: true,
                                         msg: format!("Pasted stack {} via clipboard", number),
@@ -285,8 +292,11 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 IpcCmd::DisableStackMode => {
-                    let mut service = stack_service_clone.borrow_mut();
-                    service.disable_stack_mode();
+                    // スタックモードを無効化（RefCellの参照をすぐに解放）
+                    {
+                        let mut service = stack_service_clone.borrow_mut();
+                        service.disable_stack_mode();
+                    }
 
                     // UI プロセス停止を試行
                     if let Ok(mut manager) = ui_manager_clone.try_borrow_mut() {
@@ -299,7 +309,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
 
                     // ショートカットサービスも停止
                     let should_stop = shortcut_service_clone.lock().await.is_enabled();
-                    
+
                     if should_stop {
                         println!("Stopping shortcut service with stack mode...");
                         let mut service = shortcut_service_clone.lock().await;
@@ -318,12 +328,12 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                 IpcCmd::ClearStacks => {
                     let mut service = stack_service_clone.borrow_mut();
                     service.clear_stacks();
-                    
+
                     // UI に通知
                     if let Ok(manager) = ui_manager_clone.try_borrow() {
                         let _ = manager.notify(UiNotification::StacksCleared);
                     }
-                    
+
                     Ok(IpcResp {
                         ok: true,
                         msg: "All stacks cleared".to_string(),
@@ -548,7 +558,10 @@ async fn handle_client(
                     drop(tx_guard); // Explicitly drop the guard before calling start
 
                     let mut service = shortcut_service.lock().await;
-                    if let Err(e) = service.start_with_detector(tx_clone, cmd_detector.clone()).await {
+                    if let Err(e) = service
+                        .start_with_detector(tx_clone, cmd_detector.clone())
+                        .await
+                    {
                         eprintln!("Failed to start shortcut service: {}", e);
                         eprintln!("Continuing without shortcut functionality...");
                     } else {

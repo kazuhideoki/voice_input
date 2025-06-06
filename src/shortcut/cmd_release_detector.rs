@@ -1,12 +1,12 @@
 //! Cmdキーのリリース検出モジュール
-//! 
+//!
 //! Cmdキーがリリースされたことを確実に検出し、
 //! ペースト処理の適切なタイミングを提供
 
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::Notify;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::Notify;
 
 /// Cmdキーの状態とリリース通知を管理
 pub struct CmdReleaseDetector {
@@ -51,10 +51,10 @@ impl CmdReleaseDetector {
     }
 
     /// Cmdキーのリリースを待機
-    /// 
+    ///
     /// # Arguments
     /// * `timeout` - タイムアウト時間
-    /// 
+    ///
     /// # Returns
     /// * `Ok(())` - Cmdキーがリリースされた
     /// * `Err(())` - タイムアウト
@@ -85,10 +85,10 @@ impl CmdReleaseDetector {
     }
 
     /// Cmdキーが最近押されたか確認
-    /// 
+    ///
     /// # Arguments
     /// * `within` - この時間内に押されたかを確認
-    /// 
+    ///
     /// # Returns
     /// * `true` - 指定時間内に押された
     /// * `false` - 押されていない、または指定時間より前
@@ -99,6 +99,12 @@ impl CmdReleaseDetector {
             }
         }
         false
+    }
+}
+
+impl Default for CmdReleaseDetector {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -119,21 +125,21 @@ mod tests {
     #[tokio::test]
     async fn test_cmd_release_detection() {
         let detector = CmdReleaseDetector::new();
-        
+
         // 初期状態
         assert!(!detector.is_cmd_pressed());
-        
+
         // Cmd押下
         detector.on_cmd_press();
         assert!(detector.is_cmd_pressed());
-        
+
         // 別タスクからリリース
         let detector_clone = detector.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(50)).await;
             detector_clone.on_cmd_release();
         });
-        
+
         // リリース待機
         let result = detector.wait_for_release(Duration::from_millis(100)).await;
         assert!(result.is_ok());
@@ -143,10 +149,10 @@ mod tests {
     #[tokio::test]
     async fn test_timeout() {
         let detector = CmdReleaseDetector::new();
-        
+
         // Cmd押下
         detector.on_cmd_press();
-        
+
         // タイムアウトテスト
         let result = detector.wait_for_release(Duration::from_millis(50)).await;
         assert!(result.is_err());
@@ -157,12 +163,12 @@ mod tests {
     #[tokio::test]
     async fn test_already_released() {
         let detector = CmdReleaseDetector::new();
-        
+
         // 既にリリースされている場合は即座に返る
         let start = Instant::now();
         let result = detector.wait_for_release(Duration::from_secs(1)).await;
         let elapsed = start.elapsed();
-        
+
         assert!(result.is_ok());
         assert!(elapsed < Duration::from_millis(100));
     }
@@ -170,14 +176,14 @@ mod tests {
     #[test]
     fn test_recent_press() {
         let detector = CmdReleaseDetector::new();
-        
+
         // 押下前
         assert!(!detector.was_pressed_recently(Duration::from_secs(1)));
-        
+
         // 押下
         detector.on_cmd_press();
         assert!(detector.was_pressed_recently(Duration::from_millis(100)));
-        
+
         std::thread::sleep(Duration::from_millis(150));
         assert!(!detector.was_pressed_recently(Duration::from_millis(100)));
     }

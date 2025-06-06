@@ -7,11 +7,11 @@ use crate::ipc::IpcCmd;
 use std::fmt;
 use tokio::sync::mpsc;
 
-pub mod key_handler;
 pub mod cmd_release_detector;
+pub mod key_handler;
 
-use key_handler::KeyHandler;
 pub use cmd_release_detector::CmdReleaseDetector;
+use key_handler::KeyHandler;
 
 /// ショートカットサービスエラー型
 #[derive(Debug, Clone)]
@@ -112,7 +112,8 @@ impl ShortcutService {
         &mut self,
         ipc_sender: mpsc::UnboundedSender<IpcCmd>,
     ) -> Result<(), ShortcutError> {
-        self.start_with_detector(ipc_sender, CmdReleaseDetector::new()).await
+        self.start_with_detector(ipc_sender, CmdReleaseDetector::new())
+            .await
     }
 
     /// Cmdキー検出器を指定してショートカットキーサービスを開始

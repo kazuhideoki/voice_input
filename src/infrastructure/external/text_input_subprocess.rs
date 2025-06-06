@@ -48,7 +48,9 @@ pub async fn type_text_via_subprocess(text: &str) -> Result<(), SubprocessInputE
     let helper_path = std::env::current_exe()
         .map_err(|e| SubprocessInputError::HelperNotFound(e.to_string()))?
         .parent()
-        .ok_or_else(|| SubprocessInputError::HelperNotFound("Parent directory not found".to_string()))?
+        .ok_or_else(|| {
+            SubprocessInputError::HelperNotFound("Parent directory not found".to_string())
+        })?
         .join("enigo_helper");
 
     // サブプロセスを起動してテキストを入力
@@ -63,10 +65,21 @@ pub async fn type_text_via_subprocess(text: &str) -> Result<(), SubprocessInputE
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         match output.status.code() {
-            Some(1) => Err(SubprocessInputError::ExecutionError("Invalid arguments".to_string())),
-            Some(2) => Err(SubprocessInputError::ExecutionError(format!("Text input failed: {}", stderr))),
-            Some(3) => Err(SubprocessInputError::ExecutionError(format!("Enigo initialization failed: {}", stderr))),
-            _ => Err(SubprocessInputError::ExecutionError(format!("Unknown error: {}", stderr))),
+            Some(1) => Err(SubprocessInputError::ExecutionError(
+                "Invalid arguments".to_string(),
+            )),
+            Some(2) => Err(SubprocessInputError::ExecutionError(format!(
+                "Text input failed: {}",
+                stderr
+            ))),
+            Some(3) => Err(SubprocessInputError::ExecutionError(format!(
+                "Enigo initialization failed: {}",
+                stderr
+            ))),
+            _ => Err(SubprocessInputError::ExecutionError(format!(
+                "Unknown error: {}",
+                stderr
+            ))),
         }
     }
 }

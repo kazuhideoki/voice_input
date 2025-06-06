@@ -1,3 +1,4 @@
+pub mod accessibility_sys;
 pub mod clipboard;
 pub mod openai;
 pub mod sound;

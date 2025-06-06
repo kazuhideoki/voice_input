@@ -5,6 +5,9 @@
 //! システム環境設定への誘導を行います。
 
 use super::{PermissionChecker, PermissionStatus};
+use crate::infrastructure::external::accessibility_sys::{
+    AXIsProcessTrusted, AXIsProcessTrustedWithOptions,
+};
 
 /// アクセシビリティ権限管理構造体
 pub struct AccessibilityPermissions;
@@ -33,14 +36,14 @@ impl PermissionChecker for AccessibilityPermissions {
             use std::ptr;
 
             unsafe {
-                let trusted = ffi::AXIsProcessTrusted();
-                if trusted {
+                let trusted = AXIsProcessTrusted();
+                if trusted != 0 {
                     PermissionStatus::Granted
                 } else {
                     // 権限要求を行って状態を再確認
-                    ffi::AXIsProcessTrustedWithOptions(ptr::null() as CFTypeRef);
-                    let trusted_after_request = ffi::AXIsProcessTrusted();
-                    if trusted_after_request {
+                    AXIsProcessTrustedWithOptions(ptr::null() as CFTypeRef);
+                    let trusted_after_request = AXIsProcessTrusted();
+                    if trusted_after_request != 0 {
                         PermissionStatus::Granted
                     } else {
                         PermissionStatus::Denied
@@ -102,21 +105,6 @@ impl PermissionChecker for AccessibilityPermissions {
          アクセシビリティ権限が必要です。\n\
          この権限により、Cmd+Rでの録音開始/停止、Cmd+数字でのスタックペーストが可能になります。"
             .to_string()
-    }
-}
-
-/// CoreFoundation FFI wrapper（内部実装）
-mod ffi {
-    use core_foundation::base::CFTypeRef;
-
-    #[link(name = "ApplicationServices", kind = "framework")]
-    unsafe extern "C" {
-        /// アクセシビリティ権限が信頼されているかチェック
-        pub fn AXIsProcessTrusted() -> bool;
-
-        /// アクセシビリティ権限要求付きチェック
-        /// options: kAXTrustedCheckOptionPrompt を含むCFDictionary
-        pub fn AXIsProcessTrustedWithOptions(options: CFTypeRef) -> bool;
     }
 }
 

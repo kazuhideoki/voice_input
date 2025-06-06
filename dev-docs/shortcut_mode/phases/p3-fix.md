@@ -3,9 +3,11 @@
 ## Why
 
 ### Phase 概要
+
 Phase 3で実装したショートカットキー機能において、連続入力時の抑制失敗が発生している。特に文字入力を挟んだ後の次の1回目のキーイベントが失敗する問題の根本的解決を目指す。
 
 ### 目的
+
 - **問題**: rdevのCGEventTapとEnigoのCGEventPostがmacOSカーネルレベルで競合
 - **現象**: `cmd+1 -> 文字入力 -> cmd+2(失敗) -> cmd+2(成功)`のパターン
 - **目標**: キーボードイベント生成を避け、Accessibility APIによる直接テキスト挿入で競合を完全回避
@@ -70,26 +72,28 @@ sequenceDiagram
     rdev->>KeyHandler: KeyPress Event
     KeyHandler->>KeyHandler: キー抑制判定
     KeyHandler->>Daemon: IpcCmd::PasteStack
-    
+
     Note over rdev: CGEventTapは継続動作<br/>（他のホットキーも抑制）
-    
+
     Daemon->>Daemon: Cmdキーリリース待機
     Daemon->>AccessibilityAPI: AXUIElementSetValue
     AccessibilityAPI->>TargetApp: 直接テキスト挿入
-    
+
     Note over AccessibilityAPI,TargetApp: キーボードイベント生成なし<br/>CGEventTapとの競合なし
-    
+
     TargetApp-->>User: テキスト表示
 ```
 
 ### 成果物
 
 #### 機能要件
+
 - **安定したショートカット処理**: 連続入力、文字入力後でも100%成功
 - **互換性維持**: 既存のstack機能、UI連携は変更なし
 - **エラーハンドリング**: Accessibility API失敗時は操作を中止し、ユーザーに通知
 
 #### 非機能要件
+
 - **信頼性**: CGEventTap競合による失敗率0%
 - **レスポンス性**: キーイベント生成のオーバーヘッド削除
 - **セキュリティ**: アクセシビリティ権限の適切な管理
@@ -199,17 +203,17 @@ pub async fn insert_text_at_cursor(text: &str) -> Result<(), TextInputError> {
 fn insert_text_sync(text: &str) -> Result<(), TextInputError> {
     // 1. 権限チェック
     check_accessibility_permission()?;
-    
+
     // 2. システム全体のフォーカス中要素を取得
     let focused_element = get_focused_element()?;
-    
+
     // 3. テキストフィールドかどうか確認
     // 注: validate_text_element()で許可するRole（AXTextField等）は実装時に調査して決定
     validate_text_element(&focused_element)?;
-    
+
     // 4. カーソル位置に挿入
     insert_at_cursor_position(&focused_element, text)?;
-    
+
     Ok(())
 }
 
@@ -218,14 +222,14 @@ fn get_focused_element() -> Result<AXUIElementRef, TextInputError> {
     unsafe {
         let system_wide = AXUIElementCopySystemWide();
         let mut focused_element: CFTypeRef = std::ptr::null_mut();
-        
+
         // 注: kAXFocusedUIElementAttribute等の定数は実装時に定義
         let result = AXUIElementCopyAttributeValue(
             system_wide,
             kAXFocusedUIElementAttribute,
             &mut focused_element,
         );
-        
+
         if result == kAXErrorSuccess && !focused_element.is_null() {
             Ok(focused_element as AXUIElementRef)
         } else {
@@ -244,14 +248,14 @@ fn insert_at_cursor_position(element: &AXUIElementRef, text: &str) -> Result<(),
             kAXValueAttribute,
             &mut current_value,
         );
-        
+
         let current_text = if !current_value.is_null() {
             // 注: cfstring_to_string()の実装は実装時に決定
             cfstring_to_string(current_value as CFStringRef)
         } else {
             String::new()
         };
-        
+
         // 2. カーソル位置を取得
         let mut range_value: CFTypeRef = std::ptr::null_mut();
         let range_result = AXUIElementCopyAttributeValue(
@@ -259,7 +263,7 @@ fn insert_at_cursor_position(element: &AXUIElementRef, text: &str) -> Result<(),
             kAXSelectedTextRangeAttribute,
             &mut range_value,
         );
-        
+
         let cursor_position = if range_result == kAXErrorSuccess && !range_value.is_null() {
             // CFRange から位置を取得
             // 注: extract_cursor_position()の実装は実装時に決定
@@ -268,13 +272,13 @@ fn insert_at_cursor_position(element: &AXUIElementRef, text: &str) -> Result<(),
             // カーソル位置が取得できない場合は末尾に追加
             current_text.len()
         };
-        
+
         // 3. 新しいテキストを構築
         let mut new_text = String::with_capacity(current_text.len() + text.len());
         new_text.push_str(&current_text[..cursor_position]);
         new_text.push_str(text);
         new_text.push_str(&current_text[cursor_position..]);
-        
+
         // 4. 新しいテキストを設定
         // 注: create_cfstring()の実装は実装時に決定
         let new_value = create_cfstring(&new_text);
@@ -283,7 +287,7 @@ fn insert_at_cursor_position(element: &AXUIElementRef, text: &str) -> Result<(),
             kAXValueAttribute,
             new_value as CFTypeRef,
         );
-        
+
         if result == kAXErrorSuccess {
             Ok(())
         } else {
@@ -304,7 +308,7 @@ use crate::infrastructure::external::text_input_accessibility;
 use std::error::Error;
 
 /// メイン入力関数（Accessibility APIのみ使用）
-/// 
+///
 /// 注: subprocess方式はEnigoを使用するため同じ競合問題が発生。
 /// そのため、フォールバックは行わず、失敗時はエラーを返す。
 pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
@@ -315,28 +319,28 @@ pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
         }
         Err(e) => {
             eprintln!("Text insertion failed: {}", e);
-            
+
             // 権限エラーの場合は特別なメッセージ
             if matches!(e, text_input_accessibility::TextInputError::PermissionDenied) {
                 eprintln!("\nPlease grant accessibility permission:");
                 eprintln!("System Settings > Privacy & Security > Accessibility");
             }
-            
+
             Err(Box::new(e))
         }
     }
 }
 ```
 
-
 ## 詳細設計項目
 
 ### Task 1: Accessibility API基盤実装
 
 - **How**
+
   - 内容
     - 目的: macOS Accessibility APIへの低レベルアクセスを可能にする基盤を構築
-    - 成果物: 
+    - 成果物:
       - `src/infrastructure/external/text_input_accessibility.rs`（基本構造）
       - CoreFoundation bindingsの追加（Cargo.tomlの更新）
     - 完了条件:
@@ -360,6 +364,7 @@ pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
 ### Task 2: フォーカス要素検出機能実装
 
 - **How**
+
   - 内容
     - 目的: システム全体でフォーカスされている要素を検出し、テキスト入力可能か判定
     - 成果物:
@@ -387,6 +392,7 @@ pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
 ### Task 3: テキスト挿入機能実装
 
 - **How**
+
   - 内容
     - 目的: フォーカスされたテキストフィールドに直接テキストを挿入
     - 成果物:
@@ -406,15 +412,16 @@ pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
       - ショートカットキーとの統合（Task 5で実装）
 
 - タスク分割:
-  - [ ] AXUIElementSetAttributeValueの実装
-  - [ ] カーソル位置の取得と挿入位置の計算
-  - [ ] テキスト挿入のテスト（ASCII文字）
-  - [ ] マルチバイト文字対応とテスト
-  - [ ] エラーケースのテストとハンドリング
+  - [x] AXUIElementSetAttributeValueの実装
+  - [x] カーソル位置の取得と挿入位置の計算
+  - [x] テキスト挿入のテスト（ASCII文字）
+  - [x] マルチバイト文字対応とテスト
+  - [x] エラーケースのテストとハンドリング
 
 ### Task 4: エラーハンドリングと統合
 
 - **How**
+
   - 内容
     - 目的: Accessibility API失敗時の適切なエラーハンドリングと既存システムとの統合
     - 成果物:
@@ -442,6 +449,7 @@ pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
 ### Task 5: ショートカットキー統合とstacking mode統一
 
 - **How**
+
   - 内容
     - 目的: ショートカットキー機能とstacking mode off時の入力を全てAccessibility APIに統一
     - 成果物:
@@ -471,6 +479,7 @@ pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
 ### Task 6: 実環境テストとドキュメント化
 
 - **How**
+
   - 内容
     - 目的: 各種アプリケーションでの動作確認と使用方法のドキュメント化
     - 成果物:
@@ -501,25 +510,29 @@ pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
 ### 全体的な動作確認
 
 1. **基本動作テスト**
+
    - [ ] Chrome でのテキスト入力
-   - [ ] VS Code でのテキスト入力  
+   - [ ] VS Code でのテキスト入力
    - [ ] Terminal.app でのテキスト入力
    - [ ] Safari でのテキスト入力
    - [ ] Notes.app でのテキスト入力
 
 2. **ショートカットキー動作**
+
    - [ ] Cmd+1 でstack 1の内容がペースト
    - [ ] Cmd+2 でstack 2の内容がペースト
    - [ ] Cmd+1→入力→Cmd+2 の連続動作（10回連続成功）
    - [ ] 高速連打での安定性（Cmd+1を10回連続）
 
 3. **エラーケーステスト**
+
    - [ ] アクセシビリティ権限なしでの動作
    - [ ] フォーカスなし状態での動作
    - [ ] 非テキストフィールドでの動作
    - [ ] アプリケーション切り替え中の動作
 
 4. **多言語対応テスト**
+
    - [ ] 日本語テキストの挿入
    - [ ] 絵文字の挿入
    - [ ] 特殊文字の挿入
