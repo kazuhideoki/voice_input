@@ -29,3 +29,5 @@ impl fmt::Display for AnimationError {
 impl std::error::Error for AnimationError {}
 
 pub mod cursor_tracker;
+
+pub use cursor_tracker::{CursorPosition, CursorTracker};

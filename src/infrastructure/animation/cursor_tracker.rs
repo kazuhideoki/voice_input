@@ -4,8 +4,7 @@
 //! that will be used for positioning animation indicators.
 
 use super::AnimationError;
-#[allow(unused_imports)]
-use crate::infrastructure::external::accessibility_sys::*;
+use core_foundation_sys::base::{CFRelease, CFTypeRef};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -32,6 +31,7 @@ impl Default for CursorTracker {
     }
 }
 
+/// TODO カーソル位置以外も対応するなら trait を作ってもいいのかも
 impl CursorTracker {
     /// 新しいカーソル追跡器を作成（30ms間隔のポーリング）
     pub fn new() -> Self {
@@ -82,11 +82,44 @@ impl CursorTracker {
 
     /// 現在のカーソル位置を同期的に取得
     fn get_cursor_position_sync() -> Result<CursorPosition, AnimationError> {
-        // FFIを使用したカーソル位置取得の実装
-        // TODO: 実装
-        Err(AnimationError::AccessibilityError(
-            "Not implemented".to_string(),
-        ))
+        // ポーリング実装では、常にマウスカーソル位置を直接取得する
+        // AXUIElementの実装は複雑でテキストカーソル位置の取得が不安定なため、
+        // Phase 1ではマウスカーソル位置のみを使用
+        Self::get_mouse_position()
+    }
+
+    /// マウスカーソル位置を取得（フォールバック用）
+    fn get_mouse_position() -> Result<CursorPosition, AnimationError> {
+        #[repr(C)]
+        struct CGPoint {
+            x: f64,
+            y: f64,
+        }
+
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" {
+            fn CGEventCreate(source: *const std::ffi::c_void) -> *mut std::ffi::c_void;
+            fn CGEventGetLocation(event: *const std::ffi::c_void) -> CGPoint;
+        }
+
+        unsafe {
+            let event = CGEventCreate(std::ptr::null());
+            if event.is_null() {
+                return Err(AnimationError::ResourceError(
+                    "Failed to create CGEvent".to_string(),
+                ));
+            }
+
+            let location = CGEventGetLocation(event);
+
+            // CFRelease for event
+            CFRelease(event as CFTypeRef);
+
+            Ok(CursorPosition {
+                x: location.x,
+                y: location.y,
+            })
+        }
     }
 
     /// 位置更新を受信するためのレシーバーを取得
