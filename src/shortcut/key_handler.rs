@@ -99,76 +99,60 @@ impl KeyHandler {
                             *pressed = true;
                         }
                         cmd_detector.on_cmd_press();
-                        // メタキー単体は常にパススルー
                         return Some(event);
                     }
 
-                    // ESCキー処理（Cmdキー不要）
-                    if key == Key::Escape {
-                        let cmd = IpcCmd::DisableStackMode;
-                        if let Err(e) = ipc_sender.send(cmd) {
-                            eprintln!("Failed to send DisableStackMode command: {}", e);
-                        } else {
-                            println!("Sent DisableStackMode command (ESC)");
+                    // Cmdキーが押されている場合のみ、特定のキーの組み合わせを処理
+                    if Self::is_cmd_pressed(cmd_state) {
+                        match key {
+                            Key::KeyR => {
+                                let cmd = IpcCmd::Toggle {
+                                    paste: false,
+                                    prompt: None,
+                                    direct_input: false,
+                                };
+                                if let Err(e) = ipc_sender.send(cmd) {
+                                    eprintln!("Failed to send Toggle command: {}", e);
+                                } else {
+                                    println!("Sent Toggle command (Cmd+R)");
+                                }
+                                return None; // 抑制
+                            }
+                            Key::KeyC => {
+                                let cmd = IpcCmd::ClearStacks;
+                                if let Err(e) = ipc_sender.send(cmd) {
+                                    eprintln!("Failed to send ClearStacks command: {}", e);
+                                } else {
+                                    println!("Sent ClearStacks command (Cmd+C)");
+                                }
+                                return None; // 抑制
+                            }
+                            Key::Escape => {
+                                let cmd = IpcCmd::DisableStackMode;
+                                if let Err(e) = ipc_sender.send(cmd) {
+                                    eprintln!("Failed to send DisableStackMode command: {}", e);
+                                } else {
+                                    println!("Sent DisableStackMode command (Cmd+ESC)");
+                                }
+                                return None; // 抑制
+                            }
+                            Key::Num1 | Key::Num2 | Key::Num3 | Key::Num4 | Key::Num5 | 
+                            Key::Num6 | Key::Num7 | Key::Num8 | Key::Num9 => {
+                                let number = Self::key_to_number(&key);
+                                let cmd = IpcCmd::PasteStack { number };
+                                if let Err(e) = ipc_sender.send(cmd) {
+                                    eprintln!("Failed to send PasteStack command: {}", e);
+                                } else {
+                                    println!("Sent PasteStack command (Cmd+{})", number);
+                                }
+                                return None; // 抑制
+                            }
+                            _ => {} // その他のキーは下でパススルー
                         }
-                        return None; // イベント抑制
                     }
 
-                    // Cmdキーが押されていない場合は即座にパススルー
-                    if !Self::is_cmd_pressed(cmd_state) {
-                        return Some(event);
-                    }
-
-                    // ここからはCmd+他のキーの組み合わせのみ処理
-                    match key {
-                        Key::KeyR => {
-                            // 既存のToggleコマンドを送信
-                            let cmd = IpcCmd::Toggle {
-                                paste: false,
-                                prompt: None,
-                                direct_input: false,
-                            };
-                            if let Err(e) = ipc_sender.send(cmd) {
-                                eprintln!("Failed to send Toggle command: {}", e);
-                            } else {
-                                println!("Sent Toggle command (Cmd+R)");
-                            }
-                            return None; // イベント抑制
-                        }
-                        Key::Num1
-                        | Key::Num2
-                        | Key::Num3
-                        | Key::Num4
-                        | Key::Num5
-                        | Key::Num6
-                        | Key::Num7
-                        | Key::Num8
-                        | Key::Num9 => {
-                            // Cmdキー状態を含めてPasteStackコマンドを送信
-                            let number = Self::key_to_number(&key);
-                            let cmd = IpcCmd::PasteStack { number };
-                            if let Err(e) = ipc_sender.send(cmd) {
-                                eprintln!("Failed to send PasteStack command: {}", e);
-                            } else {
-                                println!("Sent PasteStack command (Cmd+{})", number);
-                            }
-                            return None; // イベント抑制
-                        }
-                        Key::KeyC => {
-                            // Cmd+Cで全スタッククリア
-                            let cmd = IpcCmd::ClearStacks;
-                            if let Err(e) = ipc_sender.send(cmd) {
-                                eprintln!("Failed to send ClearStacks command: {}", e);
-                            } else {
-                                println!("Sent ClearStacks command (Cmd+C)");
-                            }
-                            return None; // イベント抑制
-                        }
-                        _ => {
-                            // その他のCmd+キーの組み合わせは全てパススルー
-                            return Some(event);
-                        }
-                    }
+                    // デフォルトは全てパススルー
+                    Some(event)
                 }
                 EventType::KeyRelease(key) => {
                     if Self::is_cmd_key(&key) {
@@ -177,13 +161,9 @@ impl KeyHandler {
                         }
                         cmd_detector.on_cmd_release();
                     }
-                    // 全てのKeyReleaseイベントはパススルー
-                    return Some(event);
+                    Some(event)
                 }
-                _ => {
-                    // その他のイベントタイプは全てパススルー
-                    return Some(event);
-                }
+                _ => Some(event)
             }
         }
     }
@@ -344,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn test_escape_key_event_handling() {
+    fn test_cmd_escape_key_event_handling() {
         use rdev::{Event, EventType};
 
         // テスト用のチャンネル作成
@@ -358,6 +338,12 @@ mod tests {
             cmd_detector: handler.cmd_detector.clone(),
         };
 
+        // Cmdキーを押下状態にする
+        {
+            let mut pressed = shared_state.cmd_pressed.lock().unwrap();
+            *pressed = true;
+        }
+
         // イベントハンドラーを作成
         let event_handler = KeyHandler::create_event_handler(shared_state);
 
@@ -368,11 +354,11 @@ mod tests {
             name: None,
         };
 
-        // ESCキーイベントを処理
+        // Cmd+ESCキーイベントを処理
         let result = event_handler(esc_event);
 
-        // ESCキーは抑制されるべき（None）
-        assert!(result.is_none(), "ESCキーイベントは抑制されるべき");
+        // Cmd+ESCキーは抑制されるべき（None）
+        assert!(result.is_none(), "Cmd+ESCキーイベントは抑制されるべき");
 
         // DisableStackModeコマンドが送信されたことを確認
         let cmd = rx.blocking_recv();
@@ -395,7 +381,7 @@ mod tests {
 
         let event_handler = KeyHandler::create_event_handler(shared_state);
 
-        // Cmdが押されていない状態でもESCキーは機能することを確認
+        // Cmdが押されていない状態でESCキーは機能しないことを確認
         let esc_event = Event {
             event_type: EventType::KeyPress(Key::Escape),
             time: std::time::SystemTime::now(),
@@ -403,9 +389,10 @@ mod tests {
         };
 
         let result = event_handler(esc_event);
-        assert!(result.is_none());
+        // ESCキー単独はパススルーされるべき（Some）
+        assert!(result.is_some(), "ESCキー単独はパススルーされるべき");
 
-        let cmd = rx.blocking_recv();
-        assert_eq!(cmd.unwrap(), IpcCmd::DisableStackMode);
+        // コマンドが送信されていないことを確認
+        assert!(rx.try_recv().is_err(), "ESCキー単独ではコマンドが送信されないべき");
     }
 }
