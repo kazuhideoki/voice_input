@@ -75,6 +75,11 @@ impl KeyHandler {
 
     /// イベントハンドラー関数を作成（クロージャーベース）
     ///
+    /// rdev::grabによってシステムレベルでキーイベントをインターセプトし、
+    /// 特定のキーコンビネーションのみを抑制する。
+    /// - None を返す: イベントを消費（他のアプリケーションに届かない）
+    /// - Some(event) を返す: イベントをパススルー（通常通り処理される）
+    ///
     /// # Arguments
     /// * `shared_state` - コールバック間で共有する状態
     ///
@@ -94,6 +99,8 @@ impl KeyHandler {
                             *pressed = true;
                         }
                         cmd_detector.on_cmd_press();
+                        // メタキー単体は常にパススルー
+                        return Some(event);
                     }
 
                     // ESCキー処理（Cmdキー不要）
@@ -107,53 +114,59 @@ impl KeyHandler {
                         return None; // イベント抑制
                     }
 
-                    // ショートカットキー判定とIPC送信
-                    if Self::is_cmd_pressed(cmd_state) {
-                        match key {
-                            Key::KeyR => {
-                                // 既存のToggleコマンドを送信
-                                let cmd = IpcCmd::Toggle {
-                                    paste: false,
-                                    prompt: None,
-                                    direct_input: false,
-                                };
-                                if let Err(e) = ipc_sender.send(cmd) {
-                                    eprintln!("Failed to send Toggle command: {}", e);
-                                } else {
-                                    println!("Sent Toggle command (Cmd+R)");
-                                }
-                                return None; // イベント抑制
+                    // Cmdキーが押されていない場合は即座にパススルー
+                    if !Self::is_cmd_pressed(cmd_state) {
+                        return Some(event);
+                    }
+
+                    // ここからはCmd+他のキーの組み合わせのみ処理
+                    match key {
+                        Key::KeyR => {
+                            // 既存のToggleコマンドを送信
+                            let cmd = IpcCmd::Toggle {
+                                paste: false,
+                                prompt: None,
+                                direct_input: false,
+                            };
+                            if let Err(e) = ipc_sender.send(cmd) {
+                                eprintln!("Failed to send Toggle command: {}", e);
+                            } else {
+                                println!("Sent Toggle command (Cmd+R)");
                             }
-                            Key::Num1
-                            | Key::Num2
-                            | Key::Num3
-                            | Key::Num4
-                            | Key::Num5
-                            | Key::Num6
-                            | Key::Num7
-                            | Key::Num8
-                            | Key::Num9 => {
-                                // Cmdキー状態を含めてPasteStackコマンドを送信
-                                let number = Self::key_to_number(&key);
-                                let cmd = IpcCmd::PasteStack { number };
-                                if let Err(e) = ipc_sender.send(cmd) {
-                                    eprintln!("Failed to send PasteStack command: {}", e);
-                                } else {
-                                    println!("Sent PasteStack command (Cmd+{})", number);
-                                }
-                                return None; // イベント抑制
+                            return None; // イベント抑制
+                        }
+                        Key::Num1
+                        | Key::Num2
+                        | Key::Num3
+                        | Key::Num4
+                        | Key::Num5
+                        | Key::Num6
+                        | Key::Num7
+                        | Key::Num8
+                        | Key::Num9 => {
+                            // Cmdキー状態を含めてPasteStackコマンドを送信
+                            let number = Self::key_to_number(&key);
+                            let cmd = IpcCmd::PasteStack { number };
+                            if let Err(e) = ipc_sender.send(cmd) {
+                                eprintln!("Failed to send PasteStack command: {}", e);
+                            } else {
+                                println!("Sent PasteStack command (Cmd+{})", number);
                             }
-                            Key::KeyC => {
-                                // Cmd+Cで全スタッククリア
-                                let cmd = IpcCmd::ClearStacks;
-                                if let Err(e) = ipc_sender.send(cmd) {
-                                    eprintln!("Failed to send ClearStacks command: {}", e);
-                                } else {
-                                    println!("Sent ClearStacks command (Cmd+C)");
-                                }
-                                return None; // イベント抑制
+                            return None; // イベント抑制
+                        }
+                        Key::KeyC => {
+                            // Cmd+Cで全スタッククリア
+                            let cmd = IpcCmd::ClearStacks;
+                            if let Err(e) = ipc_sender.send(cmd) {
+                                eprintln!("Failed to send ClearStacks command: {}", e);
+                            } else {
+                                println!("Sent ClearStacks command (Cmd+C)");
                             }
-                            _ => {}
+                            return None; // イベント抑制
+                        }
+                        _ => {
+                            // その他のCmd+キーの組み合わせは全てパススルー
+                            return Some(event);
                         }
                     }
                 }
@@ -164,11 +177,14 @@ impl KeyHandler {
                         }
                         cmd_detector.on_cmd_release();
                     }
+                    // 全てのKeyReleaseイベントはパススルー
+                    return Some(event);
                 }
-                _ => {}
+                _ => {
+                    // その他のイベントタイプは全てパススルー
+                    return Some(event);
+                }
             }
-
-            Some(event) // パススルー
         }
     }
 
