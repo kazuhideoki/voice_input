@@ -22,7 +22,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use arboard::Clipboard;
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use tokio::{
@@ -264,27 +263,8 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                             Err(e) => {
                                 eprintln!("Direct input failed: {:?}", e);
                                 eprintln!("Text to input: {:?}", text);
-                                // フォールバック: クリップボード経由
-                                if let Err(clip_err) = set_clipboard(&text).await {
-                                    eprintln!("Clipboard fallback also failed: {}", clip_err);
-                                    Err(format!("Failed to paste stack {}: {}", number, e).into())
-                                } else {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(80))
-                                        .await;
-                                    let _ = tokio::process::Command::new("osascript")
-                                        .arg("-e")
-                                        .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
-                                        .output()
-                                        .await;
-                                    println!(
-                                        "{} (via clipboard fallback)",
-                                        UserFeedback::paste_success(number, char_count)
-                                    );
-                                    Ok(IpcResp {
-                                        ok: true,
-                                        msg: format!("Pasted stack {} via clipboard", number),
-                                    })
-                                }
+                                // フォールバック処理は削除（クリップボードを汚染しないため）
+                                Err(format!("Failed to paste stack {}: {}", number, e).into())
                             }
                         }
                     } else {
@@ -926,12 +906,7 @@ async fn handle_transcription(
                 }
             }
 
-            // direct_inputでない場合のみクリップボードへコピー
-            if !direct_input {
-                if let Err(e) = set_clipboard(&replaced).await {
-                    eprintln!("clipboard error: {e}");
-                }
-            }
+            // クリップボードへのコピーは削除（get_selected_textで使用する以外は不要）
 
             // スタックモードが有効な場合は自動ペーストを無効化
             let should_paste = paste
@@ -951,28 +926,13 @@ async fn handle_transcription(
                     match text_input::type_text(&replaced).await {
                         Ok(_) => {}
                         Err(e) => {
-                            eprintln!("Direct input failed: {}, falling back to paste", e);
-                            // フォールバック時はクリップボードにコピー
-                            if let Err(e) = set_clipboard(&replaced).await {
-                                eprintln!("clipboard error in fallback: {e}");
-                            }
-                            // 既存のペースト処理へフォールバック
-                            let _ = tokio::process::Command::new("osascript")
-                            .arg("-e")
-                            .arg(
-                                r#"tell app "System Events" to keystroke "v" using {command down}"#,
-                            )
-                            .output()
-                            .await;
+                            eprintln!("Direct input failed: {}", e);
+                            // フォールバック処理は削除（クリップボードを汚染しないため）
                         }
                     }
                 } else {
-                    // 既存のペースト方式
-                    let _ = tokio::process::Command::new("osascript")
-                        .arg("-e")
-                        .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
-                        .output()
-                        .await;
+                    // direct_inputでない場合は何もしない（クリップボードを汚染しないため）
+                    eprintln!("Paste mode without direct_input is no longer supported");
                 }
             }
         }
@@ -985,26 +945,6 @@ async fn handle_transcription(
     Ok(())
 }
 
-/// クリップボード (arboard→pbcopy フォールバック) にテキストを設定します。
-async fn set_clipboard(text: &str) -> Result<(), Box<dyn Error>> {
-    if let Ok(mut cb) = Clipboard::new() {
-        if cb.set_text(text).is_ok() {
-            return Ok(());
-        }
-    }
-    use tokio::io::AsyncWriteExt;
-    let mut child = tokio::process::Command::new("pbcopy")
-        .stdin(std::process::Stdio::piped())
-        .spawn()?;
-    child
-        .stdin
-        .as_mut()
-        .ok_or("failed to open pbcopy stdin")?
-        .write_all(text.as_bytes())
-        .await?;
-    child.wait().await?;
-    Ok(())
-}
 
 /// 入力デバイス・環境変数・OpenAI API の状態を確認します。
 async fn health_check() -> Result<IpcResp, Box<dyn Error>> {
