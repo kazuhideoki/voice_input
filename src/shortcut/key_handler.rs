@@ -14,6 +14,7 @@ struct KeyHandlerState {
     cmd_pressed: Arc<Mutex<bool>>,
     ipc_sender: mpsc::UnboundedSender<IpcCmd>,
     cmd_detector: CmdReleaseDetector,
+    enabled: Arc<Mutex<bool>>,
 }
 
 /// キーイベントを処理してIPCコマンドに変換するハンドラー
@@ -21,6 +22,7 @@ pub struct KeyHandler {
     ipc_sender: mpsc::UnboundedSender<IpcCmd>,
     cmd_pressed: Arc<Mutex<bool>>,
     cmd_detector: CmdReleaseDetector,
+    enabled: Arc<Mutex<bool>>,
 }
 
 impl KeyHandler {
@@ -45,6 +47,7 @@ impl KeyHandler {
             ipc_sender,
             cmd_pressed: Arc::new(Mutex::new(false)),
             cmd_detector,
+            enabled: Arc::new(Mutex::new(true)),
         }
     }
 
@@ -61,6 +64,7 @@ impl KeyHandler {
             cmd_pressed: self.cmd_pressed,
             ipc_sender: self.ipc_sender,
             cmd_detector: self.cmd_detector,
+            enabled: self.enabled.clone(),
         };
 
         // rdev::grab開始 - クロージャーで共有状態をキャプチャ
@@ -71,6 +75,11 @@ impl KeyHandler {
         }
 
         Ok(())
+    }
+
+    /// キーハンドラーを無効化
+    pub fn get_enabled_flag(&self) -> Arc<Mutex<bool>> {
+        self.enabled.clone()
     }
 
     /// イベントハンドラー関数を作成（クロージャーベース）
@@ -90,6 +99,12 @@ impl KeyHandler {
             let cmd_state = &shared_state.cmd_pressed;
             let ipc_sender = &shared_state.ipc_sender;
             let cmd_detector = &shared_state.cmd_detector;
+            let enabled = &shared_state.enabled;
+
+            // ハンドラーが無効化されている場合は全てのイベントをパススルー
+            if !enabled.lock().map(|e| *e).unwrap_or(true) {
+                return Some(event);
+            }
 
             match event.event_type {
                 EventType::KeyPress(key) => {
@@ -133,6 +148,11 @@ impl KeyHandler {
                                     eprintln!("Failed to send DisableStackMode command: {}", e);
                                 } else {
                                     println!("Sent DisableStackMode command (Cmd+ESC)");
+                                    // キーハンドラー自体も無効化
+                                    if let Ok(mut e) = enabled.lock() {
+                                        *e = false;
+                                        println!("KeyHandler disabled");
+                                    }
                                 }
                                 return None; // 抑制
                             }
@@ -295,6 +315,7 @@ mod tests {
             cmd_pressed: handler.cmd_pressed.clone(),
             ipc_sender: _tx,
             cmd_detector: handler.cmd_detector.clone(),
+            enabled: handler.enabled.clone(),
         };
 
         // 複製可能であることを確認
@@ -336,6 +357,7 @@ mod tests {
             cmd_pressed: handler.cmd_pressed.clone(),
             ipc_sender: tx,
             cmd_detector: handler.cmd_detector.clone(),
+            enabled: handler.enabled.clone(),
         };
 
         // Cmdキーを押下状態にする
@@ -377,6 +399,7 @@ mod tests {
             cmd_pressed: handler.cmd_pressed.clone(),
             ipc_sender: tx,
             cmd_detector: handler.cmd_detector.clone(),
+            enabled: handler.enabled.clone(),
         };
 
         let event_handler = KeyHandler::create_event_handler(shared_state);
@@ -394,5 +417,48 @@ mod tests {
 
         // コマンドが送信されていないことを確認
         assert!(rx.try_recv().is_err(), "ESCキー単独ではコマンドが送信されないべき");
+    }
+
+    #[test]
+    fn test_handler_disabled_flag() {
+        use rdev::{Event, EventType};
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let handler = KeyHandler::new(tx.clone());
+
+        let shared_state = KeyHandlerState {
+            cmd_pressed: handler.cmd_pressed.clone(),
+            ipc_sender: tx,
+            cmd_detector: handler.cmd_detector.clone(),
+            enabled: handler.enabled.clone(),
+        };
+
+        // ハンドラーを無効化
+        {
+            let mut enabled = shared_state.enabled.lock().unwrap();
+            *enabled = false;
+        }
+
+        // Cmdキーを押下状態にする
+        {
+            let mut pressed = shared_state.cmd_pressed.lock().unwrap();
+            *pressed = true;
+        }
+
+        let event_handler = KeyHandler::create_event_handler(shared_state);
+
+        // 無効化されている状態でCmd+Rキーイベントを作成
+        let cmd_r_event = Event {
+            event_type: EventType::KeyPress(Key::KeyR),
+            time: std::time::SystemTime::now(),
+            name: None,
+        };
+
+        // ハンドラーが無効化されているため、イベントはパススルーされるべき
+        let result = event_handler(cmd_r_event);
+        assert!(result.is_some(), "無効化されたハンドラーはイベントをパススルーすべき");
+
+        // コマンドが送信されていないことを確認
+        assert!(rx.try_recv().is_err(), "無効化されたハンドラーはコマンドを送信すべきではない");
     }
 }

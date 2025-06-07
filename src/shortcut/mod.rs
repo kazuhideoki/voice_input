@@ -5,6 +5,7 @@
 use crate::infrastructure::permissions::AccessibilityPermissions;
 use crate::ipc::IpcCmd;
 use std::fmt;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 pub mod cmd_release_detector;
@@ -51,6 +52,7 @@ impl std::error::Error for ShortcutError {}
 pub struct ShortcutService {
     enabled: bool,
     key_handler: Option<tokio::task::JoinHandle<Result<(), String>>>,
+    handler_enabled_flag: Option<Arc<Mutex<bool>>>,
 }
 
 impl ShortcutService {
@@ -59,6 +61,7 @@ impl ShortcutService {
         Self {
             enabled: false,
             key_handler: None,
+            handler_enabled_flag: None,
         }
     }
 
@@ -146,8 +149,11 @@ impl ShortcutService {
         }
 
         // KeyHandlerを非同期タスクで起動
+        let key_handler = KeyHandler::with_detector(ipc_sender, cmd_detector);
+        let enabled_flag = key_handler.get_enabled_flag();
+        self.handler_enabled_flag = Some(enabled_flag);
+        
         let handle = tokio::task::spawn_blocking(move || {
-            let key_handler = KeyHandler::with_detector(ipc_sender, cmd_detector);
             key_handler.start_grab()
         });
 
@@ -164,6 +170,14 @@ impl ShortcutService {
             return Ok(()); // 既に停止済み
         }
 
+        // まずハンドラーを無効化
+        if let Some(flag) = &self.handler_enabled_flag {
+            if let Ok(mut enabled) = flag.lock() {
+                *enabled = false;
+                println!("KeyHandler disabled via flag");
+            }
+        }
+
         if let Some(handle) = self.key_handler.take() {
             handle.abort();
 
@@ -178,6 +192,7 @@ impl ShortcutService {
             }
         }
 
+        self.handler_enabled_flag = None;
         self.enabled = false;
         println!("ShortcutService stopped");
         Ok(())
