@@ -4,14 +4,26 @@
 //! that are not available in the standard crates.
 
 use core_foundation_sys::base::{Boolean, CFIndex, CFTypeID, CFTypeRef};
+use core_foundation_sys::runloop::CFRunLoopSourceRef;
 use core_foundation_sys::string::CFStringRef;
-use std::os::raw::{c_long, c_void};
+use std::os::raw::{c_int, c_long, c_void};
 
 // AXUIElement type
 pub type AXUIElementRef = *mut c_void;
 
 // AXError type
 pub type AXError = i32;
+
+// Additional type definitions for AXObserver
+#[allow(non_camel_case_types)]
+pub type pid_t = c_int;
+pub type AXObserverRef = *mut c_void;
+pub type AXObserverCallback = unsafe extern "C" fn(
+    observer: AXObserverRef,
+    element: AXUIElementRef,
+    notification: CFStringRef,
+    user_info: *mut c_void,
+);
 
 // AXError constants
 #[allow(non_upper_case_globals, dead_code)]
@@ -95,7 +107,27 @@ unsafe extern "C" {
     pub fn AXUIElementCopyActionNames(element: AXUIElementRef, names: *mut CFTypeRef) -> AXError;
 
     pub fn AXUIElementPerformAction(element: AXUIElementRef, action: CFStringRef) -> AXError;
+
+    // AXObserver functions for event-driven cursor tracking
+    pub fn AXObserverCreate(
+        application: pid_t,
+        callback: AXObserverCallback,
+        out_observer: *mut AXObserverRef,
+    ) -> AXError;
+
+    pub fn AXObserverAddNotification(
+        observer: AXObserverRef,
+        element: AXUIElementRef,
+        notification: CFStringRef,
+        refcon: *mut c_void,
+    ) -> AXError;
+
+    pub fn AXObserverGetRunLoopSource(observer: AXObserverRef) -> CFRunLoopSourceRef;
 }
+
+// Notification constant for focus changes
+#[allow(non_upper_case_globals)]
+pub const kAXFocusedUIElementChangedNotification: &str = "AXFocusedUIElementChanged";
 
 // Helper to check if an error is success
 #[allow(dead_code)]

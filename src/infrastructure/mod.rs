@@ -1,3 +1,4 @@
+pub mod animation;
 pub mod audio;
 pub mod config;
 pub mod dict;
