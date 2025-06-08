@@ -5,13 +5,10 @@
 use crate::infrastructure::permissions::AccessibilityPermissions;
 use crate::ipc::IpcCmd;
 use std::fmt;
-use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
-pub mod cmd_release_detector;
 pub mod key_handler;
 
-pub use cmd_release_detector::CmdReleaseDetector;
 use key_handler::KeyHandler;
 
 /// ショートカットサービスエラー型
@@ -52,7 +49,6 @@ impl std::error::Error for ShortcutError {}
 pub struct ShortcutService {
     enabled: bool,
     key_handler: Option<tokio::task::JoinHandle<Result<(), String>>>,
-    handler_enabled_flag: Option<Arc<Mutex<bool>>>,
 }
 
 impl ShortcutService {
@@ -61,7 +57,6 @@ impl ShortcutService {
         Self {
             enabled: false,
             key_handler: None,
-            handler_enabled_flag: None,
         }
     }
 
@@ -115,24 +110,6 @@ impl ShortcutService {
         &mut self,
         ipc_sender: mpsc::UnboundedSender<IpcCmd>,
     ) -> Result<(), ShortcutError> {
-        self.start_with_detector(ipc_sender, CmdReleaseDetector::new())
-            .await
-    }
-
-    /// Cmdキー検出器を指定してショートカットキーサービスを開始
-    ///
-    /// # Arguments
-    /// * `ipc_sender` - IPCコマンドを送信するためのSender
-    /// * `cmd_detector` - Cmdキーリリース検出器
-    ///
-    /// # Returns
-    /// * `Ok(())` - 正常に開始された場合
-    /// * `Err(ShortcutError)` - 各種エラー（権限、システム要件、初期化失敗等）
-    pub async fn start_with_detector(
-        &mut self,
-        ipc_sender: mpsc::UnboundedSender<IpcCmd>,
-        cmd_detector: CmdReleaseDetector,
-    ) -> Result<(), ShortcutError> {
         // 既に起動済みの場合はエラー
         if self.enabled {
             return Err(ShortcutError::SystemRequirementNotMet(
@@ -149,9 +126,7 @@ impl ShortcutService {
         }
 
         // KeyHandlerを非同期タスクで起動
-        let key_handler = KeyHandler::with_detector(ipc_sender, cmd_detector);
-        let enabled_flag = key_handler.get_enabled_flag();
-        self.handler_enabled_flag = Some(enabled_flag);
+        let key_handler = KeyHandler::new(ipc_sender);
         
         let handle = tokio::task::spawn_blocking(move || {
             key_handler.start_grab()
@@ -164,18 +139,11 @@ impl ShortcutService {
         Ok(())
     }
 
+
     /// ショートカットキーサービスを停止
     pub async fn stop(&mut self) -> Result<(), ShortcutError> {
         if !self.enabled {
             return Ok(()); // 既に停止済み
-        }
-
-        // まずハンドラーを無効化
-        if let Some(flag) = &self.handler_enabled_flag {
-            if let Ok(mut enabled) = flag.lock() {
-                *enabled = false;
-                println!("KeyHandler disabled via flag");
-            }
         }
 
         if let Some(handle) = self.key_handler.take() {
@@ -192,7 +160,6 @@ impl ShortcutService {
             }
         }
 
-        self.handler_enabled_flag = None;
         self.enabled = false;
         println!("ShortcutService stopped");
         Ok(())

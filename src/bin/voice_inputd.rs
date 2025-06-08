@@ -48,7 +48,7 @@ use voice_input::{
     },
     ipc::{IpcCmd, IpcResp, RecordingResult, socket_path},
     load_env,
-    shortcut::{CmdReleaseDetector, ShortcutService},
+    shortcut::ShortcutService,
 };
 
 /// デフォルトの最大録音秒数 (`VOICE_INPUT_MAX_SECS` が未設定の場合に適用)。
@@ -82,7 +82,6 @@ struct ClientResources {
     tx: mpsc::UnboundedSender<TranscriptionMessage>,
     shortcut_service: Arc<TokioMutex<ShortcutService>>,
     shortcut_tx: Arc<TokioMutex<mpsc::UnboundedSender<IpcCmd>>>,
-    cmd_detector: CmdReleaseDetector,
 }
 
 // ────────────────────────────────────────────────────────
@@ -159,7 +158,6 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     // Full integration will be completed in subsequent phases
 
     // Cmdキーリリース検出器（全体で共有）
-    let cmd_detector = CmdReleaseDetector::new();
 
     // ShortcutService for keyboard shortcut handling (wrapped for sharing)
     let shortcut_service = Arc::new(TokioMutex::new(ShortcutService::new()));
@@ -179,7 +177,6 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     let ui_manager_clone = ui_manager.clone();
     let tx_clone = tx.clone();
     let shortcut_service_clone = shortcut_service.clone();
-    let cmd_detector_clone = cmd_detector.clone();
 
     spawn_local(async move {
         let mut rx = shortcut_rx;
@@ -237,19 +234,10 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                             let _ = manager.notify(UiNotification::StackAccessed(number));
                         }
 
-                        // Cmdキーがリリースされるのを待つ
-                        println!("Waiting for Cmd key release...");
-                        match cmd_detector_clone
-                            .wait_for_release(Duration::from_millis(500))
-                            .await
-                        {
-                            Ok(_) => {
-                                println!("Cmd key released, proceeding with paste");
-                            }
-                            Err(_) => {
-                                println!("Cmd key release timeout, proceeding anyway");
-                            }
-                        }
+                        // Cmd+数字キー後の短い待機（キーイベントが完全に処理されるまで）
+                        // これがないと、直後のテキスト入力の最初の文字がCmd+文字として
+                        // 誤認識される可能性がある（例: "text"の"t"がCmd+tとして解釈）
+                        tokio::time::sleep(Duration::from_millis(50)).await;
 
                         // 直接入力方式で入力（サブプロセス実行）
                         match text_input::type_text(&text).await {
@@ -371,7 +359,6 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         let tx2 = tx.clone();
         let shortcut_service2 = shortcut_service.clone();
         let shortcut_tx2 = shortcut_tx.clone();
-        let cmd_detector2 = cmd_detector.clone();
         spawn_local(async move {
             let _ = handle_client(
                 stream,
@@ -383,7 +370,6 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                     tx: tx2,
                     shortcut_service: shortcut_service2,
                     shortcut_tx: shortcut_tx2,
-                    cmd_detector: cmd_detector2,
                 },
             )
             .await;
@@ -411,7 +397,6 @@ async fn handle_client(
         tx,
         shortcut_service,
         shortcut_tx,
-        cmd_detector,
     } = resources;
     let (r, w) = stream.into_split();
     let mut reader = FramedRead::new(r, LinesCodec::new());
@@ -539,7 +524,7 @@ async fn handle_client(
 
                     let mut service = shortcut_service.lock().await;
                     if let Err(e) = service
-                        .start_with_detector(tx_clone, cmd_detector.clone())
+                        .start(tx_clone)
                         .await
                     {
                         eprintln!("Failed to start shortcut service: {}", e);
