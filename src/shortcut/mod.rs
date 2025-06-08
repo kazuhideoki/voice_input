@@ -7,10 +7,8 @@ use crate::ipc::IpcCmd;
 use std::fmt;
 use tokio::sync::mpsc;
 
-pub mod cmd_release_detector;
 pub mod key_handler;
 
-pub use cmd_release_detector::CmdReleaseDetector;
 use key_handler::KeyHandler;
 
 /// ショートカットサービスエラー型
@@ -112,24 +110,6 @@ impl ShortcutService {
         &mut self,
         ipc_sender: mpsc::UnboundedSender<IpcCmd>,
     ) -> Result<(), ShortcutError> {
-        self.start_with_detector(ipc_sender, CmdReleaseDetector::new())
-            .await
-    }
-
-    /// Cmdキー検出器を指定してショートカットキーサービスを開始
-    ///
-    /// # Arguments
-    /// * `ipc_sender` - IPCコマンドを送信するためのSender
-    /// * `cmd_detector` - Cmdキーリリース検出器
-    ///
-    /// # Returns
-    /// * `Ok(())` - 正常に開始された場合
-    /// * `Err(ShortcutError)` - 各種エラー（権限、システム要件、初期化失敗等）
-    pub async fn start_with_detector(
-        &mut self,
-        ipc_sender: mpsc::UnboundedSender<IpcCmd>,
-        cmd_detector: CmdReleaseDetector,
-    ) -> Result<(), ShortcutError> {
         // 既に起動済みの場合はエラー
         if self.enabled {
             return Err(ShortcutError::SystemRequirementNotMet(
@@ -146,10 +126,9 @@ impl ShortcutService {
         }
 
         // KeyHandlerを非同期タスクで起動
-        let handle = tokio::task::spawn_blocking(move || {
-            let key_handler = KeyHandler::with_detector(ipc_sender, cmd_detector);
-            key_handler.start_grab()
-        });
+        let key_handler = KeyHandler::new(ipc_sender);
+
+        let handle = tokio::task::spawn_blocking(move || key_handler.start_grab());
 
         self.key_handler = Some(handle);
         self.enabled = true;

@@ -30,6 +30,8 @@ cp .env.example .env
 - INPUT_DEVICE_PRIORITY="device1,device2,device3"
 - VOICE_INPUT_USE_SUBPROCESS=true # 移行期間中の旧実装（subprocess方式）使用（非推奨）
 
+環境変数は`src/utils/config.rs`のEnvConfigで型安全に管理され、起動時に一度だけ読み込まれます。
+
 ## 音声処理
 
 Voice Inputは音声データをメモリ上で直接処理し、一時ファイルを作成しません。

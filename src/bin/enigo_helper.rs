@@ -8,8 +8,14 @@
 use enigo::{Direction::Release, Enigo, Key, Keyboard, Settings};
 use std::env;
 use std::process;
+use voice_input::utils::config::EnvConfig;
 
 fn main() {
+    // 環境変数設定を初期化
+    if let Err(e) = EnvConfig::init() {
+        eprintln!("Warning: Failed to initialize EnvConfig: {}", e);
+        // エラーがあっても続行（このヘルパーは独立して動作する必要があるため）
+    }
     // コマンドライン引数からテキストを取得
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {

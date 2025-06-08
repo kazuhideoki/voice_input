@@ -5,8 +5,11 @@
 
 use std::error::Error;
 use tokio::net::UnixStream;
-use voice_input::infrastructure::ui::{
-    stack_manager_ui::StackManagerApp, types::UiNotification, ui_ipc_client::UiIpcClient,
+use voice_input::{
+    infrastructure::ui::{
+        stack_manager_ui::StackManagerApp, types::UiNotification, ui_ipc_client::UiIpcClient,
+    },
+    utils::config::EnvConfig,
 };
 
 fn get_screen_size() -> Option<(f32, f32)> {
@@ -84,6 +87,9 @@ fn setup_fonts(ctx: &egui::Context) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    // 環境変数設定を初期化
+    EnvConfig::init()?;
+
     // Unix Socketでデーモンに接続
     let socket_path = "/tmp/voice_input_ui.sock";
     let stream = match UnixStream::connect(socket_path).await {

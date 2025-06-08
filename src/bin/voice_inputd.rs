@@ -22,7 +22,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use arboard::Clipboard;
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use tokio::{
@@ -49,7 +48,8 @@ use voice_input::{
     },
     ipc::{IpcCmd, IpcResp, RecordingResult, socket_path},
     load_env,
-    shortcut::{CmdReleaseDetector, ShortcutService},
+    shortcut::ShortcutService,
+    utils::config::EnvConfig,
 };
 
 /// デフォルトの最大録音秒数 (`VOICE_INPUT_MAX_SECS` が未設定の場合に適用)。
@@ -83,7 +83,6 @@ struct ClientResources {
     tx: mpsc::UnboundedSender<TranscriptionMessage>,
     shortcut_service: Arc<TokioMutex<ShortcutService>>,
     shortcut_tx: Arc<TokioMutex<mpsc::UnboundedSender<IpcCmd>>>,
-    cmd_detector: CmdReleaseDetector,
 }
 
 // ────────────────────────────────────────────────────────
@@ -124,6 +123,9 @@ struct RecCtx {
 async fn main() -> Result<(), Box<dyn Error>> {
     load_env();
 
+    // 環境変数設定を初期化
+    EnvConfig::init()?;
+
     // `spawn_local` はこのスレッドだけで動かしたい非同期ジョブを登録する。LocalSet はその実行エンジン
     let local = LocalSet::new();
     local.run_until(async_main()).await
@@ -160,7 +162,6 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     // Full integration will be completed in subsequent phases
 
     // Cmdキーリリース検出器（全体で共有）
-    let cmd_detector = CmdReleaseDetector::new();
 
     // ShortcutService for keyboard shortcut handling (wrapped for sharing)
     let shortcut_service = Arc::new(TokioMutex::new(ShortcutService::new()));
@@ -180,7 +181,6 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     let ui_manager_clone = ui_manager.clone();
     let tx_clone = tx.clone();
     let shortcut_service_clone = shortcut_service.clone();
-    let cmd_detector_clone = cmd_detector.clone();
 
     spawn_local(async move {
         let mut rx = shortcut_rx;
@@ -238,19 +238,10 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                             let _ = manager.notify(UiNotification::StackAccessed(number));
                         }
 
-                        // Cmdキーがリリースされるのを待つ
-                        println!("Waiting for Cmd key release...");
-                        match cmd_detector_clone
-                            .wait_for_release(Duration::from_millis(500))
-                            .await
-                        {
-                            Ok(_) => {
-                                println!("Cmd key released, proceeding with paste");
-                            }
-                            Err(_) => {
-                                println!("Cmd key release timeout, proceeding anyway");
-                            }
-                        }
+                        // Cmd+数字キー後の短い待機（キーイベントが完全に処理されるまで）
+                        // これがないと、直後のテキスト入力の最初の文字がCmd+文字として
+                        // 誤認識される可能性がある（例: "text"の"t"がCmd+tとして解釈）
+                        tokio::time::sleep(Duration::from_millis(50)).await;
 
                         // 直接入力方式で入力（サブプロセス実行）
                         match text_input::type_text(&text).await {
@@ -264,27 +255,8 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                             Err(e) => {
                                 eprintln!("Direct input failed: {:?}", e);
                                 eprintln!("Text to input: {:?}", text);
-                                // フォールバック: クリップボード経由
-                                if let Err(clip_err) = set_clipboard(&text).await {
-                                    eprintln!("Clipboard fallback also failed: {}", clip_err);
-                                    Err(format!("Failed to paste stack {}: {}", number, e).into())
-                                } else {
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(80))
-                                        .await;
-                                    let _ = tokio::process::Command::new("osascript")
-                                        .arg("-e")
-                                        .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
-                                        .output()
-                                        .await;
-                                    println!(
-                                        "{} (via clipboard fallback)",
-                                        UserFeedback::paste_success(number, char_count)
-                                    );
-                                    Ok(IpcResp {
-                                        ok: true,
-                                        msg: format!("Pasted stack {} via clipboard", number),
-                                    })
-                                }
+                                // フォールバック処理は削除（クリップボードを汚染しないため）
+                                Err(format!("Failed to paste stack {}: {}", number, e).into())
                             }
                         }
                     } else {
@@ -391,7 +363,6 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         let tx2 = tx.clone();
         let shortcut_service2 = shortcut_service.clone();
         let shortcut_tx2 = shortcut_tx.clone();
-        let cmd_detector2 = cmd_detector.clone();
         spawn_local(async move {
             let _ = handle_client(
                 stream,
@@ -403,7 +374,6 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                     tx: tx2,
                     shortcut_service: shortcut_service2,
                     shortcut_tx: shortcut_tx2,
-                    cmd_detector: cmd_detector2,
                 },
             )
             .await;
@@ -431,7 +401,6 @@ async fn handle_client(
         tx,
         shortcut_service,
         shortcut_tx,
-        cmd_detector,
     } = resources;
     let (r, w) = stream.into_split();
     let mut reader = FramedRead::new(r, LinesCodec::new());
@@ -558,10 +527,7 @@ async fn handle_client(
                     drop(tx_guard); // Explicitly drop the guard before calling start
 
                     let mut service = shortcut_service.lock().await;
-                    if let Err(e) = service
-                        .start_with_detector(tx_clone, cmd_detector.clone())
-                        .await
-                    {
+                    if let Err(e) = service.start(tx_clone).await {
                         eprintln!("Failed to start shortcut service: {}", e);
                         eprintln!("Continuing without shortcut functionality...");
                     } else {
@@ -926,12 +892,7 @@ async fn handle_transcription(
                 }
             }
 
-            // direct_inputでない場合のみクリップボードへコピー
-            if !direct_input {
-                if let Err(e) = set_clipboard(&replaced).await {
-                    eprintln!("clipboard error: {e}");
-                }
-            }
+            // クリップボードへのコピーは削除（get_selected_textで使用する以外は不要）
 
             // スタックモードが有効な場合は自動ペーストを無効化
             let should_paste = paste
@@ -951,28 +912,13 @@ async fn handle_transcription(
                     match text_input::type_text(&replaced).await {
                         Ok(_) => {}
                         Err(e) => {
-                            eprintln!("Direct input failed: {}, falling back to paste", e);
-                            // フォールバック時はクリップボードにコピー
-                            if let Err(e) = set_clipboard(&replaced).await {
-                                eprintln!("clipboard error in fallback: {e}");
-                            }
-                            // 既存のペースト処理へフォールバック
-                            let _ = tokio::process::Command::new("osascript")
-                            .arg("-e")
-                            .arg(
-                                r#"tell app "System Events" to keystroke "v" using {command down}"#,
-                            )
-                            .output()
-                            .await;
+                            eprintln!("Direct input failed: {}", e);
+                            // フォールバック処理は削除（クリップボードを汚染しないため）
                         }
                     }
                 } else {
-                    // 既存のペースト方式
-                    let _ = tokio::process::Command::new("osascript")
-                        .arg("-e")
-                        .arg(r#"tell app "System Events" to keystroke "v" using {command down}"#)
-                        .output()
-                        .await;
+                    // direct_inputでない場合は何もしない（クリップボードを汚染しないため）
+                    eprintln!("Paste mode without direct_input is no longer supported");
                 }
             }
         }
@@ -982,27 +928,6 @@ async fn handle_transcription(
         }
     }
 
-    Ok(())
-}
-
-/// クリップボード (arboard→pbcopy フォールバック) にテキストを設定します。
-async fn set_clipboard(text: &str) -> Result<(), Box<dyn Error>> {
-    if let Ok(mut cb) = Clipboard::new() {
-        if cb.set_text(text).is_ok() {
-            return Ok(());
-        }
-    }
-    use tokio::io::AsyncWriteExt;
-    let mut child = tokio::process::Command::new("pbcopy")
-        .stdin(std::process::Stdio::piped())
-        .spawn()?;
-    child
-        .stdin
-        .as_mut()
-        .ok_or("failed to open pbcopy stdin")?
-        .write_all(text.as_bytes())
-        .await?;
-    child.wait().await?;
     Ok(())
 }
 
