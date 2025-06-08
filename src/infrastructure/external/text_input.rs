@@ -4,6 +4,7 @@
 //! カーソル位置に直接テキストを入力する機能を提供
 
 use crate::infrastructure::external::{text_input_accessibility, text_input_subprocess};
+use crate::utils::config::EnvConfig;
 use std::error::Error;
 
 /// メイン入力関数
@@ -24,11 +25,10 @@ use std::error::Error;
 /// # }
 /// ```
 pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
+    let config = EnvConfig::get();
+
     // 移行期間中の環境変数による切り替え
-    if std::env::var("VOICE_INPUT_USE_SUBPROCESS")
-        .unwrap_or_default()
-        .eq_ignore_ascii_case("true")
-    {
+    if config.use_subprocess {
         eprintln!("⚠️ Using legacy subprocess method (VOICE_INPUT_USE_SUBPROCESS=true)");
         return text_input_subprocess::type_text_via_subprocess(text)
             .await
@@ -65,6 +65,9 @@ mod tests {
     #[tokio::test]
     #[cfg_attr(feature = "ci-test", ignore)]
     async fn test_empty_text() {
+        // テスト用初期化
+        EnvConfig::test_init();
+
         let result = type_text("").await;
         // 空文字列でも正常に処理されるべき
         match result {
@@ -76,6 +79,9 @@ mod tests {
     #[tokio::test]
     #[cfg_attr(feature = "ci-test", ignore)]
     async fn test_simple_text() {
+        // テスト用初期化
+        EnvConfig::test_init();
+
         // Note: このテストはアクセシビリティ権限が必要
         let result = type_text("Hello").await;
         match result {
@@ -95,6 +101,9 @@ mod tests {
     #[tokio::test]
     #[cfg_attr(feature = "ci-test", ignore)]
     async fn test_japanese_text() {
+        // テスト用初期化
+        EnvConfig::test_init();
+
         // 日本語テキストのテスト
         let result = type_text("こんにちは").await;
         match result {
@@ -106,25 +115,27 @@ mod tests {
     #[tokio::test]
     #[cfg_attr(feature = "ci-test", ignore)]
     async fn test_env_var_switching() {
-        // 環境変数による切り替えテスト
+        // Note: once_cellは再初期化できないため、
+        // このテストは現在の設定での動作を確認するのみ
 
-        // デフォルト動作（Accessibility API）
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_USE_SUBPROCESS");
-        }
+        // テスト用初期化
+        EnvConfig::test_init();
+
+        let config = EnvConfig::get();
+
+        // 現在の設定での動作を確認
         let result = type_text("test").await;
-        println!("Default mode result: {:?}", result);
 
-        // subprocess方式への切り替え
-        unsafe {
-            std::env::set_var("VOICE_INPUT_USE_SUBPROCESS", "true");
+        if config.use_subprocess {
+            println!("Running in subprocess mode: {:?}", result);
+        } else {
+            println!("Running in accessibility mode: {:?}", result);
         }
-        let result = type_text("test").await;
-        println!("Subprocess mode result: {:?}", result);
 
-        // クリーンアップ
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_USE_SUBPROCESS");
+        // 結果は環境に依存するため、エラーでも成功でも良い
+        match result {
+            Ok(_) => println!("✅ Text input successful"),
+            Err(e) => println!("⚠️ Text input failed (expected in test env): {}", e),
         }
     }
 }

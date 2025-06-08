@@ -49,6 +49,7 @@ use voice_input::{
     ipc::{IpcCmd, IpcResp, RecordingResult, socket_path},
     load_env,
     shortcut::ShortcutService,
+    utils::config::EnvConfig,
 };
 
 /// デフォルトの最大録音秒数 (`VOICE_INPUT_MAX_SECS` が未設定の場合に適用)。
@@ -121,6 +122,9 @@ struct RecCtx {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
     load_env();
+
+    // 環境変数設定を初期化
+    EnvConfig::init()?;
 
     // `spawn_local` はこのスレッドだけで動かしたい非同期ジョブを登録する。LocalSet はその実行エンジン
     let local = LocalSet::new();
@@ -523,10 +527,7 @@ async fn handle_client(
                     drop(tx_guard); // Explicitly drop the guard before calling start
 
                     let mut service = shortcut_service.lock().await;
-                    if let Err(e) = service
-                        .start(tx_clone)
-                        .await
-                    {
+                    if let Err(e) = service.start(tx_clone).await {
                         eprintln!("Failed to start shortcut service: {}", e);
                         eprintln!("Continuing without shortcut functionality...");
                     } else {
@@ -929,7 +930,6 @@ async fn handle_transcription(
 
     Ok(())
 }
-
 
 /// 入力デバイス・環境変数・OpenAI API の状態を確認します。
 async fn health_check() -> Result<IpcResp, Box<dyn Error>> {

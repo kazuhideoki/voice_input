@@ -1,10 +1,13 @@
 use std::time::Duration;
 use tokio::time::sleep;
-use voice_input::infrastructure::external::text_input::type_text;
+use voice_input::{infrastructure::external::text_input::type_text, utils::config::EnvConfig};
 
 #[tokio::test]
 #[cfg_attr(feature = "ci-test", ignore)]
 async fn test_direct_input_basic_functionality() -> Result<(), Box<dyn std::error::Error>> {
+    // 環境変数設定を初期化
+    EnvConfig::init()?;
+
     // 基本的な直接入力機能のテスト
     // 短いテキストの入力テスト
     let test_text = "Hello, World!";
@@ -24,6 +27,9 @@ async fn test_direct_input_basic_functionality() -> Result<(), Box<dyn std::erro
 #[tokio::test]
 #[cfg_attr(feature = "ci-test", ignore)]
 async fn test_direct_input_with_special_characters() -> Result<(), Box<dyn std::error::Error>> {
+    // 環境変数設定を初期化
+    EnvConfig::init()?;
+
     // 特殊文字を含むテキスト
     let test_cases = vec![
         "Hello \"World\"!",
@@ -51,6 +57,9 @@ async fn test_direct_input_with_special_characters() -> Result<(), Box<dyn std::
 #[tokio::test]
 #[cfg_attr(feature = "ci-test", ignore)]
 async fn test_direct_input_long_text() -> Result<(), Box<dyn std::error::Error>> {
+    // 環境変数設定を初期化
+    EnvConfig::init()?;
+
     // 長いテキスト
     let long_text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(10);
 
@@ -67,6 +76,9 @@ async fn test_direct_input_long_text() -> Result<(), Box<dyn std::error::Error>>
 #[tokio::test]
 #[cfg_attr(feature = "ci-test", ignore)]
 async fn test_direct_input_empty_text() -> Result<(), Box<dyn std::error::Error>> {
+    // 環境変数設定を初期化
+    EnvConfig::init()?;
+
     // 空文字列のテスト
     match type_text("").await {
         Ok(_) => println!("Empty text handled correctly"),
@@ -82,6 +94,9 @@ async fn test_direct_input_empty_text() -> Result<(), Box<dyn std::error::Error>
 #[tokio::test]
 #[ignore] // 実際にテキストエディタを開いて実行する場合のみ
 async fn test_direct_input_fallback_simulation() -> Result<(), Box<dyn std::error::Error>> {
+    // 環境変数設定を初期化
+    EnvConfig::init()?;
+
     // フォールバック動作のシミュレーション
     // 実際のvoice_inputdでの実装を想定
 

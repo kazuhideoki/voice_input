@@ -8,10 +8,14 @@ use voice_input::{
     infrastructure::dict::JsonFileDictRepo,
     ipc::{IpcCmd, send_cmd},
     load_env,
+    utils::config::EnvConfig,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     load_env();
+
+    // 環境変数設定を初期化
+    EnvConfig::init()?;
 
     let cli = Cli::parse();
 

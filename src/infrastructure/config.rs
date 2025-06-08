@@ -1,3 +1,4 @@
+use crate::utils::config::EnvConfig;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::PathBuf};
@@ -8,7 +9,8 @@ pub struct AppConfig {
 }
 
 fn data_dir() -> PathBuf {
-    if let Ok(xdg_data_home) = std::env::var("XDG_DATA_HOME") {
+    let config = EnvConfig::get();
+    if let Some(xdg_data_home) = &config.xdg_data_home {
         let dir = PathBuf::from(xdg_data_home).join("voice_input");
         fs::create_dir_all(&dir).expect("create data dir");
         return dir;

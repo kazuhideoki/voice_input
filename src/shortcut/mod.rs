@@ -127,10 +127,8 @@ impl ShortcutService {
 
         // KeyHandlerを非同期タスクで起動
         let key_handler = KeyHandler::new(ipc_sender);
-        
-        let handle = tokio::task::spawn_blocking(move || {
-            key_handler.start_grab()
-        });
+
+        let handle = tokio::task::spawn_blocking(move || key_handler.start_grab());
 
         self.key_handler = Some(handle);
         self.enabled = true;
@@ -138,7 +136,6 @@ impl ShortcutService {
         println!("ShortcutService started successfully");
         Ok(())
     }
-
 
     /// ショートカットキーサービスを停止
     pub async fn stop(&mut self) -> Result<(), ShortcutError> {

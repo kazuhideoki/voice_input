@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **voice_inputd**: Background daemon handling audio recording, transcription, and text input
 - **Audio Processing**: Memory-only processing (no temporary files)
 - **IPC**: JSON communication over Unix Domain Socket (`/tmp/voice_input.sock`)
+- **Configuration**: Environment variables are centrally managed via `EnvConfig` in `src/utils/config.rs` for type safety
 
 ### Layered Architecture
 
