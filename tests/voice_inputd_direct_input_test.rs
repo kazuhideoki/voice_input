@@ -16,8 +16,8 @@ async fn test_direct_input_basic_functionality() -> Result<(), Box<dyn std::erro
         Err(e) => {
             // エラーが発生した場合はログに記録
             eprintln!("Direct input failed: {}", e);
-            // アクセシビリティ権限がない環境でもテストが通るように
-            // エラーを無視する（CIでの実行を考慮）
+            // CI環境など直接入力が使えない環境でもテストが通るように
+            // エラーを無視する
         }
     }
 

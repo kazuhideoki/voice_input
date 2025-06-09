@@ -74,14 +74,14 @@ async fn test_paste_stack_command_serialization() {
 
 #[tokio::test]
 #[ignore] // rdev実動作が必要なため手動テストのみ
-async fn test_shortcut_service_start_with_accessibility_check() {
+async fn test_shortcut_service_start() {
     let mut service = ShortcutService::new();
     let (tx, _rx) = mpsc::unbounded_channel();
 
-    // アクセシビリティ権限の状態によって結果が変わる
+    // ショートカットサービスの開始をテスト
     let result = service.start(tx).await;
 
-    // 成功 or アクセシビリティ権限エラーのいずれかであることを確認
+    // 成功またはエラーの確認
     match result {
         Ok(_) => {
             println!("Shortcut service started successfully");
@@ -93,8 +93,7 @@ async fn test_shortcut_service_start_with_accessibility_check() {
             assert!(!service.is_enabled());
         }
         Err(e) => {
-            println!("Expected accessibility permission error: {}", e);
-            assert!(e.to_string().contains("アクセシビリティ権限"));
+            println!("Shortcut service failed to start: {}", e);
             assert!(!service.is_enabled());
         }
     }

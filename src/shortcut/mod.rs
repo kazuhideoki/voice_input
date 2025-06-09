@@ -1,8 +1,6 @@
 //! ショートカットキー処理のメインサービス
 //! voice_inputdプロセスに統合されるShortcutServiceを提供
-//! Phase 2: 権限システム統合とエラーハンドリング強化
 
-use crate::infrastructure::permissions::AccessibilityPermissions;
 use crate::ipc::IpcCmd;
 use std::fmt;
 use tokio::sync::mpsc;
@@ -14,8 +12,6 @@ use key_handler::KeyHandler;
 /// ショートカットサービスエラー型
 #[derive(Debug, Clone)]
 pub enum ShortcutError {
-    /// アクセシビリティ権限が拒否されている
-    PermissionDenied(String),
     /// rdev初期化に失敗
     RdevInitFailed(String),
     /// IPCチャンネルがクローズされている
@@ -27,9 +23,6 @@ pub enum ShortcutError {
 impl fmt::Display for ShortcutError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ShortcutError::PermissionDenied(msg) => {
-                write!(f, "❌ アクセシビリティ権限エラー: {}", msg)
-            }
             ShortcutError::RdevInitFailed(msg) => {
                 write!(f, "❌ キーボードフック初期化エラー: {}", msg)
             }
@@ -60,7 +53,7 @@ impl ShortcutService {
         }
     }
 
-    /// システム要件とアクセシビリティ権限をチェック
+    /// システム要件をチェック
     pub fn check_system_requirements() -> Result<(), ShortcutError> {
         // macOS以外のプラットフォームはサポート対象外
         #[cfg(not(target_os = "macos"))]
@@ -72,30 +65,9 @@ impl ShortcutService {
 
         #[cfg(target_os = "macos")]
         {
-            // アクセシビリティ権限の詳細チェック
-            use crate::infrastructure::permissions::{PermissionChecker, PermissionStatus};
-
-            match AccessibilityPermissions::check_status() {
-                PermissionStatus::Granted => Ok(()),
-                PermissionStatus::Denied => Err(ShortcutError::PermissionDenied(
-                    AccessibilityPermissions::get_error_message(),
-                )),
-                PermissionStatus::NotDetermined => Err(ShortcutError::PermissionDenied(
-                    "アクセシビリティ権限が未確定です。初回設定が必要です。".to_string(),
-                )),
-            }
+            // macOSでは特に追加のチェックなし
+            Ok(())
         }
-    }
-
-    /// 権限拒否時のユーザーガイダンス文字列を取得
-    pub fn handle_permission_denied() -> String {
-        use crate::infrastructure::permissions::PermissionChecker;
-
-        format!(
-            "{}\n\n{}",
-            AccessibilityPermissions::get_error_message(),
-            AccessibilityPermissions::get_permission_description()
-        )
     }
 
     /// ショートカットキーサービスを開始
@@ -105,7 +77,7 @@ impl ShortcutService {
     ///
     /// # Returns
     /// * `Ok(())` - 正常に開始された場合
-    /// * `Err(ShortcutError)` - 各種エラー（権限、システム要件、初期化失敗等）
+    /// * `Err(ShortcutError)` - 各種エラー（システム要件、初期化失敗等）
     pub async fn start(
         &mut self,
         ipc_sender: mpsc::UnboundedSender<IpcCmd>,
@@ -117,7 +89,7 @@ impl ShortcutService {
             ));
         }
 
-        // システム要件とアクセシビリティ権限チェック
+        // システム要件チェック
         Self::check_system_requirements()?;
 
         // IPCチャンネルが有効かテスト
@@ -166,14 +138,6 @@ impl ShortcutService {
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
-
-    /// 互換性維持用：アクセシビリティ権限チェック（簡易版）
-    /// Phase 1コードとの互換性のため残存
-    #[deprecated(note = "Use ShortcutService::check_system_requirements() instead")]
-    #[allow(dead_code)]
-    fn check_accessibility_permission(&self) -> bool {
-        AccessibilityPermissions::check()
-    }
 }
 
 impl Default for ShortcutService {
@@ -217,7 +181,7 @@ mod tests {
 
         let result = service.start(tx).await;
 
-        // CI環境では権限エラー、実環境ではチャンネルエラーまたは権限エラー
+        // チャンネルエラー
         assert!(result.is_err());
 
         if let Err(error) = result {
@@ -229,33 +193,20 @@ mod tests {
     fn test_system_requirements_check() {
         let result = ShortcutService::check_system_requirements();
 
-        #[cfg(feature = "ci-test")]
+        #[cfg(target_os = "macos")]
         {
-            // CI環境では常に成功
             assert!(result.is_ok());
         }
 
-        #[cfg(not(feature = "ci-test"))]
+        #[cfg(not(target_os = "macos"))]
         {
-            // 実環境では権限状態次第
-            match result {
-                Ok(_) => println!("System requirements satisfied"),
-                Err(e) => println!("System requirements not met: {}", e),
-            }
+            assert!(result.is_err());
         }
-    }
-
-    #[test]
-    fn test_permission_denied_handler() {
-        let guidance = ShortcutService::handle_permission_denied();
-        assert!(guidance.contains("アクセシビリティ権限"));
-        assert!(guidance.contains("Voice Input"));
     }
 
     #[test]
     fn test_shortcut_error_display() {
         let errors = vec![
-            ShortcutError::PermissionDenied("test".to_string()),
             ShortcutError::RdevInitFailed("test".to_string()),
             ShortcutError::IpcChannelClosed,
             ShortcutError::SystemRequirementNotMet("test".to_string()),
@@ -274,7 +225,7 @@ mod tests {
         let mut service = ShortcutService::new();
         let (tx, _rx) = mpsc::unbounded_channel();
 
-        // 最初の起動（権限エラーの可能性あり）
+        // 最初の起動
         let result1 = service.start(tx.clone()).await;
 
         if result1.is_ok() {
@@ -290,26 +241,6 @@ mod tests {
 
             // クリーンアップ
             let _ = service.stop().await;
-        }
-        // 権限エラーの場合はテストをスキップ
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_legacy_accessibility_permission_check() {
-        let service = ShortcutService::new();
-
-        // 互換性チェック（レガシーメソッド）
-        let has_permission = service.check_accessibility_permission();
-
-        // CI環境では常にtrue
-        #[cfg(feature = "ci-test")]
-        assert!(has_permission);
-
-        // 実環境では権限状態によって変わる
-        #[cfg(not(feature = "ci-test"))]
-        {
-            println!("Legacy permission check result: {}", has_permission);
         }
     }
 }

@@ -20,8 +20,6 @@ static TEST_LOCK: Mutex<()> = Mutex::new(());
 pub struct EnvConfig {
     /// OpenAI APIキー
     pub openai_api_key: Option<String>,
-    /// サブプロセス方式でテキスト入力を行うかどうか
-    pub use_subprocess: bool,
     /// XDG Data Home ディレクトリ
     pub xdg_data_home: Option<String>,
     /// 環境変数ファイルのパス
@@ -40,9 +38,6 @@ impl EnvConfig {
 
         let config = EnvConfig {
             openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
-            use_subprocess: std::env::var("VOICE_INPUT_USE_SUBPROCESS")
-                .unwrap_or_default()
-                .eq_ignore_ascii_case("true"),
             xdg_data_home: std::env::var("XDG_DATA_HOME").ok(),
             env_path: std::env::var("VOICE_INPUT_ENV_PATH").ok(),
         };
@@ -87,9 +82,6 @@ impl EnvConfig {
             // テスト用のデフォルト設定
             let config = EnvConfig {
                 openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
-                use_subprocess: std::env::var("VOICE_INPUT_USE_SUBPROCESS")
-                    .unwrap_or_default()
-                    .eq_ignore_ascii_case("true"),
                 xdg_data_home: std::env::var("XDG_DATA_HOME").ok(),
                 env_path: std::env::var("VOICE_INPUT_ENV_PATH").ok(),
             };

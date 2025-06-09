@@ -2,9 +2,6 @@
 //!
 //! enigoライブラリを使用して、日本語を含む全ての文字を
 //! カーソル位置に直接入力する機能を提供
-//!
-//! ⚠️ DEPRECATED: このモジュールは移行期間後に削除予定です。
-//! 新規コードではtext_input_accessibility.rsを使用してください。
 
 use enigo::{Enigo, Keyboard, Settings};
 use std::error::Error;
