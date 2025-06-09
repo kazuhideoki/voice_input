@@ -84,30 +84,6 @@ fn benchmark_recording_modes(c: &mut Criterion) {
                 });
             },
         );
-
-        // 統一されたメモリモードのベンチマーク（旧ファイルモード）
-        group.bench_with_input(
-            BenchmarkId::new("unified_mode", duration_secs),
-            duration_secs,
-            |b, &_duration| {
-                let backend = BenchmarkAudioBackend::new();
-                backend.set_simulated_size(audio_size);
-
-                b.iter(|| {
-                    let mut recorder = Recorder::new(backend.clone());
-
-                    // 録音開始
-                    recorder.start().expect("Failed to start recording");
-
-                    // 録音停止とデータ取得
-                    let result = recorder.stop().expect("Failed to stop recording");
-
-                    // 結果の検証（ファイルモードはもう存在しないので、メモリモードとして動作）
-                    assert_eq!(result.0.len(), audio_size);
-                    black_box(result);
-                });
-            },
-        );
     }
 
     group.finish();

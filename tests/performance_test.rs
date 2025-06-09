@@ -33,17 +33,6 @@ struct PerformanceMetrics {
     recording_time: Duration,
     transcription_time: Duration,
     total_time: Duration,
-    #[allow(dead_code)]
-    memory_usage_mb: f64,
-    #[allow(dead_code)]
-    mode: String,
-}
-
-/// 現在のメモリ使用量を取得（簡易実装）
-fn get_current_memory_usage_mb() -> f64 {
-    // macOSでは正確なメモリ使用量の取得は困難なため、ダミー値を返す
-    // 実際の実装では、システムコールやプロセス情報を使用
-    0.0
 }
 
 /// パフォーマンスを測定
@@ -72,8 +61,6 @@ async fn measure_performance() -> Result<PerformanceMetrics, Box<dyn Error>> {
         recording_time: recording_end - start,
         transcription_time: total_end - transcription_start,
         total_time: total_end - start,
-        memory_usage_mb: get_current_memory_usage_mb(),
-        mode: "Memory".to_string(),
     })
 }
 
@@ -93,8 +80,6 @@ fn print_results(metrics: &PerformanceMetrics) {
         "Total Time:         {:>10.2}ms",
         metrics.total_time.as_millis()
     );
-    println!("Memory Usage:       {:>10.2}MB", metrics.memory_usage_mb);
-    println!("Mode:               {:>10}", metrics.mode);
     println!("═══════════════════════════════════════════════");
 }
 

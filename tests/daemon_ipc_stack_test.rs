@@ -7,7 +7,7 @@
 /// プロダクションコード（voice_inputd.rs:handle_client）には以下の問題があります：
 ///
 /// 1. **外部依存の混在**: `text_input::type_text()` が実際のキーボード入力を実行
-///    - GUI権限が必要（macOS Accessibility）
+///    - GUI権限が必要
 ///    - CI環境では実行不可能
 ///    - テスト時に予期しない入力が発生
 ///

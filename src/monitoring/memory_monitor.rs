@@ -56,9 +56,9 @@ impl MemoryMonitor {
             }
         }
 
-        let mb = bytes / 1024 / 1024;
+        let _mb = bytes / 1024 / 1024;
         #[cfg(debug_assertions)]
-        println!("[DEBUG] Memory usage updated: {} MB", mb);
+        println!("[DEBUG] Memory usage updated: {} MB", _mb);
 
         if bytes > self.threshold_mb * 1024 * 1024 {
             self.trigger_alert(bytes);
@@ -85,11 +85,11 @@ impl MemoryMonitor {
             }
         }
 
-        let mb = new_usage / 1024 / 1024;
+        let _mb = new_usage / 1024 / 1024;
         #[cfg(debug_assertions)]
         println!(
             "[DEBUG] Memory usage increased by {} bytes, total: {} MB",
-            additional_bytes, mb
+            additional_bytes, _mb
         );
 
         if new_usage > self.threshold_mb * 1024 * 1024 {
@@ -102,11 +102,11 @@ impl MemoryMonitor {
         let new_usage = current.saturating_sub(freed_bytes);
         self.current_usage.store(new_usage, Ordering::SeqCst);
 
-        let mb = new_usage / 1024 / 1024;
+        let _mb = new_usage / 1024 / 1024;
         #[cfg(debug_assertions)]
         println!(
             "[DEBUG] Memory usage decreased by {} bytes, total: {} MB",
-            freed_bytes, mb
+            freed_bytes, _mb
         );
     }
 

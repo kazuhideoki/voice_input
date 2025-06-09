@@ -1,9 +1,6 @@
 //! Enigoテキスト入力専用ヘルパープロセス
 //!
 //! rdevとの競合を避けるため、別プロセスでEnigo操作を実行
-//!
-//! ⚠️ DEPRECATED: このバイナリは移行期間後に削除予定です。
-//! 新規コードではAccessibility APIを使用してください。
 
 use enigo::{Direction::Release, Enigo, Key, Keyboard, Settings};
 use std::env;

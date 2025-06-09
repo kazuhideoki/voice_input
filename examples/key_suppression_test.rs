@@ -21,8 +21,10 @@ fn main() {
     // 修飾キー状態の初期化
     CMD_PRESSED.set(Arc::new(Mutex::new(false))).unwrap();
 
-    // アクセシビリティ権限の確認
-    check_accessibility_permission();
+    // 権限に関する注意事項を表示
+    println!("注意: このプログラムを実行するには、アクセシビリティ権限が必要です。");
+    println!("権限が必要な場合は、システムダイアログが表示されます。");
+    println!();
 
     println!("キーイベント抑制を開始中...");
     println!();
@@ -155,15 +157,6 @@ fn trigger_stack_access_simulation(number: u8) {
         "  → スタック {} アクセス機能を実行（シミュレーション）",
         number
     );
-}
-
-fn check_accessibility_permission() {
-    println!("アクセシビリティ権限の確認...");
-    println!("注意: このプログラムを実行するには、アクセシビリティ権限が必要です。");
-    println!("権限が必要な場合は、システムダイアログが表示されます。");
-    println!("システム環境設定 > セキュリティとプライバシー > アクセシビリティ");
-    println!("で、このアプリケーションにアクセシビリティ権限を付与してください。");
-    println!();
 }
 
 fn print_error_guidance() {

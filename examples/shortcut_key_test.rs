@@ -17,8 +17,10 @@ fn main() {
     // 修飾キー状態の初期化
     CMD_PRESSED.set(Arc::new(Mutex::new(false))).unwrap();
 
-    // アクセシビリティ権限の確認
-    check_accessibility_permission();
+    // 権限に関する注意事項を表示
+    println!("注意: このプログラムを実行するには、アクセシビリティ権限が必要です。");
+    println!("権限が必要な場合は、システムダイアログが表示されます。");
+    println!();
 
     println!("キーイベント検出を開始中...");
     println!();
@@ -115,14 +117,4 @@ fn is_cmd_pressed(cmd_state: &Arc<Mutex<bool>>) -> bool {
     } else {
         false
     }
-}
-
-fn check_accessibility_permission() {
-    println!("アクセシビリティ権限の確認...");
-
-    // macOSのアクセシビリティ権限確認は通常CoreFoundationを使用しますが、
-    // rdevライブラリが内部的に処理するため、ここでは基本的な情報のみ表示
-    println!("注意: このプログラムを実行するには、アクセシビリティ権限が必要です。");
-    println!("権限が必要な場合は、システムダイアログが表示されます。");
-    println!();
 }

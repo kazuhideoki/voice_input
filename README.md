@@ -145,18 +145,6 @@ voice_input toggle
 
 voice_inputは2つのテキスト入力方式をサポートしています。デフォルトは直接入力方式です。
 
-### 技術的実装の変更（v0.2.0以降）
-
-**macOS Accessibility API採用による安定性向上**
-
-従来のEnigo（CGEventPost）方式からmacOS Accessibility APIへ移行しました：
-
-- **問題**: ショートカットキー機能使用時、rdevのCGEventTapとEnigoのCGEventPostが競合し、連続入力で失敗が発生
-- **解決**: Accessibility APIによる直接テキスト挿入でイベント競合を完全回避
-- **効果**: Cmd+数字による連続ペーストが100%成功、既存アプリのホットキー無効化も維持
-
-移行期間中は環境変数`VOICE_INPUT_USE_SUBPROCESS=true`で旧実装を使用可能です。
-
 ### 直接入力（デフォルト）
 
 クリップボードを汚染せずにカーソル位置に直接テキストを入力します。
