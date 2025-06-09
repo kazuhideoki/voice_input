@@ -35,6 +35,7 @@ use voice_input::{
     application::{StackService, UserFeedback},
     domain::dict::{DictRepository, apply_replacements},
     domain::recorder::Recorder,
+    error::{Result, VoiceInputError},
     infrastructure::{
         audio::{CpalAudioBackend, cpal_backend::AudioData},
         dict::JsonFileDictRepo,
@@ -120,23 +121,26 @@ struct RecCtx {
 
 /// エントリポイント。環境変数を読み込み、`async_main` を current‑thread ランタイムで実行します。
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> std::result::Result<(), Box<dyn Error>> {
     load_env();
 
     // 環境変数設定を初期化
-    EnvConfig::init()?;
+    EnvConfig::init()
+        .map_err(|e| VoiceInputError::ConfigInitError(e.to_string()))?;
 
     // `spawn_local` はこのスレッドだけで動かしたい非同期ジョブを登録する。LocalSet はその実行エンジン
     let local = LocalSet::new();
     local.run_until(async_main()).await
+        .map_err(|e| Box::new(e) as Box<dyn Error>)
 }
 
 /// ソケット待受・クライアントハンドリング・転写ワーカーを起動する本体。
-async fn async_main() -> Result<(), Box<dyn Error>> {
+async fn async_main() -> Result<()> {
     // 既存ソケットがあれば削除して再バインド
     let path = socket_path();
     let _ = fs::remove_file(&path);
-    let listener = UnixListener::bind(&path)?;
+    let listener = UnixListener::bind(&path)
+        .map_err(|e| VoiceInputError::IpcConnectionFailed(e.to_string()))?;
     println!("voice-inputd listening on {:?}", path);
 
     let recorder = Rc::new(std::cell::RefCell::new(Recorder::new(
@@ -194,7 +198,13 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                     prompt,
                     direct_input,
                 } => {
-                    if ctx_clone.lock().map_err(|e| e.to_string()).unwrap().state == RecState::Idle
+                    if match ctx_clone.lock() {
+                        Ok(guard) => guard.state == RecState::Idle,
+                        Err(e) => {
+                            eprintln!("Failed to lock context: {}", e);
+                            return;
+                        }
+                    }
                     {
                         start_recording(
                             recorder_clone.clone(),
@@ -231,7 +241,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                     };
 
                     if let Some(error_msg) = error {
-                        Err(error_msg.into())
+                        Err(VoiceInputError::SystemError(error_msg))
                     } else if let Some(text) = stack_text {
                         // ペースト実行前にUI通知
                         if let Ok(manager) = ui_manager_clone.try_borrow() {
@@ -256,11 +266,11 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
                                 eprintln!("Direct input failed: {:?}", e);
                                 eprintln!("Text to input: {:?}", text);
                                 // フォールバック処理は削除（クリップボードを汚染しないため）
-                                Err(format!("Failed to paste stack {}: {}", number, e).into())
+                                Err(VoiceInputError::SystemError(format!("Failed to paste stack {}: {}", number, e)))
                             }
                         }
                     } else {
-                        Err(format!("Unexpected error: stack {} not found", number).into())
+                        Err(VoiceInputError::SystemError(format!("Unexpected error: stack {} not found", number)))
                     }
                 }
                 IpcCmd::DisableStackMode => {
@@ -392,7 +402,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
 async fn handle_client(
     stream: UnixStream,
     resources: ClientResources,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     let ClientResources {
         recorder,
         ctx,
@@ -407,7 +417,8 @@ async fn handle_client(
     let mut writer = FramedWrite::new(w, LinesCodec::new());
 
     if let Some(Ok(line)) = reader.next().await {
-        let cmd: IpcCmd = serde_json::from_str(&line)?;
+        let cmd: IpcCmd = serde_json::from_str(&line)
+            .map_err(|e| VoiceInputError::IpcSerializationError(e.to_string()))?;
         let resp = match cmd {
             IpcCmd::Start {
                 paste,
@@ -444,7 +455,7 @@ async fn handle_client(
                 prompt,
                 direct_input,
             } => {
-                if ctx.lock().map_err(|e| e.to_string())?.state == RecState::Idle {
+                if ctx.lock().map_err(|e| VoiceInputError::SystemError(e.to_string()))?.state == RecState::Idle {
                     start_recording(
                         recorder.clone(),
                         &ctx,
@@ -472,7 +483,7 @@ async fn handle_client(
             }
             IpcCmd::Status => Ok(IpcResp {
                 ok: true,
-                msg: format!("state={:?}", ctx.lock().map_err(|e| e.to_string())?.state),
+                msg: format!("state={:?}", ctx.lock().map_err(|e| VoiceInputError::SystemError(e.to_string()))?.state),
             }),
             IpcCmd::ListDevices => {
                 let list = CpalAudioBackend::list_devices();
@@ -635,7 +646,10 @@ async fn handle_client(
             msg: e.to_string(),
         });
 
-        writer.send(serde_json::to_string(&resp)?).await?;
+        writer.send(serde_json::to_string(&resp)
+            .map_err(|e| VoiceInputError::IpcSerializationError(e.to_string()))?)
+            .await
+            .map_err(|e| VoiceInputError::IpcConnectionFailed(e.to_string()))?;
     }
     Ok(())
 }
@@ -657,10 +671,10 @@ async fn start_recording(
     paste: bool,
     prompt: Option<String>,
     direct_input: bool,
-) -> Result<IpcResp, Box<dyn Error>> {
-    let mut c = ctx.lock().map_err(|e| e.to_string())?;
+) -> Result<IpcResp> {
+    let mut c = ctx.lock().map_err(|e| VoiceInputError::SystemError(e.to_string()))?;
     if c.state != RecState::Idle {
-        return Err("already recording".into());
+        return Err(VoiceInputError::RecordingAlreadyActive);
     }
 
     // 録音開始時点の選択テキストまたはCLI引数を保存
@@ -675,7 +689,8 @@ async fn start_recording(
     // 録音開始 SE
     play_start_sound();
 
-    recorder.borrow_mut().start()?;
+    recorder.borrow_mut().start()
+        .map_err(|e| VoiceInputError::AudioBackendError(e.to_string()))?;
     c.state = RecState::Recording;
 
     // ---- 自動停止タイマー -----------------------------
@@ -759,10 +774,10 @@ async fn stop_recording(
     paste: bool,
     prompt: Option<String>,
     direct_input: bool,
-) -> Result<IpcResp, Box<dyn Error>> {
-    let mut c = ctx.lock().map_err(|e| e.to_string())?;
+) -> Result<IpcResp> {
+    let mut c = ctx.lock().map_err(|e| VoiceInputError::SystemError(e.to_string()))?;
     if c.state != RecState::Recording {
-        return Err("not recording".into());
+        return Err(VoiceInputError::RecordingNotStarted);
     }
 
     // 自動停止タイマーをキャンセル
@@ -771,7 +786,8 @@ async fn stop_recording(
     }
 
     play_stop_sound();
-    let audio_data = recorder.borrow_mut().stop()?;
+    let audio_data = recorder.borrow_mut().stop()
+        .map_err(|e| VoiceInputError::AudioBackendError(e.to_string()))?;
     c.state = RecState::Idle;
 
     // 開始時の保存値→引数→現在の選択の順でプロンプトを決定
@@ -804,7 +820,8 @@ async fn stop_recording(
         direct_input,
         stack_for_transcription,
         Some(ui_manager.clone()),
-    ))?;
+    ))
+    .map_err(|e| VoiceInputError::SystemError(format!("Failed to send to transcription queue: {}", e)))?;
 
     Ok(IpcResp {
         ok: true,
@@ -825,7 +842,7 @@ async fn handle_transcription(
     direct_input: bool,
     stack_service: Option<Rc<RefCell<StackService>>>,
     ui_manager: Option<Rc<RefCell<UiProcessManager>>>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     // エラーが発生しても確実に音楽を再開するためにdeferパターンで実装
     let _defer_guard = scopeguard::guard(resume_music, |should_resume| {
         if should_resume {
@@ -840,7 +857,7 @@ async fn handle_transcription(
         Ok(client) => client,
         Err(e) => {
             eprintln!("Failed to create OpenAI client: {e}");
-            return Err(e.into());
+            return Err(VoiceInputError::OpenAiConfigError(e));
         }
     };
 
@@ -924,7 +941,7 @@ async fn handle_transcription(
         }
         Err(e) => {
             eprintln!("transcription error: {e}");
-            return Err(e.into());
+            return Err(VoiceInputError::TranscriptionFailed(e));
         }
     }
 
@@ -932,7 +949,7 @@ async fn handle_transcription(
 }
 
 /// 入力デバイス・環境変数・OpenAI API の状態を確認します。
-async fn health_check() -> Result<IpcResp, Box<dyn Error>> {
+async fn health_check() -> Result<IpcResp> {
     let mut ok = true;
     let mut lines = Vec::new();
 
@@ -993,7 +1010,7 @@ mod tests {
     /// 作成されることを検証します。入力デバイスが存在しない場合は自動的にスキップします。
     #[tokio::test(flavor = "current_thread")]
     #[ignore = "Requires LocalSet context and audio device"]
-    async fn prompt_is_saved_as_meta() -> Result<(), Box<dyn std::error::Error>> {
+    async fn prompt_is_saved_as_meta() -> Result<()> {
         // このテスト中に30秒タイマーが発火するのを防止する
         unsafe {
             std::env::set_var("VOICE_INPUT_MAX_SECS", "60");
@@ -1050,7 +1067,7 @@ mod tests {
     /// Idleに戻すことを確認します。オーディオデバイスが利用できない場合はスキップします。
     #[tokio::test(flavor = "current_thread")]
     #[ignore = "Requires LocalSet context and audio device"]
-    async fn auto_timeout_triggers_stop() -> Result<(), Box<dyn std::error::Error>> {
+    async fn auto_timeout_triggers_stop() -> Result<()> {
         unsafe {
             std::env::set_var("VOICE_INPUT_MAX_SECS", "1");
         }

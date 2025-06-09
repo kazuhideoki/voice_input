@@ -127,8 +127,6 @@ impl KeyHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rdev::{Event, EventType};
-    use std::time::SystemTime;
 
     #[test]
     fn test_key_handler_creation() {
@@ -144,6 +142,7 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
 
         // テスト用のイベント処理シミュレーション
+        #[allow(dead_code)]
         struct TestContext {
             ipc_sender: mpsc::UnboundedSender<IpcCmd>,
             cmd_pressed: bool,
@@ -196,6 +195,7 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
 
         // Cmdが押されていない状態でキーが押されてもコマンドは送信されない
+        #[allow(dead_code)]
         struct TestContext {
             ipc_sender: mpsc::UnboundedSender<IpcCmd>,
             cmd_pressed: bool,
