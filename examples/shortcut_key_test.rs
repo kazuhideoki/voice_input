@@ -118,4 +118,3 @@ fn is_cmd_pressed(cmd_state: &Arc<Mutex<bool>>) -> bool {
         false
     }
 }
-

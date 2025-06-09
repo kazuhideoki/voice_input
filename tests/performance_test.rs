@@ -35,7 +35,6 @@ struct PerformanceMetrics {
     total_time: Duration,
 }
 
-
 /// パフォーマンスを測定
 async fn measure_performance() -> Result<PerformanceMetrics, Box<dyn Error>> {
     let start = Instant::now();

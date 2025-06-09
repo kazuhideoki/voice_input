@@ -3,8 +3,8 @@
 //! このモジュールは voice_input アプリケーション全体で使用する統一エラー型を定義します。
 //! 既存の散在したエラー型を統合し、一貫したエラーハンドリングを提供します。
 
-use thiserror::Error;
 use crate::infrastructure::external::text_input_subprocess::SubprocessInputError;
+use thiserror::Error;
 
 /// voice_input アプリケーション全体で使用する統一エラー型
 #[derive(Debug, Error)]
@@ -40,7 +40,10 @@ pub enum VoiceInputError {
     // スタック管理エラー (StackServiceError統合)
     // ========================================
     #[error("Stack not found: id={stack_id}, available={available_ids:?}")]
-    StackNotFound { stack_id: u32, available_ids: Vec<u32> },
+    StackNotFound {
+        stack_id: u32,
+        available_ids: Vec<u32>,
+    },
 
     #[error("Stack mode is disabled")]
     StackModeDisabled,
@@ -112,10 +115,16 @@ pub enum VoiceInputError {
     FileNotFound { path: String },
 
     #[error("File read error: {path}: {source}")]
-    FileReadError { path: String, source: std::io::Error },
+    FileReadError {
+        path: String,
+        source: std::io::Error,
+    },
 
     #[error("File write error: {path}: {source}")]
-    FileWriteError { path: String, source: std::io::Error },
+    FileWriteError {
+        path: String,
+        source: std::io::Error,
+    },
 
     // ========================================
     // システム関連エラー
@@ -154,7 +163,10 @@ impl From<crate::application::StackServiceError> for VoiceInputError {
     fn from(error: crate::application::StackServiceError) -> Self {
         match error {
             crate::application::StackServiceError::StackNotFound(stack_id, available_ids) => {
-                VoiceInputError::StackNotFound { stack_id, available_ids }
+                VoiceInputError::StackNotFound {
+                    stack_id,
+                    available_ids,
+                }
             }
             crate::application::StackServiceError::StackModeDisabled => {
                 VoiceInputError::StackModeDisabled
@@ -173,9 +185,7 @@ impl From<crate::infrastructure::ui::UiError> for VoiceInputError {
             crate::infrastructure::ui::UiError::InitializationFailed(msg) => {
                 VoiceInputError::UiInitializationFailed(msg)
             }
-            crate::infrastructure::ui::UiError::ChannelClosed => {
-                VoiceInputError::UiChannelClosed
-            }
+            crate::infrastructure::ui::UiError::ChannelClosed => VoiceInputError::UiChannelClosed,
             crate::infrastructure::ui::UiError::RenderingError(msg) => {
                 VoiceInputError::UiRenderingError(msg)
             }
@@ -204,9 +214,7 @@ impl From<crate::shortcut::ShortcutError> for VoiceInputError {
 impl From<SubprocessInputError> for VoiceInputError {
     fn from(error: SubprocessInputError) -> Self {
         match error {
-            SubprocessInputError::SpawnError(msg) => {
-                VoiceInputError::TextInputSpawnError(msg)
-            }
+            SubprocessInputError::SpawnError(msg) => VoiceInputError::TextInputSpawnError(msg),
             SubprocessInputError::ExecutionError(msg) => {
                 VoiceInputError::TextInputExecutionError(msg)
             }
@@ -218,7 +226,7 @@ impl From<SubprocessInputError> for VoiceInputError {
 }
 
 // ========================================
-// 後方互換性の維持  
+// 後方互換性の維持
 // ========================================
 
 /// String からの変換（既存の文字列エラーとの互換性）

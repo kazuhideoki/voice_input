@@ -84,7 +84,6 @@ fn benchmark_recording_modes(c: &mut Criterion) {
                 });
             },
         );
-
     }
 
     group.finish();
