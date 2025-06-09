@@ -9,6 +9,8 @@
 //!
 //! *ソケットパス*: `/tmp/voice_input.sock`
 
+#![allow(clippy::await_holding_refcell_ref)]
+
 use std::{error::Error, fs};
 
 use clap::Parser;

@@ -80,6 +80,12 @@ impl RecordingContext {
     }
 }
 
+impl Default for RecordingContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// 録音サービス
 pub struct RecordingService<T: AudioBackend> {
     /// レコーダー（既存の構造を維持）

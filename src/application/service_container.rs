@@ -208,6 +208,12 @@ pub mod test_helpers {
         transcription_response: String,
     }
 
+    impl Default for TestServiceContainerBuilder {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl TestServiceContainerBuilder {
         pub fn new() -> Self {
             Self {

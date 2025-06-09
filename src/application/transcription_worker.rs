@@ -6,6 +6,8 @@
 //! - スタックへの保存
 //! - ペースト処理
 
+#![allow(clippy::await_holding_refcell_ref)]
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;

@@ -27,6 +27,6 @@ impl TranscriptionClient for OpenAiTranscriptionAdapter {
         self.client
             .transcribe_audio(audio)
             .await
-            .map_err(|e| crate::error::VoiceInputError::TranscriptionFailed(e))
+            .map_err(crate::error::VoiceInputError::TranscriptionFailed)
     }
 }

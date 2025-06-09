@@ -5,6 +5,8 @@
 //! - サービス間の調整
 //! - レスポンスの生成
 
+#![allow(clippy::await_holding_refcell_ref)]
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use tokio::sync::mpsc;
@@ -114,7 +116,8 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         let final_prompt = prompt.or_else(|| get_selected_text().ok());
 
         // Apple Musicを一時停止
-        let was_playing = self.media_control.borrow().pause_if_playing().await?;
+        let media_control = self.media_control.clone();
+        let was_playing = media_control.borrow().pause_if_playing().await?;
         self.recording.borrow().set_music_was_playing(was_playing)?;
 
         // 開始音を再生
@@ -128,7 +131,8 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         };
 
         // 録音を開始
-        let _session_id = self.recording.borrow().start_recording(options).await?;
+        let recording = self.recording.clone();
+        let _session_id = recording.borrow().start_recording(options).await?;
 
         // 自動停止タイマーを設定
         self.setup_auto_stop_timer();
@@ -146,7 +150,8 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         play_stop_sound();
 
         // 録音を停止
-        let result = self.recording.borrow().stop_recording().await?;
+        let recording = self.recording.clone();
+        let result = recording.borrow().stop_recording().await?;
 
         // コンテキスト情報を取得
         let (_start_prompt, paste, direct_input, music_was_playing) =
@@ -267,14 +272,15 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         };
 
         // UI起動を試行
-        if let Ok(mut manager) = self.ui_manager.try_borrow_mut() {
+        let ui_manager = self.ui_manager.clone();
+        if let Ok(mut manager) = ui_manager.try_borrow_mut() {
             if let Err(e) = manager.start_ui().await {
                 eprintln!("UI process start failed (continuing without UI): {}", e);
             } else {
+                drop(manager); // borrowを解放
                 // UI起動後に状態変更を通知
                 tokio::time::sleep(Duration::from_millis(100)).await;
-                drop(manager); // 明示的にドロップ
-                if let Ok(manager) = self.ui_manager.try_borrow() {
+                if let Ok(manager) = ui_manager.try_borrow() {
                     let _ = manager.notify(UiNotification::ModeChanged(true));
                 }
             }
