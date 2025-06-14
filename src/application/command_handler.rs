@@ -383,33 +383,45 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         let max_secs = recording.borrow().config().max_duration_secs;
 
         spawn_local(async move {
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(max_secs)) => {
-                    if recording.borrow().is_recording() {
-                        play_stop_sound();
+            // RecordingServiceからキャンセルレシーバーを取得
+            let cancel_rx = recording.borrow().take_cancel_receiver();
+            
+            if let Some(cancel_rx) = cancel_rx {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(max_secs)) => {
+                        // 30秒経過による自動停止
+                        if recording.borrow().is_recording() {
+                            println!("Auto-stop timer triggered after {}s", max_secs);
+                            play_stop_sound();
 
-                        if let Ok(result) = recording.borrow().stop_recording().await {
-                            let (_, paste, direct_input, music_was_playing) =
-                                recording.borrow().get_context_info().unwrap_or((None, false, false, false));
+                            if let Ok(result) = recording.borrow().stop_recording().await {
+                                let (_, paste, direct_input, music_was_playing) =
+                                    recording.borrow().get_context_info().unwrap_or((None, false, false, false));
 
-                            let stack_for_transcription = if stack.borrow().is_stack_mode_enabled() {
-                                Some(stack.clone())
-                            } else {
-                                None
-                            };
+                                let stack_for_transcription = if stack.borrow().is_stack_mode_enabled() {
+                                    Some(stack.clone())
+                                } else {
+                                    None
+                                };
 
-                            let _ = tx.send((
-                                result,
-                                paste,
-                                music_was_playing,
-                                direct_input,
-                                stack_for_transcription,
-                                Some(ui_manager.clone()),
-                            ));
+                                let _ = tx.send((
+                                    result,
+                                    paste,
+                                    music_was_playing,
+                                    direct_input,
+                                    stack_for_transcription,
+                                    Some(ui_manager.clone()),
+                                ));
+                            }
                         }
                     }
+                    _ = cancel_rx => {
+                        // 手動停止によるキャンセル
+                        println!("Auto-stop timer cancelled due to manual stop");
+                    }
                 }
-                // キャンセル処理はRecordingService側で管理
+            } else {
+                println!("Warning: Could not set up auto-stop timer - no cancel receiver");
             }
         });
     }

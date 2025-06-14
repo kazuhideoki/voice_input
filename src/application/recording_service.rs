@@ -201,12 +201,16 @@ impl<T: AudioBackend> RecordingService<T> {
     /// 自動停止キャンセルチャネルを取得（タイマー処理用）
     pub fn take_cancel_receiver(&self) -> Option<oneshot::Receiver<()>> {
         if let Ok(mut ctx) = self.context.lock() {
-            ctx.cancel.take().map(|tx| {
+            if let Some(tx) = ctx.cancel.take() {
                 let (new_tx, rx) = oneshot::channel();
                 ctx.cancel = Some(new_tx);
-                let _ = tx.send(()); // 古いものをキャンセル
-                rx
-            })
+                // 古いtxは破棄するだけで、send()は呼ばない
+                // txが破棄されることで、対応するReceiverは自然にキャンセルされる
+                drop(tx);
+                Some(rx)
+            } else {
+                None
+            }
         } else {
             None
         }
