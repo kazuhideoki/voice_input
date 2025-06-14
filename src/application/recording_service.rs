@@ -93,7 +93,7 @@ pub struct RecordingService<T: AudioBackend> {
     /// 録音コンテキスト
     context: Arc<Mutex<RecordingContext>>,
     /// 設定
-    config: RecordingConfig,
+    pub config: RecordingConfig,
     /// セッションIDカウンター
     session_counter: Arc<Mutex<u64>>,
 }
@@ -243,5 +243,147 @@ impl<T: AudioBackend> RecordingService<T> {
             .map_err(|e| VoiceInputError::SystemError(format!("Context lock error: {}", e)))?;
         ctx.music_was_playing = was_playing;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::recorder::Recorder;
+    use crate::infrastructure::audio::cpal_backend::AudioData;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    /// テスト用のモックオーディオバックエンド
+    struct MockAudioBackend {
+        is_recording: Arc<AtomicBool>,
+    }
+
+    impl MockAudioBackend {
+        fn new() -> Self {
+            Self {
+                is_recording: Arc::new(AtomicBool::new(false)),
+            }
+        }
+    }
+
+    impl crate::infrastructure::audio::AudioBackend for MockAudioBackend {
+        fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+            self.is_recording.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn stop_recording(&self) -> std::result::Result<AudioData, Box<dyn std::error::Error>> {
+            self.is_recording.store(false, Ordering::SeqCst);
+            Ok(AudioData(vec![0u8; 100]))
+        }
+
+        fn is_recording(&self) -> bool {
+            self.is_recording.load(Ordering::SeqCst)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cancel_channel_behavior() {
+        // RecordingServiceを作成
+        let backend = MockAudioBackend::new();
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
+        let config = RecordingConfig {
+            max_duration_secs: 30,
+        };
+        let service = RecordingService::new(recorder, config);
+
+        // 録音開始
+        let options = RecordingOptions {
+            prompt: None,
+            paste: false,
+            direct_input: false,
+        };
+        service.start_recording(options).await.unwrap();
+
+        // キャンセルレシーバーを取得
+        let cancel_rx = service.take_cancel_receiver();
+        assert!(cancel_rx.is_some(), "Should get cancel receiver");
+
+        // キャンセルレシーバーが即座に発火しないことを確認
+        let cancel_rx = cancel_rx.unwrap();
+        let result = timeout(Duration::from_millis(100), cancel_rx).await;
+        assert!(result.is_err(), "Cancel receiver should not fire immediately");
+
+        // 録音停止
+        service.stop_recording().await.unwrap();
+        
+        // 新しいキャンセルレシーバーを取得できないことを確認（既に停止済み）
+        let cancel_rx2 = service.take_cancel_receiver();
+        assert!(cancel_rx2.is_none(), "Should not get cancel receiver after stop");
+    }
+
+    #[tokio::test]
+    async fn test_multiple_start_stop_cycles() {
+        let backend = MockAudioBackend::new();
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
+        let config = RecordingConfig {
+            max_duration_secs: 30,
+        };
+        let service = RecordingService::new(recorder, config);
+
+        // 3回の開始・停止サイクルを実行
+        for i in 0..3 {
+            // 録音開始
+            let options = RecordingOptions {
+                prompt: Some(format!("Test {}", i)),
+                paste: false,
+                direct_input: false,
+            };
+            let session_id = service.start_recording(options).await.unwrap();
+            assert!(session_id > 0, "Session ID should be positive");
+            assert!(service.is_recording(), "Should be recording after start");
+
+            // キャンセルレシーバーを取得
+            let cancel_rx = service.take_cancel_receiver();
+            assert!(cancel_rx.is_some(), "Should get cancel receiver for cycle {}", i);
+
+            // 少し待機
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            // 録音停止
+            let result = service.stop_recording().await.unwrap();
+            assert!(!result.audio_data.0.is_empty(), "Should have audio data");
+            assert!(!service.is_recording(), "Should not be recording after stop");
+        }
+    }
+
+    #[test]
+    fn test_context_state_transitions() {
+        let backend = MockAudioBackend::new();
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
+        let config = RecordingConfig {
+            max_duration_secs: 30,
+        };
+        let service = RecordingService::new(recorder, config);
+
+        // 初期状態の確認
+        {
+            let ctx = service.context.lock().unwrap();
+            assert_eq!(ctx.state, RecordingState::Idle);
+            assert!(ctx.cancel.is_none());
+            assert!(!ctx.music_was_playing);
+        }
+
+        // 音楽再生状態を設定
+        service.set_music_was_playing(true).unwrap();
+        {
+            let ctx = service.context.lock().unwrap();
+            assert!(ctx.music_was_playing);
+        }
+
+        // コンテキスト情報を取得
+        let (prompt, paste, direct_input, music_was_playing) = 
+            service.get_context_info().unwrap();
+        assert!(prompt.is_none());
+        assert!(!paste);
+        assert!(!direct_input);
+        assert!(music_was_playing);
     }
 }

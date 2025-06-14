@@ -146,9 +146,16 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
 }
 
 /// テスト用のヘルパー実装
+#[cfg(test)]
 pub mod test_helpers {
     use super::*;
-    use crate::infrastructure::audio::cpal_backend::AudioData;
+    use crate::application::{StackService, MediaControlService, TranscriptionService, RecordingService, RecordingConfig, CommandHandler};
+    use crate::infrastructure::{
+        audio::cpal_backend::AudioData,
+        ui::UiProcessManager,
+    };
+    use crate::shortcut::ShortcutService;
+    use tokio::sync::mpsc;
     use async_trait::async_trait;
 
     /// テスト用のモックオーディオバックエンド
@@ -206,6 +213,7 @@ pub mod test_helpers {
     pub struct TestServiceContainerBuilder {
         config: AppConfig,
         transcription_response: String,
+        auto_stop_duration: Option<u64>,
     }
 
     impl Default for TestServiceContainerBuilder {
@@ -219,6 +227,7 @@ pub mod test_helpers {
             Self {
                 config: AppConfig::default(),
                 transcription_response: "test transcription".to_string(),
+                auto_stop_duration: None,
             }
         }
 
@@ -227,11 +236,58 @@ pub mod test_helpers {
             self
         }
 
-        pub fn build(self) -> Result<ServiceContainer<MockAudioBackend>> {
+        pub fn with_auto_stop_duration(mut self, duration_secs: u64) -> Self {
+            self.auto_stop_duration = Some(duration_secs);
+            self
+        }
+
+        pub async fn build(self) -> Result<ServiceContainer<MockAudioBackend>> {
+            // EnvConfig初期化
+            let _ = crate::utils::config::EnvConfig::init();
+
             let recorder = Rc::new(RefCell::new(Recorder::new(MockAudioBackend::default())));
             let client = Box::new(MockTranscriptionClient::new(&self.transcription_response));
-
-            ServiceContainer::with_dependencies(self.config, recorder, client)
+            
+            // 録音設定を構築
+            let mut recording_config = RecordingConfig::default();
+            if let Some(duration) = self.auto_stop_duration {
+                recording_config.max_duration_secs = duration;
+            }
+            
+            // RecordingServiceを作成
+            let recording_service = Rc::new(RefCell::new(
+                RecordingService::new(recorder.clone(), recording_config)
+            ));
+            
+            // 他のサービスを作成
+            let transcription_service = Rc::new(RefCell::new(
+                TranscriptionService::with_default_repo(client)
+            ));
+            let stack_service = Rc::new(RefCell::new(StackService::new()));
+            let media_control_service = Rc::new(RefCell::new(MediaControlService::new()));
+            let ui_manager = Rc::new(RefCell::new(UiProcessManager::new()));
+            let shortcut_service = Rc::new(RefCell::new(ShortcutService::new()));
+            
+            // 転写ワーカー用のチャンネル
+            let (transcription_tx, transcription_rx) = mpsc::unbounded_channel();
+            
+            // CommandHandlerを作成
+            let command_handler = Rc::new(RefCell::new(CommandHandler::new(
+                recording_service,
+                transcription_service,
+                stack_service,
+                media_control_service,
+                ui_manager,
+                shortcut_service.clone(),
+                transcription_tx.clone(),
+            )));
+            
+            Ok(ServiceContainer {
+                command_handler,
+                shortcut_service,
+                transcription_tx,
+                transcription_rx: Some(transcription_rx),
+            })
         }
     }
 }
@@ -240,25 +296,27 @@ pub mod test_helpers {
 mod tests {
     use super::test_helpers::*;
 
-    #[test]
-    fn test_service_container_creation() {
+    #[tokio::test]
+    async fn test_service_container_creation() {
         // テスト用のEnvConfig初期化
-        crate::utils::config::EnvConfig::test_init();
+        let _ = crate::utils::config::EnvConfig::init();
 
         let container = TestServiceContainerBuilder::new()
             .build()
+            .await
             .expect("Failed to create test container");
 
         assert!(container.transcription_rx.is_some());
     }
 
-    #[test]
-    fn test_take_transcription_rx() {
+    #[tokio::test]
+    async fn test_take_transcription_rx() {
         // テスト用のEnvConfig初期化
-        crate::utils::config::EnvConfig::test_init();
+        let _ = crate::utils::config::EnvConfig::init();
 
         let mut container = TestServiceContainerBuilder::new()
             .build()
+            .await
             .expect("Failed to create test container");
 
         let rx = container.take_transcription_rx();
