@@ -1,4 +1,3 @@
-pub mod clipboard;
 pub mod openai;
 pub mod openai_adapter;
 pub mod sound;

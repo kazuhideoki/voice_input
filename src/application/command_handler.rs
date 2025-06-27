@@ -21,7 +21,6 @@ use crate::error::{Result, VoiceInputError};
 use crate::infrastructure::{
     audio::{AudioBackend, CpalAudioBackend},
     external::{
-        clipboard::get_selected_text,
         sound::{play_start_sound, play_stop_sound},
         text_input,
     },
@@ -112,9 +111,6 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         prompt: Option<String>,
         direct_input: bool,
     ) -> Result<IpcResp> {
-        // プロンプトの決定（引数優先、なければ選択テキスト）
-        let final_prompt = prompt.or_else(|| get_selected_text().ok());
-
         // Apple Musicを一時停止
         let media_control = self.media_control.clone();
         let was_playing = media_control.borrow().pause_if_playing().await?;
@@ -125,7 +121,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
         // 録音オプションを構築
         let options = RecordingOptions {
-            prompt: final_prompt,
+            prompt,
             paste,
             direct_input,
         };
@@ -385,7 +381,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         spawn_local(async move {
             // RecordingServiceからキャンセルレシーバーを取得
             let cancel_rx = recording.borrow().take_cancel_receiver();
-            
+
             if let Some(cancel_rx) = cancel_rx {
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_secs(max_secs)) => {
