@@ -309,14 +309,20 @@ mod tests {
         // キャンセルレシーバーが即座に発火しないことを確認
         let cancel_rx = cancel_rx.unwrap();
         let result = timeout(Duration::from_millis(100), cancel_rx).await;
-        assert!(result.is_err(), "Cancel receiver should not fire immediately");
+        assert!(
+            result.is_err(),
+            "Cancel receiver should not fire immediately"
+        );
 
         // 録音停止
         service.stop_recording().await.unwrap();
-        
+
         // 新しいキャンセルレシーバーを取得できないことを確認（既に停止済み）
         let cancel_rx2 = service.take_cancel_receiver();
-        assert!(cancel_rx2.is_none(), "Should not get cancel receiver after stop");
+        assert!(
+            cancel_rx2.is_none(),
+            "Should not get cancel receiver after stop"
+        );
     }
 
     #[tokio::test]
@@ -342,7 +348,11 @@ mod tests {
 
             // キャンセルレシーバーを取得
             let cancel_rx = service.take_cancel_receiver();
-            assert!(cancel_rx.is_some(), "Should get cancel receiver for cycle {}", i);
+            assert!(
+                cancel_rx.is_some(),
+                "Should get cancel receiver for cycle {}",
+                i
+            );
 
             // 少し待機
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -350,7 +360,10 @@ mod tests {
             // 録音停止
             let result = service.stop_recording().await.unwrap();
             assert!(!result.audio_data.0.is_empty(), "Should have audio data");
-            assert!(!service.is_recording(), "Should not be recording after stop");
+            assert!(
+                !service.is_recording(),
+                "Should not be recording after stop"
+            );
         }
     }
 
@@ -379,8 +392,7 @@ mod tests {
         }
 
         // コンテキスト情報を取得
-        let (prompt, paste, direct_input, music_was_playing) = 
-            service.get_context_info().unwrap();
+        let (prompt, paste, direct_input, music_was_playing) = service.get_context_info().unwrap();
         assert!(prompt.is_none());
         assert!(!paste);
         assert!(!direct_input);

@@ -2,7 +2,7 @@
 //! WAV ファイルを multipart/form-data で転写エンドポイントに送信します。
 use crate::infrastructure::audio::cpal_backend::AudioData;
 use crate::utils::config::EnvConfig;
-use reqwest::multipart;
+use reqwest::{Client, Proxy, multipart};
 use serde::Deserialize;
 
 /// STT API のレスポンス JSON。
@@ -37,10 +37,13 @@ impl OpenAiClient {
         let model = std::env::var("OPENAI_TRANSCRIBE_MODEL")
             .unwrap_or_else(|_| "gpt-4o-mini-transcribe".to_string());
 
+        let client =
+            build_http_client().map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
         Ok(Self {
             api_key,
             model,
-            client: reqwest::Client::new(),
+            client,
         })
     }
 
@@ -106,6 +109,35 @@ impl OpenAiClient {
             serde_json::from_str(&body).map_err(|e| format!("Failed to parse response: {}", e))?;
         Ok(transcription.text)
     }
+}
+
+fn build_http_client() -> Result<Client, reqwest::Error> {
+    let mut builder = Client::builder().no_proxy();
+
+    if let Some(proxy) = proxy_env("ALL_PROXY") {
+        builder = builder.proxy(Proxy::all(&proxy)?);
+    } else {
+        if let Some(proxy) = proxy_env("HTTPS_PROXY") {
+            builder = builder.proxy(Proxy::https(&proxy)?);
+        }
+
+        if let Some(proxy) = proxy_env("HTTP_PROXY") {
+            builder = builder.proxy(Proxy::http(&proxy)?);
+        }
+    }
+
+    builder.build()
+}
+
+fn proxy_env(var: &str) -> Option<String> {
+    std::env::var(var)
+        .ok()
+        .or_else(|| {
+            let lowercase = var.to_ascii_lowercase();
+            std::env::var(&lowercase).ok()
+        })
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 // === Unit tests ==========================================================

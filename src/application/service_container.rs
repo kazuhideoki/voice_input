@@ -149,14 +149,14 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
 #[cfg(test)]
 pub mod test_helpers {
     use super::*;
-    use crate::application::{StackService, MediaControlService, TranscriptionService, RecordingService, RecordingConfig, CommandHandler};
-    use crate::infrastructure::{
-        audio::cpal_backend::AudioData,
-        ui::UiProcessManager,
+    use crate::application::{
+        CommandHandler, MediaControlService, RecordingConfig, RecordingService, StackService,
+        TranscriptionService,
     };
+    use crate::infrastructure::{audio::cpal_backend::AudioData, ui::UiProcessManager};
     use crate::shortcut::ShortcutService;
-    use tokio::sync::mpsc;
     use async_trait::async_trait;
+    use tokio::sync::mpsc;
 
     /// テスト用のモックオーディオバックエンド
     pub struct MockAudioBackend {
@@ -211,7 +211,6 @@ pub mod test_helpers {
 
     /// テスト用のServiceContainerビルダー
     pub struct TestServiceContainerBuilder {
-        config: AppConfig,
         transcription_response: String,
         auto_stop_duration: Option<u64>,
     }
@@ -225,7 +224,6 @@ pub mod test_helpers {
     impl TestServiceContainerBuilder {
         pub fn new() -> Self {
             Self {
-                config: AppConfig::default(),
                 transcription_response: "test transcription".to_string(),
                 auto_stop_duration: None,
             }
@@ -247,30 +245,31 @@ pub mod test_helpers {
 
             let recorder = Rc::new(RefCell::new(Recorder::new(MockAudioBackend::default())));
             let client = Box::new(MockTranscriptionClient::new(&self.transcription_response));
-            
+
             // 録音設定を構築
             let mut recording_config = RecordingConfig::default();
             if let Some(duration) = self.auto_stop_duration {
                 recording_config.max_duration_secs = duration;
             }
-            
+
             // RecordingServiceを作成
-            let recording_service = Rc::new(RefCell::new(
-                RecordingService::new(recorder.clone(), recording_config)
-            ));
-            
+            let recording_service = Rc::new(RefCell::new(RecordingService::new(
+                recorder.clone(),
+                recording_config,
+            )));
+
             // 他のサービスを作成
             let transcription_service = Rc::new(RefCell::new(
-                TranscriptionService::with_default_repo(client)
+                TranscriptionService::with_default_repo(client),
             ));
             let stack_service = Rc::new(RefCell::new(StackService::new()));
             let media_control_service = Rc::new(RefCell::new(MediaControlService::new()));
             let ui_manager = Rc::new(RefCell::new(UiProcessManager::new()));
             let shortcut_service = Rc::new(RefCell::new(ShortcutService::new()));
-            
+
             // 転写ワーカー用のチャンネル
             let (transcription_tx, transcription_rx) = mpsc::unbounded_channel();
-            
+
             // CommandHandlerを作成
             let command_handler = Rc::new(RefCell::new(CommandHandler::new(
                 recording_service,
@@ -281,7 +280,7 @@ pub mod test_helpers {
                 shortcut_service.clone(),
                 transcription_tx.clone(),
             )));
-            
+
             Ok(ServiceContainer {
                 command_handler,
                 shortcut_service,

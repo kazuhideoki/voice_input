@@ -1,0 +1,4 @@
+# voice_input-specific Cargo configuration
+# macOS 15.0 で TMPDIR が root 所有ディレクトリに解決され Permission denied になる問題の回避策。
+[env]
+TMPDIR = { value = "/tmp", force = true }

@@ -7,10 +7,20 @@ use std::{
     path::{Path, PathBuf},
 };
 
+const SOCKET_FILENAME: &str = "voice_input.sock";
+const DEFAULT_SOCKET_PATH: &str = "/tmp/voice_input.sock";
+
 /// デーモンソケットパスを返します。
 pub fn socket_path() -> PathBuf {
-    let dir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(dir).join("voice_input.sock")
+    if let Some(path) = socket_env("VOICE_INPUT_SOCKET_PATH") {
+        return PathBuf::from(path);
+    }
+
+    if let Some(dir) = socket_env("VOICE_INPUT_SOCKET_DIR") {
+        return PathBuf::from(dir).join(SOCKET_FILENAME);
+    }
+
+    PathBuf::from(DEFAULT_SOCKET_PATH)
 }
 
 /// CLI からデーモンへ送るコマンド列挙。
@@ -87,6 +97,13 @@ impl From<AudioDataDto> for AudioData {
     }
 }
 
+fn socket_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 /// コマンドを送信して `IpcResp` を取得する同期ユーティリティ。
 pub fn send_cmd(cmd: &IpcCmd) -> Result<IpcResp, Box<dyn Error>> {
     use futures::{SinkExt, StreamExt};
@@ -119,6 +136,86 @@ pub fn send_cmd(cmd: &IpcCmd) -> Result<IpcResp, Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static SOCKET_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_env_lock<F: FnOnce()>(f: F) {
+        let _guard = SOCKET_ENV_LOCK.lock().unwrap();
+        f();
+    }
+
+    fn store_env(key: &str) -> Option<String> {
+        std::env::var(key).ok()
+    }
+
+    fn set_env(key: &str, value: &str) {
+        unsafe {
+            std::env::set_var(key, value);
+        }
+    }
+
+    fn remove_env(key: &str) {
+        unsafe {
+            std::env::remove_var(key);
+        }
+    }
+
+    fn restore_env(key: &str, value: Option<String>) {
+        if let Some(val) = value {
+            set_env(key, &val);
+        } else {
+            remove_env(key);
+        }
+    }
+
+    #[test]
+    fn test_socket_path_default() {
+        with_env_lock(|| {
+            let orig_path = store_env("VOICE_INPUT_SOCKET_PATH");
+            let orig_dir = store_env("VOICE_INPUT_SOCKET_DIR");
+            remove_env("VOICE_INPUT_SOCKET_PATH");
+            remove_env("VOICE_INPUT_SOCKET_DIR");
+
+            assert_eq!(socket_path(), PathBuf::from(DEFAULT_SOCKET_PATH));
+
+            restore_env("VOICE_INPUT_SOCKET_PATH", orig_path);
+            restore_env("VOICE_INPUT_SOCKET_DIR", orig_dir);
+        });
+    }
+
+    #[test]
+    fn test_socket_path_env_override() {
+        with_env_lock(|| {
+            let orig_path = store_env("VOICE_INPUT_SOCKET_PATH");
+            let orig_dir = store_env("VOICE_INPUT_SOCKET_DIR");
+            set_env("VOICE_INPUT_SOCKET_PATH", "/tmp/custom.sock");
+            remove_env("VOICE_INPUT_SOCKET_DIR");
+
+            assert_eq!(socket_path(), PathBuf::from("/tmp/custom.sock"));
+
+            restore_env("VOICE_INPUT_SOCKET_PATH", orig_path);
+            restore_env("VOICE_INPUT_SOCKET_DIR", orig_dir);
+        });
+    }
+
+    #[test]
+    fn test_socket_dir_env_override() {
+        with_env_lock(|| {
+            let orig_path = store_env("VOICE_INPUT_SOCKET_PATH");
+            let orig_dir = store_env("VOICE_INPUT_SOCKET_DIR");
+            remove_env("VOICE_INPUT_SOCKET_PATH");
+            set_env("VOICE_INPUT_SOCKET_DIR", "/var/tmp");
+
+            assert_eq!(
+                socket_path(),
+                PathBuf::from("/var/tmp").join(SOCKET_FILENAME)
+            );
+
+            restore_env("VOICE_INPUT_SOCKET_PATH", orig_path);
+            restore_env("VOICE_INPUT_SOCKET_DIR", orig_dir);
+        });
+    }
 
     #[test]
     fn test_audio_data_dto_struct() {
