@@ -4,6 +4,7 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use std::{
+    borrow::Cow,
     error::Error,
     fmt,
     sync::{
@@ -231,11 +232,151 @@ impl CpalAudioBackend {
 
 // =============== 内部ユーティリティ ================================
 impl CpalAudioBackend {
+    const MIN_SILENCE_THRESHOLD: i32 = 500;
+    const THRESHOLD_MULTIPLIER: f32 = 3.0;
+    const NOISE_WINDOW_MS: u32 = 200;
+    const MIN_SILENCE_DURATION_MS: u32 = 50;
+    const MIN_RETAINED_FRAMES: usize = 1;
+
     /// メモリバッファのサイズ見積もり
     /// 録音時間に基づいて必要なバッファサイズを計算
     fn estimate_buffer_size(duration_secs: u32, sample_rate: u32, channels: u16) -> usize {
         // samples = sample_rate * channels * duration
         sample_rate as usize * channels as usize * duration_secs as usize
+    }
+
+    fn calculate_dynamic_threshold(samples: &[i16], sample_rate: u32, channels: u16) -> i16 {
+        if samples.is_empty() {
+            return Self::MIN_SILENCE_THRESHOLD as i16;
+        }
+
+        let frame_size = channels.max(1) as usize;
+        let noise_window_frames =
+            ((sample_rate as usize * Self::NOISE_WINDOW_MS as usize) / 1000).max(1);
+        let noise_window_samples = noise_window_frames.saturating_mul(frame_size);
+        let window_len = noise_window_samples.min(samples.len()).max(1);
+
+        let sum_abs: i64 = samples[..window_len]
+            .iter()
+            .map(|&s| (s as i32).abs() as i64)
+            .sum();
+        let avg_abs = sum_abs / window_len as i64;
+
+        let dynamic =
+            ((avg_abs as f32) * Self::THRESHOLD_MULTIPLIER).max(Self::MIN_SILENCE_THRESHOLD as f32);
+        dynamic
+            .min(i16::MAX as f32)
+            .round()
+            .clamp(i16::MIN as f32, i16::MAX as f32) as i16
+    }
+
+    fn count_leading_silence_frames(samples: &[i16], frame_size: usize, threshold: i16) -> usize {
+        let mut frames = 0;
+        let total_frames = samples.len() / frame_size;
+
+        while frames < total_frames {
+            let frame = &samples[frames * frame_size..(frames + 1) * frame_size];
+            let max = frame
+                .iter()
+                .map(|&s| (s as i32).abs())
+                .max()
+                .unwrap_or_default();
+            if max > threshold as i32 {
+                break;
+            }
+            frames += 1;
+        }
+
+        frames
+    }
+
+    fn count_trailing_silence_frames(samples: &[i16], frame_size: usize, threshold: i16) -> usize {
+        let mut frames = 0;
+        let total_frames = samples.len() / frame_size;
+
+        while frames < total_frames {
+            let frame = &samples
+                [(total_frames - frames - 1) * frame_size..(total_frames - frames) * frame_size];
+            let max = frame
+                .iter()
+                .map(|&s| (s as i32).abs())
+                .max()
+                .unwrap_or_default();
+            if max > threshold as i32 {
+                break;
+            }
+            frames += 1;
+        }
+
+        frames
+    }
+
+    fn min_silence_frames(sample_rate: u32) -> usize {
+        ((sample_rate as usize * Self::MIN_SILENCE_DURATION_MS as usize) / 1000).max(1)
+    }
+
+    fn ensure_minimum_samples(samples: &[i16], frame_size: usize) -> Cow<'_, [i16]> {
+        if samples.is_empty() {
+            return Cow::Borrowed(samples);
+        }
+
+        let total_frames = samples.len() / frame_size;
+        let retain_frames = total_frames.clamp(1, Self::MIN_RETAINED_FRAMES);
+        let retain_samples = (retain_frames * frame_size).min(samples.len());
+
+        if retain_samples == samples.len() {
+            Cow::Borrowed(samples)
+        } else {
+            Cow::Owned(samples[..retain_samples].to_vec())
+        }
+    }
+
+    fn trim_silence(samples: &[i16], sample_rate: u32, channels: u16) -> Cow<'_, [i16]> {
+        if samples.is_empty() || channels == 0 {
+            return Cow::Borrowed(samples);
+        }
+
+        let frame_size = channels as usize;
+        let total_frames = samples.len() / frame_size;
+
+        if total_frames == 0 {
+            return Cow::Borrowed(samples);
+        }
+
+        let threshold = Self::calculate_dynamic_threshold(samples, sample_rate, channels);
+        let min_silence_frames = Self::min_silence_frames(sample_rate);
+
+        let leading = Self::count_leading_silence_frames(samples, frame_size, threshold);
+        let trailing = Self::count_trailing_silence_frames(samples, frame_size, threshold);
+
+        let start_frame = if leading >= min_silence_frames {
+            leading.min(total_frames)
+        } else {
+            0
+        };
+
+        let end_frame = if trailing >= min_silence_frames {
+            total_frames.saturating_sub(trailing)
+        } else {
+            total_frames
+        };
+
+        if start_frame == 0 && end_frame == total_frames {
+            return Cow::Borrowed(samples);
+        }
+
+        if end_frame <= start_frame {
+            return Self::ensure_minimum_samples(samples, frame_size);
+        }
+
+        let start_idx = start_frame * frame_size;
+        let end_idx = end_frame * frame_size;
+
+        if start_idx >= end_idx {
+            return Self::ensure_minimum_samples(samples, frame_size);
+        }
+
+        Cow::Owned(samples[start_idx..end_idx].to_vec())
     }
 
     /// 利用可能な入力デバイス名を返すユーティリティ
@@ -352,7 +493,8 @@ impl AudioBackend for CpalAudioBackend {
 
         // メモリモード: バッファからWAVデータを生成
         let samples = state.buffer.lock().unwrap();
-        let wav_data = Self::combine_wav_data(&samples, state.sample_rate, state.channels)?;
+        let trimmed = Self::trim_silence(&samples, state.sample_rate, state.channels);
+        let wav_data = Self::combine_wav_data(&trimmed, state.sample_rate, state.channels)?;
         Ok(AudioData(wav_data))
     }
 
@@ -906,5 +1048,61 @@ mod tests {
                 println!("録音開始失敗（デバイスなし）: {}", e);
             }
         }
+    }
+
+    #[test]
+    fn trim_silence_removes_leading_and_trailing_silence() {
+        let sample_rate = 16_000;
+        let channels = 1;
+        let frame_size = channels as usize;
+
+        let leading = vec![0i16; sample_rate as usize / 10 * frame_size];
+        let signal = vec![2000i16; sample_rate as usize / 20 * frame_size];
+        let trailing = vec![0i16; sample_rate as usize / 10 * frame_size];
+
+        let mut samples = Vec::new();
+        samples.extend_from_slice(&leading);
+        samples.extend_from_slice(&signal);
+        samples.extend_from_slice(&trailing);
+
+        let trimmed = CpalAudioBackend::trim_silence(&samples, sample_rate, channels);
+
+        assert_eq!(trimmed.len(), signal.len());
+        assert!(trimmed.iter().all(|&s| s == 2000));
+    }
+
+    #[test]
+    fn trim_silence_handles_stereo_audio() {
+        let sample_rate = 48_000;
+        let channels = 2;
+        let frame_size = channels as usize;
+
+        let silent_samples = sample_rate as usize * frame_size * 15 / 100;
+        let active_frames = sample_rate as usize / 100;
+        let mut samples = Vec::with_capacity(silent_samples * 2 + active_frames * frame_size);
+        samples.resize(silent_samples, 0);
+        samples.extend((0..active_frames).flat_map(|_| [2500i16, -2500i16]));
+        samples.resize(samples.len() + silent_samples, 0);
+
+        let trimmed = CpalAudioBackend::trim_silence(&samples, sample_rate, channels);
+
+        assert_eq!(trimmed.len(), sample_rate as usize / 100 * frame_size);
+        assert!(
+            trimmed
+                .chunks(frame_size)
+                .all(|frame| frame[0] == 2500 && frame[1] == -2500)
+        );
+    }
+
+    #[test]
+    fn trim_silence_keeps_minimum_when_all_silent() {
+        let sample_rate = 16_000;
+        let channels = 1;
+        let samples = vec![0i16; sample_rate as usize / 10];
+
+        let trimmed = CpalAudioBackend::trim_silence(&samples, sample_rate, channels);
+
+        assert!(!trimmed.is_empty());
+        assert!(trimmed.iter().all(|&s| s == 0));
     }
 }

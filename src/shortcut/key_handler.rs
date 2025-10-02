@@ -134,7 +134,7 @@ mod tests {
         let handler = KeyHandler::new(tx);
 
         // 正常に作成されることを確認
-        assert!(handler.ipc_sender.is_closed() == false);
+        assert!(!handler.ipc_sender.is_closed());
     }
 
     #[test]

@@ -500,7 +500,7 @@ mod tests {
         let app = StackManagerApp::new(rx);
 
         // draw_keyboard_guideメソッドが存在することを確認
-        // ESCキーガイドは常に表示される
-        assert!(app.state.stack_mode_enabled || !app.state.stack_mode_enabled);
+        // 初期状態ではスタックモードが無効であることを確認
+        assert!(!app.state.stack_mode_enabled);
     }
 }

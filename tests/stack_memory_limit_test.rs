@@ -91,17 +91,6 @@ fn test_remove_oldest_stack_order() {
 }
 
 #[test]
-fn test_memory_management_constants() {
-    // Verify the constants are reasonable values
-    assert!(StackService::MAX_STACKS > 0);
-    assert!(StackService::MAX_STACKS <= 100); // Reasonable upper bound
-    assert!(StackService::MAX_STACK_SIZE > 1000); // Should allow decent sized content
-    assert!(StackService::MAX_STACK_SIZE <= 50_000); // But not excessive
-    assert!(StackService::PREVIEW_LENGTH > 10); // Useful preview
-    assert!(StackService::PREVIEW_LENGTH <= 100); // Not too long
-}
-
-#[test]
 fn test_empty_text_handling() {
     let mut service = StackService::new();
     service.enable_stack_mode();

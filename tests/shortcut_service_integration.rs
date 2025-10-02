@@ -121,7 +121,7 @@ async fn test_multiple_ipc_commands() {
     let (tx, mut rx) = mpsc::unbounded_channel::<IpcCmd>();
 
     // 複数のコマンドを送信
-    let commands = vec![
+    let commands = [
         IpcCmd::Toggle {
             paste: true,
             prompt: Some("test".to_string()),

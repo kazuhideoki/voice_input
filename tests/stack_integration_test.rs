@@ -35,10 +35,7 @@ fn test_ipc_stack_types_available() {
 
     // 新しいIPCコマンドが利用可能であることを確認
     let cmd = IpcCmd::EnableStackMode;
-    match cmd {
-        IpcCmd::EnableStackMode => assert!(true),
-        _ => panic!("Expected EnableStackMode"),
-    }
+    assert!(matches!(cmd, IpcCmd::EnableStackMode));
 }
 
 #[test]

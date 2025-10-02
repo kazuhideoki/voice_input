@@ -168,9 +168,10 @@ async fn test_disable_stack_mode_ipc() {
     let stack_service = Arc::new(Mutex::new(StackService::new()));
 
     // First enable it
-    let mut service = stack_service.lock().unwrap();
-    service.enable_stack_mode();
-    drop(service);
+    {
+        let mut service = stack_service.lock().unwrap();
+        service.enable_stack_mode();
+    }
 
     let resp = simulate_ipc_processing(IpcCmd::DisableStackMode, &stack_service)
         .await

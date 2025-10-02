@@ -64,19 +64,29 @@ mod predicates {
 use assert_cmd::prelude::*;
 use predicates::str;
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::thread::sleep;
 use std::time::Duration;
 use tempfile::TempDir;
-use voice_input::ipc::socket_path;
+
+fn socket_path(tmp: &TempDir) -> PathBuf {
+    tmp.path().join("voice_input.sock")
+}
+
+fn configure_ipc_env(cmd: &mut Command, tmp: &TempDir) {
+    cmd.env("TMPDIR", tmp.path());
+    cmd.env_remove("VOICE_INPUT_SOCKET_DIR");
+    cmd.env("VOICE_INPUT_SOCKET_PATH", socket_path(tmp));
+}
 
 fn spawn_daemon(tmp: &TempDir) -> Child {
     let mut cmd = Command::cargo_bin("voice_inputd");
-    cmd.env("TMPDIR", tmp.path());
+    configure_ipc_env(&mut cmd, tmp);
+    let socket = socket_path(tmp);
     let child = cmd.spawn().expect("spawn daemon");
     for _ in 0..10 {
-        if Path::new(&socket_path()).exists() {
+        if socket.exists() {
             break;
         }
         sleep(Duration::from_millis(200));
@@ -84,10 +94,10 @@ fn spawn_daemon(tmp: &TempDir) -> Child {
     child
 }
 
-fn kill_daemon(child: &mut Child) {
+fn kill_daemon(tmp: &TempDir, child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
-    let _ = fs::remove_file(socket_path());
+    let _ = fs::remove_file(socket_path(tmp));
 }
 
 #[test]
@@ -97,10 +107,11 @@ fn list_devices_runs() -> Result<(), Box<dyn std::error::Error>> {
     let mut daemon = spawn_daemon(&tmp);
 
     let mut cmd = Command::cargo_bin("voice_input");
-    cmd.arg("--list-devices").env("TMPDIR", tmp.path());
+    configure_ipc_env(&mut cmd, &tmp);
+    cmd.arg("--list-devices");
     cmd.assert().success().stdout(str::contains(""));
 
-    kill_daemon(&mut daemon);
+    kill_daemon(&tmp, &mut daemon);
     Ok(())
 }
 
@@ -111,14 +122,16 @@ fn toggle_start_stop() -> Result<(), Box<dyn std::error::Error>> {
     let mut daemon = spawn_daemon(&tmp);
 
     let mut start = Command::cargo_bin("voice_input");
-    start.arg("toggle").env("TMPDIR", tmp.path());
+    configure_ipc_env(&mut start, &tmp);
+    start.arg("toggle");
     start.assert().success();
 
     let mut stop = Command::cargo_bin("voice_input");
-    stop.arg("toggle").env("TMPDIR", tmp.path());
+    configure_ipc_env(&mut stop, &tmp);
+    stop.arg("toggle");
     stop.assert().success();
 
-    kill_daemon(&mut daemon);
+    kill_daemon(&tmp, &mut daemon);
     Ok(())
 }
 #[test]
@@ -128,10 +141,11 @@ fn status_returns_idle() -> Result<(), Box<dyn std::error::Error>> {
     let mut daemon = spawn_daemon(&tmp);
 
     let mut cmd = Command::cargo_bin("voice_input");
-    cmd.arg("status").env("TMPDIR", tmp.path());
+    configure_ipc_env(&mut cmd, &tmp);
+    cmd.arg("status");
     cmd.assert().success().stdout(str::contains("state=Idle"));
 
-    kill_daemon(&mut daemon);
+    kill_daemon(&tmp, &mut daemon);
     Ok(())
 }
 
@@ -142,10 +156,11 @@ fn health_check_runs() -> Result<(), Box<dyn std::error::Error>> {
     let mut daemon = spawn_daemon(&tmp);
 
     let mut cmd = Command::cargo_bin("voice_input");
-    cmd.arg("health").env("TMPDIR", tmp.path());
+    configure_ipc_env(&mut cmd, &tmp);
+    cmd.arg("health");
     cmd.assert().success();
 
-    kill_daemon(&mut daemon);
+    kill_daemon(&tmp, &mut daemon);
     Ok(())
 }
 
@@ -215,13 +230,13 @@ fn test_stack_mode_command_parsing() {
     // Test CLI parsing without running the actual command
     // This just tests the argument parsing logic
     let args = ["voice_input", "stack-mode", "on"];
-    match Cli::try_parse_from(&args) {
+    match Cli::try_parse_from(args) {
         Ok(_) => {} // Success - command structure is correct
         Err(e) => panic!("Failed to parse stack-mode on command: {}", e),
     }
 
     let args = ["voice_input", "stack-mode", "off"];
-    match Cli::try_parse_from(&args) {
+    match Cli::try_parse_from(args) {
         Ok(_) => {}
         Err(e) => panic!("Failed to parse stack-mode off command: {}", e),
     }
@@ -233,7 +248,7 @@ fn test_paste_command_parsing() {
     use voice_input::cli::Cli;
 
     let args = ["voice_input", "paste", "5"];
-    match Cli::try_parse_from(&args) {
+    match Cli::try_parse_from(args) {
         Ok(_) => {}
         Err(e) => panic!("Failed to parse paste command: {}", e),
     }
@@ -245,7 +260,7 @@ fn test_list_stacks_command_parsing() {
     use voice_input::cli::Cli;
 
     let args = ["voice_input", "list-stacks"];
-    match Cli::try_parse_from(&args) {
+    match Cli::try_parse_from(args) {
         Ok(_) => {}
         Err(e) => panic!("Failed to parse list-stacks command: {}", e),
     }
@@ -257,7 +272,7 @@ fn test_clear_stacks_command_parsing() {
     use voice_input::cli::Cli;
 
     let args = ["voice_input", "clear-stacks"];
-    match Cli::try_parse_from(&args) {
+    match Cli::try_parse_from(args) {
         Ok(_) => {}
         Err(e) => panic!("Failed to parse clear-stacks command: {}", e),
     }
