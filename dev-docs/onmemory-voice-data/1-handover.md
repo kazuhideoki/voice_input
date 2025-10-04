@@ -27,14 +27,14 @@ pub fn create_wav_header(
 ```rust
 pub trait Sample {
     fn to_i16(&self) -> i16;
-    fn to_bytes(&self) -> Vec<u8>;
+    fn as_pcm_le_bytes(&self) -> [u8; 2];
 }
 ```
 
 - i16: そのまま変換（ネイティブサポート）
 - f32: -1.0〜1.0の範囲をi16の範囲にマッピング
 - 範囲外の値は適切にクリッピング処理
-- リトルエンディアンでのバイト変換
+- リトルエンディアンの固定長配列を返すため追加アロケーションなし
 
 ### 3. PCMデータ結合機能 (`combine_wav_data`)
 
@@ -80,7 +80,7 @@ pub enum AudioError {
 2. **サンプルフォーマット変換テスト（3個）**
    - `test_sample_trait_i16`: i16のサンプル変換
    - `test_sample_trait_f32`: f32のサンプル変換とクリッピング
-   - `test_sample_f32_to_bytes`: f32からバイト配列への変換
+   - `test_sample_f32_to_le_bytes`: f32からバイト配列への変換
 
 3. **PCMデータ結合テスト（4個）**
    - `test_combine_wav_data_i16`: i16データの結合

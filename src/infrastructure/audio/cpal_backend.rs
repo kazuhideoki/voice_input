@@ -42,18 +42,44 @@ impl fmt::Display for AudioError {
 
 impl Error for AudioError {}
 
+/// CpalAudioBackend 向けのエラー型（public APIの意味が伝わるメッセージ）
+#[derive(Debug)]
+pub enum CpalBackendError {
+    AlreadyRecording,
+    NoInputDevice,
+    UnsupportedSampleFormat,
+    NotRecording,
+    RecordingStateNotSet,
+}
+
+impl fmt::Display for CpalBackendError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CpalBackendError::AlreadyRecording => write!(f, "recording is already in progress"),
+            CpalBackendError::NoInputDevice => {
+                write!(f, "no input device available (check INPUT_DEVICE_PRIORITY)")
+            }
+            CpalBackendError::UnsupportedSampleFormat => write!(f, "unsupported sample format"),
+            CpalBackendError::NotRecording => write!(f, "not currently recording"),
+            CpalBackendError::RecordingStateNotSet => write!(f, "recording state not set"),
+        }
+    }
+}
+
+impl Error for CpalBackendError {}
+
 /// サンプルフォーマット変換トレイト
 pub trait Sample {
     fn to_i16(&self) -> i16;
-    fn to_bytes(&self) -> Vec<u8>;
+    fn as_pcm_le_bytes(&self) -> [u8; 2];
 }
 
 impl Sample for i16 {
     fn to_i16(&self) -> i16 {
         *self
     }
-    fn to_bytes(&self) -> Vec<u8> {
-        self.to_le_bytes().to_vec()
+    fn as_pcm_le_bytes(&self) -> [u8; 2] {
+        i16::to_le_bytes(*self)
     }
 }
 
@@ -61,8 +87,8 @@ impl Sample for f32 {
     fn to_i16(&self) -> i16 {
         (self.clamp(-1.0, 1.0) * i16::MAX as f32) as i16
     }
-    fn to_bytes(&self) -> Vec<u8> {
-        self.to_i16().to_le_bytes().to_vec()
+    fn as_pcm_le_bytes(&self) -> [u8; 2] {
+        self.to_i16().to_le_bytes()
     }
 }
 
@@ -221,9 +247,10 @@ impl CpalAudioBackend {
         let mut wav_data = Vec::with_capacity(header.len() + data_len);
         wav_data.extend_from_slice(&header);
 
-        // PCMデータをバイト列に変換して追加
+        // PCMデータをバイト列に変換して追加（追加アロケーションなし）
         for sample in pcm_data {
-            wav_data.extend_from_slice(&sample.to_bytes());
+            let le = sample.as_pcm_le_bytes();
+            wav_data.extend_from_slice(&le);
         }
 
         Ok(wav_data)
@@ -321,7 +348,7 @@ impl CpalAudioBackend {
         }
 
         let total_frames = samples.len() / frame_size;
-        let retain_frames = total_frames.clamp(1, Self::MIN_RETAINED_FRAMES);
+        let retain_frames = Self::MIN_RETAINED_FRAMES.min(total_frames.max(1));
         let retain_samples = (retain_frames * frame_size).min(samples.len());
 
         if retain_samples == samples.len() {
@@ -421,7 +448,7 @@ impl CpalAudioBackend {
                 |e| eprintln!("stream error: {e}"),
                 None,
             )?,
-            _ => return Err("unsupported sample format".into()),
+            _ => return Err(CpalBackendError::UnsupportedSampleFormat.into()),
         };
 
         Ok(stream)
@@ -432,13 +459,12 @@ impl AudioBackend for CpalAudioBackend {
     /// 録音ストリームを開始します。
     fn start_recording(&self) -> Result<(), Box<dyn Error>> {
         if self.is_recording() {
-            return Err("already recording".into());
+            return Err(CpalBackendError::AlreadyRecording.into());
         }
 
         // ホスト・デバイス取得
         let host = cpal::default_host();
-        let device = select_input_device(&host)
-            .ok_or("no input device available (check INPUT_DEVICE_PRIORITY)")?;
+        let device = select_input_device(&host).ok_or(CpalBackendError::NoInputDevice)?;
 
         let supported = device.default_input_config()?;
         let sample_format = supported.sample_format();
@@ -476,7 +502,7 @@ impl AudioBackend for CpalAudioBackend {
     /// 録音を停止し、音声データを返します。
     fn stop_recording(&self) -> Result<AudioData, Box<dyn Error>> {
         if !self.is_recording() {
-            return Err("not recording".into());
+            return Err(CpalBackendError::NotRecording.into());
         }
 
         // ストリームを解放して終了
@@ -489,7 +515,7 @@ impl AudioBackend for CpalAudioBackend {
             .lock()
             .unwrap()
             .take()
-            .ok_or("recording state not set")?;
+            .ok_or(CpalBackendError::RecordingStateNotSet)?;
 
         // メモリモード: バッファからWAVデータを生成
         let samples = state.buffer.lock().unwrap();
@@ -660,15 +686,15 @@ mod tests {
         // i16 のサンプル変換テスト
         let sample: i16 = 1000;
         assert_eq!(sample.to_i16(), 1000);
-        assert_eq!(sample.to_bytes(), vec![0xE8, 0x03]); // 1000 in little endian
+        assert_eq!(sample.to_le_bytes(), [0xE8, 0x03]); // 1000 in little endian
 
         let sample: i16 = -1000;
         assert_eq!(sample.to_i16(), -1000);
-        assert_eq!(sample.to_bytes(), vec![0x18, 0xFC]); // -1000 in little endian
+        assert_eq!(sample.to_le_bytes(), [0x18, 0xFC]); // -1000 in little endian
 
         let sample: i16 = 0;
         assert_eq!(sample.to_i16(), 0);
-        assert_eq!(sample.to_bytes(), vec![0x00, 0x00]);
+        assert_eq!(sample.to_le_bytes(), [0x00, 0x00]);
     }
 
     #[test]
@@ -701,13 +727,13 @@ mod tests {
     }
 
     #[test]
-    fn test_sample_f32_to_bytes() {
+    fn test_sample_f32_to_le_bytes() {
         // f32 -> bytes 変換テスト
         let sample: f32 = 0.0;
-        assert_eq!(sample.to_bytes(), vec![0x00, 0x00]);
+        assert_eq!(Sample::as_pcm_le_bytes(&sample), [0x00, 0x00]);
 
         let sample: f32 = 1.0;
-        let bytes = sample.to_bytes();
+        let bytes = Sample::as_pcm_le_bytes(&sample);
         let reconstructed = i16::from_le_bytes([bytes[0], bytes[1]]);
         assert_eq!(reconstructed, i16::MAX);
     }
