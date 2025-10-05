@@ -177,7 +177,7 @@ mod tests {
         let dict_repo = Box::new(MockDictRepo::new());
         let service = TranscriptionService::new(client, dict_repo, 1);
 
-        let audio = AudioData(vec![0u8; 100]);
+        let audio = AudioData { bytes: vec![0u8; 100], mime_type: "audio/wav", file_name: "audio.wav".to_string() };
         let options = TranscriptionOptions::default();
 
         let result = service.transcribe(audio, options).await.unwrap();
@@ -195,7 +195,7 @@ mod tests {
         let service2 = service.clone();
 
         let handle1 = tokio::spawn(async move {
-            let audio = AudioData(vec![0u8; 100]);
+            let audio = AudioData { bytes: vec![0u8; 100], mime_type: "audio/wav", file_name: "audio.wav".to_string() };
             let options = TranscriptionOptions::default();
             service1.transcribe(audio, options).await
         });
@@ -203,7 +203,7 @@ mod tests {
         let handle2 = tokio::spawn(async move {
             // わずかに遅延させて順序を保証
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-            let audio = AudioData(vec![0u8; 100]);
+            let audio = AudioData { bytes: vec![0u8; 100], mime_type: "audio/wav", file_name: "audio.wav".to_string() };
             let options = TranscriptionOptions::default();
             service2.transcribe(audio, options).await
         });

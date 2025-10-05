@@ -276,7 +276,7 @@ mod tests {
 
         fn stop_recording(&self) -> std::result::Result<AudioData, Box<dyn std::error::Error>> {
             self.is_recording.store(false, Ordering::SeqCst);
-            Ok(AudioData(vec![0u8; 100]))
+            Ok(AudioData { bytes: vec![0u8; 100], mime_type: "audio/wav", file_name: "audio.wav".to_string() })
         }
 
         fn is_recording(&self) -> bool {

@@ -87,13 +87,19 @@ use crate::infrastructure::audio::cpal_backend::AudioData;
 
 impl From<AudioData> for AudioDataDto {
     fn from(data: AudioData) -> Self {
-        AudioDataDto(data.0)
+        AudioDataDto(data.bytes)
     }
 }
 
 impl From<AudioDataDto> for AudioData {
     fn from(dto: AudioDataDto) -> Self {
-        AudioData(dto.0)
+        // 簡易判定: FLAC マジックヘッダ "fLaC"
+        let mime = if dto.0.starts_with(&[0x66, 0x4C, 0x61, 0x43]) {
+            ("audio/flac", "audio.flac")
+        } else {
+            ("audio/wav", "audio.wav")
+        };
+        AudioData { bytes: dto.0, mime_type: mime.0, file_name: mime.1.to_string() }
     }
 }
 
@@ -288,7 +294,7 @@ mod tests {
 
     #[test]
     fn test_from_audio_data_to_dto() {
-        let audio_data = AudioData(vec![1, 2, 3, 4]);
+        let audio_data = AudioData { bytes: vec![1, 2, 3, 4], mime_type: "audio/wav", file_name: "audio.wav".to_string() };
         let dto: AudioDataDto = audio_data.into();
         assert_eq!(dto.0, vec![1, 2, 3, 4]);
     }
@@ -297,7 +303,7 @@ mod tests {
     fn test_from_dto_to_audio_data() {
         let dto = AudioDataDto(vec![5, 6, 7, 8]);
         let audio_data: AudioData = dto.into();
-        assert_eq!(audio_data.0, vec![5, 6, 7, 8]);
+        assert_eq!(audio_data.bytes, vec![5, 6, 7, 8]);
     }
 
     #[test]

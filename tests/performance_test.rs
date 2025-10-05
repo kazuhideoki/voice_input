@@ -132,9 +132,9 @@ async fn test_memory_usage() {
 
     match recorder.stop() {
         Ok(audio_data) => {
-            let data = audio_data.0;
+            let data = audio_data.bytes;
             let size_mb = data.len() as f64 / (1024.0 * 1024.0);
-            println!("✅ Memory mode - WAV data size: {:.2} MB", size_mb);
+            println!("✅ Memory mode - audio data size: {:.2} MB", size_mb);
 
             // 理論値との比較
             // 48kHz * 2ch * 2bytes * 30sec = 5.76MB

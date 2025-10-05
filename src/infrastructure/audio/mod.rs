@@ -1,6 +1,7 @@
 use std::error::Error;
 
 pub mod cpal_backend;
+pub mod encoder;
 pub use cpal_backend::{AudioData, CpalAudioBackend};
 
 /// 録音デバイス抽象。

@@ -37,7 +37,7 @@ impl AudioBackend for BenchmarkAudioBackend {
         let size = self.simulated_size.load(Ordering::SeqCst);
 
         // メモリモードのみサポート
-        Ok(AudioData(vec![0u8; size]))
+        Ok(AudioData { bytes: vec![0u8; size], mime_type: "audio/wav", file_name: "audio.wav".to_string() })
     }
 
     fn is_recording(&self) -> bool {
@@ -79,7 +79,7 @@ fn benchmark_recording_modes(c: &mut Criterion) {
                     let result = recorder.stop().expect("Failed to stop recording");
 
                     // 結果の検証（black_boxで最適化を防ぐ）
-                    assert_eq!(result.0.len(), audio_size);
+                    assert_eq!(result.bytes.len(), audio_size);
                     black_box(result);
                 });
             },

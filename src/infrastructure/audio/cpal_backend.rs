@@ -1,4 +1,6 @@
 use super::AudioBackend;
+use crate::utils::config::EnvConfig;
+use super::encoder::{self, AudioFormat};
 use cpal::{
     Device, SampleFormat, Stream, StreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -15,7 +17,11 @@ use std::{
 
 /// 録音データの返却形式（メモリモード専用）
 #[derive(Debug, Clone)]
-pub struct AudioData(pub Vec<u8>);
+pub struct AudioData {
+    pub bytes: Vec<u8>,
+    pub mime_type: &'static str,
+    pub file_name: String,
+}
 
 /// 録音状態（メモリモード専用）
 struct MemoryRecordingState {
@@ -145,6 +151,19 @@ fn select_input_device(host: &cpal::Host) -> Option<Device> {
 
 // =============== WAVヘッダー生成機能 ================================
 impl CpalAudioBackend {
+    fn preferred_format() -> AudioFormat {
+        let cfg = EnvConfig::get();
+        match std::env::var("VOICE_INPUT_AUDIO_FORMAT").ok()
+            .or_else(|| cfg.openai_api_key.as_ref().map(|_| "flac".to_string()))
+            .unwrap_or_else(|| "flac".to_string())
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "wav" => AudioFormat::Wav,
+            _ => AudioFormat::Flac,
+        }
+    }
+
     /// WAVファイルヘッダーを生成する
     ///
     /// # Arguments
@@ -517,11 +536,29 @@ impl AudioBackend for CpalAudioBackend {
             .take()
             .ok_or(CpalBackendError::RecordingStateNotSet)?;
 
-        // メモリモード: バッファからWAVデータを生成
+        // メモリモード: バッファからエンコード（既定: FLAC）
         let samples = state.buffer.lock().unwrap();
         let trimmed = Self::trim_silence(&samples, state.sample_rate, state.channels);
-        let wav_data = Self::combine_wav_data(&trimmed, state.sample_rate, state.channels)?;
-        Ok(AudioData(wav_data))
+        match Self::preferred_format() {
+            AudioFormat::Flac => {
+                match encoder::flac::encode_flac_i16(&trimmed, state.sample_rate, state.channels) {
+                    Ok(flac) => Ok(AudioData {
+                        bytes: flac,
+                        mime_type: "audio/flac",
+                        file_name: "audio.flac".to_string(),
+                    }),
+                    Err(e) => {
+                        eprintln!("FLAC encode failed (fallback to WAV): {}", e);
+                        let wav = Self::combine_wav_data(&trimmed, state.sample_rate, state.channels)?;
+                        Ok(AudioData { bytes: wav, mime_type: "audio/wav", file_name: "audio.wav".to_string() })
+                    }
+                }
+            }
+            AudioFormat::Wav => {
+                let wav = Self::combine_wav_data(&trimmed, state.sample_rate, state.channels)?;
+                Ok(AudioData { bytes: wav, mime_type: "audio/wav", file_name: "audio.wav".to_string() })
+            }
+        }
     }
 
     /// 録音中かどうかを確認します。
@@ -837,17 +874,17 @@ mod tests {
     fn test_audio_data_struct() {
         // Data creation
         let data = vec![1, 2, 3, 4, 5];
-        let audio_data = AudioData(data.clone());
+        let audio_data = AudioData { bytes: data.clone(), mime_type: "audio/wav", file_name: "audio.wav".to_string() };
 
         // Data access
-        assert_eq!(audio_data.0, data);
+        assert_eq!(audio_data.bytes, data);
 
         // Debug trait
         assert!(format!("{:?}", audio_data).contains("AudioData"));
 
         // Clone trait
         let cloned = audio_data.clone();
-        assert_eq!(cloned.0, data);
+        assert_eq!(cloned.bytes, data);
     }
 
     #[test]
@@ -935,14 +972,11 @@ mod tests {
         // stop_recordingを実行
         let result = backend.stop_recording().unwrap();
 
-        // AudioDataのメモリ内容を取得
-        let wav_data = result.0;
-        // WAVヘッダー（44バイト）+ データ（5サンプル * 2バイト = 10バイト）
-        assert_eq!(wav_data.len(), 54);
-
-        // WAVヘッダーの基本チェック
-        assert_eq!(&wav_data[0..4], b"RIFF");
-        assert_eq!(&wav_data[8..12], b"WAVE");
+        // 既定はFLACで返る
+        assert_eq!(result.mime_type, "audio/flac");
+        assert_eq!(result.file_name, "audio.flac");
+        assert!(result.bytes.len() > 4);
+        assert_eq!(&result.bytes[0..4], b"fLaC");
 
         // 録音状態がクリアされていることを確認
         assert!(!backend.is_recording());
@@ -968,13 +1002,10 @@ mod tests {
         // stop_recordingを実行
         let result = backend.stop_recording().unwrap();
 
-        // 空のデータでもWAVヘッダーは生成される
-        let wav_data = result.0;
-        assert_eq!(wav_data.len(), 44); // ヘッダーのみ
-
-        // WAVヘッダーの基本チェック
-        assert_eq!(&wav_data[0..4], b"RIFF");
-        assert_eq!(&wav_data[8..12], b"WAVE");
+        // 空のデータでもFLACヘッダーは生成される
+        assert_eq!(result.mime_type, "audio/flac");
+        assert!(result.bytes.len() > 4);
+        assert_eq!(&result.bytes[0..4], b"fLaC");
 
         // 録音状態がクリアされていることを確認
         assert!(!backend.is_recording());
@@ -1066,9 +1097,10 @@ mod tests {
 
                 // 録音停止
                 let result = backend.stop_recording().unwrap();
-                let data = result.0;
+                let data = result.bytes;
                 println!("録音データサイズ: {} bytes", data.len());
-                assert!(data.len() > 44); // 少なくともWAVヘッダーより大きい
+                assert!(data.len() > 4);
+                assert_eq!(&data[0..4], b"fLaC");
             }
             Err(e) => {
                 println!("録音開始失敗（デバイスなし）: {}", e);

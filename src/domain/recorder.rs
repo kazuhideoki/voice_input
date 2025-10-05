@@ -51,14 +51,14 @@ impl<T: AudioBackend> Recorder<T> {
 
         // メモリ使用量の更新
         if let Some(ref monitor) = self.memory_monitor {
-            monitor.update_usage(result.0.len());
+            monitor.update_usage(result.bytes.len());
         }
 
         // メトリクスの完了
         if let (Some(collector), Some(monitor)) =
             (self.metrics_collector.take(), &self.memory_monitor)
         {
-            let audio_bytes = result.0.len();
+            let audio_bytes = result.bytes.len();
 
             let metrics = collector.finish(audio_bytes, monitor.get_metrics());
             metrics.log_summary();
@@ -102,7 +102,7 @@ mod tests {
 
         fn stop_recording(&self) -> Result<AudioData, Box<dyn Error>> {
             self.recording.store(false, Ordering::SeqCst);
-            Ok(AudioData(self.test_data.clone()))
+            Ok(AudioData { bytes: self.test_data.clone(), mime_type: "audio/wav", file_name: "audio.wav".to_string() })
         }
 
         fn is_recording(&self) -> bool {
@@ -119,6 +119,6 @@ mod tests {
 
         // stopは直接AudioDataを返す
         let result = recorder.stop().unwrap();
-        assert_eq!(result.0, vec![1, 2, 3, 4, 5]);
+        assert_eq!(result.bytes, vec![1, 2, 3, 4, 5]);
     }
 }

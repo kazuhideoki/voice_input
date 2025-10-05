@@ -1,0 +1,44 @@
+[2025-10-04T23:41:56.494741+00:00] startup: base_url=https://chatgpt.com/backend-api path_style=wham
+[2025-10-04T23:41:56.496879+00:00] auth: mode=ChatGPT account_id=7e25978e-776a-4de3-b5e3-ff26c3a4a96a
+[2025-10-04T23:41:56.496924+00:00] auth: set ChatGPT-Account-Id header: 7e25978e-776a-4de3-b5e3-ff26c3a4a96a
+[2025-10-04T23:41:56.498638+00:00] startup: wham_force_internal=false ua=codex_cli_rs/0.44.0 (Mac OS 15.7.1; arm64) zed/0.206.6 (codex_cloud_tasks_tui)
+[2025-10-04T23:41:56.513896+00:00] env: git origins: ["git@github.com:kazuhideoki/voice-input.git"][
+2025-10-04T23:41:56.513910+00:00] env: parsed SSH GitHub origin => kazuhideoki/voice-input
+[2025-10-04T23:41:56.513943+00:00] env: parsed SSH GitHub origin => kazuhideoki/voice-input
+[2025-10-04T23:41:56.514012+00:00] env: GET https://chatgpt.com/backend-api/wham/environments/by-repo/github/kazuhideoki/voice-input
+[2025-10-04T23:41:57.373412+00:00] http.list_tasks: env=<all> items=1
+[2025-10-04T23:41:57.373676+00:00] refresh.apply: env=<all> count=1
+[2025-10-04T23:41:58.797750+00:00] env: status=200 OK content-type=application/json
+[2025-10-04T23:41:58.990998+00:00] env: status=200 OK content-type=application/json
+[2025-10-04T23:41:58.991494+00:00] env: by-repo returned 1 env(s) for kazuhideoki/voice-input
+[2025-10-04T23:41:58.992080+00:00] env: single environment available; selecting it
+[2025-10-04T23:41:58.992332+00:00] env.select: autodetected id=6828fc3b64e881919f4014fa60408f05 label=kazuhideoki/voice_input
+[2025-10-04T23:41:59.016416+00:00] env: parsed SSH GitHub origin => kazuhideoki/voice-input
+[2025-10-04T23:41:59.651269+00:00] env: status=200 OK content-type=application/json
+[2025-10-04T23:41:59.777620+00:00] http.list_tasks: env=6828fc3b64e881919f4014fa60408f05 items=1
+[2025-10-04T23:41:59.777791+00:00] refresh.apply: env=6828fc3b64e881919f4014fa60408f05 count=1
+[2025-10-04T23:42:02.480075+00:00] env: status=200 OK content-type=application/json
+[2025-10-04T23:42:03.478143+00:00] env: status=200 OK content-type=application/json
+[2025-10-04T23:42:06.588509+00:00] refresh.request: env=6828fc3b64e881919f4014fa60408f05
+[2025-10-04T23:42:07.380571+00:00] http.list_tasks: env=6828fc3b64e881919f4014fa60408f05 items=1
+[2025-10-04T23:42:07.380914+00:00] refresh.apply: env=6828fc3b64e881919f4014fa60408f05 count=1
+[2025-10-04T23:42:57.199519+00:00] env.select: id=6828fc3b64e881919f4014fa60408f05 label=kazuhideoki/voice_input
+[2025-10-04T23:42:58.058071+00:00] http.list_tasks: env=6828fc3b64e881919f4014fa60408f05 items=1
+[2025-10-04T23:42:58.058823+00:00] refresh.apply: env=6828fc3b64e881919f4014fa60408f05 count=1
+[2025-10-04T23:43:11.565604+00:00] best-of.select: attempts=4
+[2025-10-04T23:44:15.007812+00:00] new-task: submit env=6828fc3b64e881919f4014fa60408f05 size=101
+[2025-10-04T23:44:18.871409+00:00] new_task: created id=task_e_68e1b15024a4832ab83da2f780267017 env=6828fc3b64e881919f4014fa60408f05 prompt_chars=101
+[2025-10-04T23:44:18.872019+00:00] new-task: created id=task_e_68e1b15024a4832ab83da2f780267017
+[2025-10-04T23:44:19.637875+00:00] http.list_tasks: env=6828fc3b64e881919f4014fa60408f05 items=2
+[2025-10-04T23:44:19.638501+00:00] refresh.apply: env=6828fc3b64e881919f4014fa60408f05 count=2
+[2025-10-04T23:44:22.227378+00:00] refresh.request: env=6828fc3b64e881919f4014fa60408f05
+[2025-10-04T23:44:23.039197+00:00] http.list_tasks: env=6828fc3b64e881919f4014fa60408f05 items=2
+[2025-10-04T23:44:23.039913+00:00] refresh.apply: env=6828fc3b64e881919f4014fa60408f05 count=2
+[2025-10-04T23:46:41.940519+00:00] refresh.request: env=6828fc3b64e881919f4014fa60408f05
+[2025-10-04T23:46:43.073124+00:00] http.list_tasks: env=6828fc3b64e881919f4014fa60408f05 items=2
+[2025-10-04T23:46:43.073841+00:00] refresh.apply: env=6828fc3b64e881919f4014fa60408f05 count=2
+[2025-10-04T23:49:25.407976+00:00] refresh.request: env=6828fc3b64e881919f4014fa60408f05
+[2025-10-04T23:49:26.292575+00:00] http.list_tasks: env=6828fc3b64e881919f4014fa60408f05 items=2
+[2025-10-04T23:49:26.293036+00:00] refresh.apply: env=6828fc3b64e881919f4014fa60408f05 count=2
+[2025-10-04T23:53:45.690052+00:00] http.list_tasks: env=6828fc3b64e881919f4014fa60408f05 items=2
+[2025-10-04T23:53:45.691009+00:00] refresh.apply: env=6828fc3b64e881919f4014fa60408f05 count=2
