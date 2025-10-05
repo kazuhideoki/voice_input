@@ -21,8 +21,8 @@
 - `enigo_helper`: Enigo 入力ヘルパー
 
 ## 主なディレクトリ
-- `src/application`: サービス層（録音/転写/スタック/ワーカー等）
-- `src/domain`: ドメイン層（録音・辞書・スタック等のモデル）
+- `src/application`: サービス層（録音/転写/ワーカー等）
+- `src/domain`: ドメイン層（録音・辞書などのモデル）
 - `src/infrastructure`: 外部I/O（音声、OpenAI、UI、辞書Repo、設定、IPC 等）
 - `src/monitoring`: メモリ監視・メトリクス
 - `src/shortcut`: ショートカット処理

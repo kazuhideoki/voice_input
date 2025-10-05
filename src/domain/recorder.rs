@@ -102,7 +102,11 @@ mod tests {
 
         fn stop_recording(&self) -> Result<AudioData, Box<dyn Error>> {
             self.recording.store(false, Ordering::SeqCst);
-            Ok(AudioData { bytes: self.test_data.clone(), mime_type: "audio/wav", file_name: "audio.wav".to_string() })
+            Ok(AudioData {
+                bytes: self.test_data.clone(),
+                mime_type: "audio/wav",
+                file_name: "audio.wav".to_string(),
+            })
         }
 
         fn is_recording(&self) -> bool {

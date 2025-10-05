@@ -14,4 +14,3 @@ pub enum AudioEncodeError {
     #[error("FLAC encode failed: {0}")]
     Flac(String),
 }
-

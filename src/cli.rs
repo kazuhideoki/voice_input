@@ -64,31 +64,6 @@ pub enum Cmd {
         #[command(subcommand)]
         action: ConfigCmd,
     },
-    /// スタックモード制御
-    #[command(name = "stack-mode")]
-    StackMode {
-        #[command(subcommand)]
-        action: StackModeCmd,
-    },
-    /// スタックをペースト
-    Paste {
-        /// ペーストするスタック番号 (1-based)
-        number: u32,
-    },
-    /// スタック一覧表示
-    #[command(name = "list-stacks")]
-    ListStacks,
-    /// 全スタックをクリア
-    #[command(name = "clear-stacks")]
-    ClearStacks,
-}
-
-#[derive(Subcommand)]
-pub enum StackModeCmd {
-    /// スタックモードを有効化
-    On,
-    /// スタックモードを無効化
-    Off,
 }
 
 #[derive(Subcommand)]

@@ -37,7 +37,11 @@ impl AudioBackend for BenchmarkAudioBackend {
         let size = self.simulated_size.load(Ordering::SeqCst);
 
         // メモリモードのみサポート
-        Ok(AudioData { bytes: vec![0u8; size], mime_type: "audio/wav", file_name: "audio.wav".to_string() })
+        Ok(AudioData {
+            bytes: vec![0u8; size],
+            mime_type: "audio/wav",
+            file_name: "audio.wav".to_string(),
+        })
     }
 
     fn is_recording(&self) -> bool {

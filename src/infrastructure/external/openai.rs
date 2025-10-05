@@ -198,7 +198,11 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, // data size
         ];
 
-        let audio_data = AudioData { bytes: wav_data, mime_type: "audio/wav", file_name: "audio.wav".to_string() };
+        let audio_data = AudioData {
+            bytes: wav_data,
+            mime_type: "audio/wav",
+            file_name: "audio.wav".to_string(),
+        };
 
         // This will fail with the actual API, but we're testing the method exists
         let result = client.transcribe_audio(audio_data).await;
@@ -221,7 +225,11 @@ mod tests {
         let client = OpenAiClient::new().unwrap();
         // メモリモードでのテスト
         let test_data = vec![1, 2, 3, 4];
-        let audio_data = AudioData { bytes: test_data, mime_type: "audio/wav", file_name: "audio.wav".to_string() };
+        let audio_data = AudioData {
+            bytes: test_data,
+            mime_type: "audio/wav",
+            file_name: "audio.wav".to_string(),
+        };
 
         // This will fail because the file doesn't exist, but we're testing the method exists
         let result = client.transcribe_audio(audio_data).await;

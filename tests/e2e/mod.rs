@@ -1,5 +1,4 @@
 pub mod memory_mode_test;
-pub mod stack_workflow_test;
 
 use std::process::{Child, Command};
 use std::time::Duration;

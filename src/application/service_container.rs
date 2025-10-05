@@ -19,9 +19,7 @@ use crate::infrastructure::{
     audio::{AudioBackend, CpalAudioBackend},
     dict::JsonFileDictRepo,
     external::openai_adapter::OpenAiTranscriptionAdapter,
-    ui::UiProcessManager,
 };
-use crate::shortcut::ShortcutService;
 
 /// アプリケーション設定
 #[derive(Clone, Debug)]
@@ -50,8 +48,6 @@ impl Default for AppConfig {
 pub struct ServiceContainer<T: AudioBackend + 'static> {
     /// コマンドハンドラー
     pub command_handler: Rc<RefCell<CommandHandler<T>>>,
-    /// ショートカットサービス（独立ワーカー用）
-    pub shortcut_service: Rc<RefCell<ShortcutService>>,
     /// 転写メッセージ送信チャンネル
     pub transcription_tx: mpsc::UnboundedSender<TranscriptionMessage>,
     /// 転写メッセージ受信チャンネル
@@ -110,10 +106,7 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
             config.max_concurrent_transcriptions,
         )));
 
-        let stack = Rc::new(RefCell::new(crate::application::StackService::new()));
         let media_control = Rc::new(RefCell::new(MediaControlService::new()));
-        let ui_manager = Rc::new(RefCell::new(UiProcessManager::new()));
-        let shortcut_service = Rc::new(RefCell::new(ShortcutService::new()));
 
         // 転写用チャンネル
         let (tx, rx) = mpsc::unbounded_channel();
@@ -122,16 +115,12 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
         let command_handler = Rc::new(RefCell::new(CommandHandler::new(
             recording,
             transcription,
-            stack,
             media_control,
-            ui_manager,
-            shortcut_service.clone(),
             tx.clone(),
         )));
 
         Ok(ServiceContainer {
             command_handler,
-            shortcut_service,
             transcription_tx: tx,
             transcription_rx: Some(rx),
         })
@@ -150,11 +139,10 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
 pub mod test_helpers {
     use super::*;
     use crate::application::{
-        CommandHandler, MediaControlService, RecordingConfig, RecordingService, StackService,
+        CommandHandler, MediaControlService, RecordingConfig, RecordingService,
         TranscriptionService,
     };
-    use crate::infrastructure::{audio::cpal_backend::AudioData, ui::UiProcessManager};
-    use crate::shortcut::ShortcutService;
+    use crate::infrastructure::audio::cpal_backend::AudioData;
     use async_trait::async_trait;
     use tokio::sync::mpsc;
 
@@ -181,7 +169,11 @@ pub mod test_helpers {
         fn stop_recording(&self) -> std::result::Result<AudioData, Box<dyn std::error::Error>> {
             self.is_recording
                 .store(false, std::sync::atomic::Ordering::SeqCst);
-            Ok(AudioData { bytes: vec![0u8; 100], mime_type: "audio/wav", file_name: "audio.wav".to_string() })
+            Ok(AudioData {
+                bytes: vec![0u8; 100],
+                mime_type: "audio/wav",
+                file_name: "audio.wav".to_string(),
+            })
         }
 
         fn is_recording(&self) -> bool {
@@ -262,10 +254,7 @@ pub mod test_helpers {
             let transcription_service = Rc::new(RefCell::new(
                 TranscriptionService::with_default_repo(client),
             ));
-            let stack_service = Rc::new(RefCell::new(StackService::new()));
             let media_control_service = Rc::new(RefCell::new(MediaControlService::new()));
-            let ui_manager = Rc::new(RefCell::new(UiProcessManager::new()));
-            let shortcut_service = Rc::new(RefCell::new(ShortcutService::new()));
 
             // 転写ワーカー用のチャンネル
             let (transcription_tx, transcription_rx) = mpsc::unbounded_channel();
@@ -274,16 +263,12 @@ pub mod test_helpers {
             let command_handler = Rc::new(RefCell::new(CommandHandler::new(
                 recording_service,
                 transcription_service,
-                stack_service,
                 media_control_service,
-                ui_manager,
-                shortcut_service.clone(),
                 transcription_tx.clone(),
             )));
 
             Ok(ServiceContainer {
                 command_handler,
-                shortcut_service,
                 transcription_tx,
                 transcription_rx: Some(transcription_rx),
             })

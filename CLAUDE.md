@@ -15,9 +15,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Layered Architecture
 
 ```
-Application Layer   - Business logic and use cases (StackService)
-Domain Layer       - Business rules and entities (Stack, StackInfo)
-Infrastructure Layer - External dependencies (Audio, OpenAI, UI)
+Application Layer     - Business logic and use cases
+Domain Layer          - Business rules and entities
+Infrastructure Layer  - External dependencies (Audio, OpenAI)
 ```
 
 - **Data Management**: In-memory only (no persistence by design)
