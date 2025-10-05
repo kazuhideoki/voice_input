@@ -23,6 +23,7 @@ cargo build --release
 ### 2. 基本的な使い方
 
 #### 音声入力の開始
+
 ```bash
 # 録音開始 → 停止 → 文字起こし → 入力
 voice_input toggle
@@ -32,38 +33,39 @@ voice_input start  # 録音開始
 voice_input stop   # 録音停止して文字起こし
 ```
 
-> 注意: 旧「スタッキングモード」（スタック保存/UI/ショートカット連携）はこのバージョンで削除されました。
-
 ## 📚 詳細な使用方法
 
 ### 音声入力モード
 
 #### 1. 直接入力モード（デフォルト・推奨）
+
 ```bash
 voice_input toggle
 # または
 voice_input toggle --direct-input
 ```
+
 - ✅ クリップボードを汚染しない
 - ✅ 高速（平均22ms）
 - ✅ 日本語・絵文字完全対応
 
 #### 2. クリップボード経由モード
+
 ```bash
 voice_input toggle --copy-and-paste
 ```
+
 - 互換性重視の場合に使用
 - 一部のアプリケーションで必要
 
 #### 3. コピーのみモード
+
 ```bash
 voice_input toggle --copy-only
 ```
+
 - クリップボードにコピーのみ
 - 手動でペーストする場合
-
-### スタック機能（削除済み）
-スタック保存・貼り付け・UI表示・ショートカット連携は削除されています。現在は `voice_input toggle/start/stop` と辞書機能に集約されています。
 
 ### 辞書機能（自動置換）
 
@@ -85,6 +87,7 @@ voice_input config set dict-path ~/Dropbox/voice_input_dict.json
 ### 詳細設定
 
 #### 環境変数
+
 ```bash
 # .env または export で設定
 
@@ -101,6 +104,7 @@ VOICE_INPUT_USE_SUBPROCESS=false  # true で旧実装使用
 ```
 
 #### デバイス優先順位
+
 ```bash
 # 利用可能なデバイス一覧
 voice_input --list-devices
@@ -120,15 +124,12 @@ INPUT_DEVICE_PRIORITY="AirPods Pro,MacBook Pro Microphone"
 
 ```bash
 # 1. エディタでコードを開く
-# 2. スタックモードを有効化
-voice_input stack on
+# 2. 録音開始/停止（必要に応じて）
+voice_input toggle
 
-# 3. よく使うコードスニペットを音声で登録
-# Cmd+R → "console.log debug statement" → Cmd+R
-# Cmd+R → "try catch block" → Cmd+R
-# Cmd+R → "async await function" → Cmd+R
-
-# 4. 必要な時にCmd+1, Cmd+2, Cmd+3でペースト
+# 3. よく使うコードスニペットは辞書機能で登録・変換
+# 例:
+voice_input dict add "dbg" "console.log('debug', value)"
 ```
 
 ### ドキュメント作成での活用
@@ -148,15 +149,9 @@ voice_input toggle
 ### チャット・メッセージングでの活用
 
 ```bash
-# Slack/Discord での素早い返信
-voice_input stack on
-
-# よく使う返信を事前登録
-# スタック1: "確認しました、ありがとうございます"
-# スタック2: "少々お待ちください"
-# スタック3: "了解です！"
-
-# Cmd+数字で瞬時に返信
+# 素早い返信（コピーのみ → 手動Enter）
+voice_input toggle --copy-only
+# クリップボードの内容を貼り付けて送信
 ```
 
 ## 🛠️ 高度な使い方
@@ -220,6 +215,7 @@ curl -X POST http://localhost:8080/transcribe \
 
 **Q: 音声が認識されません**
 A: 以下を確認してください：
+
 1. マイクの接続と権限設定
 2. `voice_input --list-devices`でデバイスが表示されるか
 3. 環境が静かか（ノイズキャンセリング推奨）
@@ -228,37 +224,18 @@ A: 以下を確認してください：
 **Q: 日本語が文字化けします**
 A: ターミナルとアプリケーションのエンコーディングをUTF-8に設定してください。
 
-**Q: ショートカットキーが効きません**
-A: アクセシビリティ権限を確認してください：
-```bash
-# 権限状態確認
-voice_input health
-
-# システム設定を開く
-open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-```
-
-### スタック機能
-
-**Q: スタックの保存数に制限はありますか？**
-A: 現在は1-9の9個まで。古いものから上書きされます。
-
-**Q: スタックの内容は再起動後も保持されますか？**
-A: いいえ、メモリ上のみで管理されるため、デーモン再起動で消去されます。
-
-**Q: スタックモード中に通常のCmd+数字を使いたい**
-A: ESCキーまたは`voice_input stack off`でスタックモードを一時的に無効化してください。
-
 ### パフォーマンス
 
 **Q: 入力が遅い/ラグがあります**
 A: 以下を試してください：
+
 1. 他の重いアプリケーションを終了
 2. `VOICE_INPUT_USE_SUBPROCESS=false`を確認（新方式を使用）
 3. より短いテキストに分割して入力
 
 **Q: 長時間使用でメモリ使用量が増えます**
 A: 定期的にデーモンを再起動してください：
+
 ```bash
 pkill -f voice_inputd
 nohup voice_inputd > /tmp/voice_inputd.out 2>&1 &
@@ -267,7 +244,8 @@ nohup voice_inputd > /tmp/voice_inputd.out 2>&1 &
 ### トラブルシューティング
 
 **Q: "Socket already in use"エラー**
-A: 
+A:
+
 ```bash
 rm /tmp/voice_input.sock
 pkill -f voice_inputd
@@ -278,6 +256,7 @@ A: APP_COMPATIBILITY.mdを確認し、そのアプリ用の回避策を試して
 
 **Q: Cmd+Vとの違いは？**
 A: voice_inputは直接テキストを挿入するため：
+
 - クリップボードを汚染しない
 - より高速（平均85%高速）
 - 日本語入力で安定
@@ -286,12 +265,14 @@ A: voice_inputは直接テキストを挿入するため：
 
 **Q: カスタムモデルを使いたい**
 A: 環境変数で指定可能：
+
 ```bash
 export OPENAI_TRANSCRIBE_MODEL="custom-model-name"
 ```
 
 **Q: ログを詳細に見たい**
-A: 
+A:
+
 ```bash
 export RUST_LOG=debug
 tail -f /tmp/voice_inputd.err
@@ -303,6 +284,7 @@ A: 現在はCLI経由のみ。将来的にはgRPC APIを提供予定です。
 ## 📞 サポート
 
 ### 問題報告
+
 - GitHub Issues: https://github.com/yourusername/voice_input/issues
 - 必要な情報：
   - macOSバージョン
@@ -310,9 +292,11 @@ A: 現在はCLI経由のみ。将来的にはgRPC APIを提供予定です。
   - エラーログ（`/tmp/voice_inputd.err`）
 
 ### コミュニティ
+
 - Discord: [近日公開予定]
 - 日本語対応: 可
 
 ### 商用利用
+
 - ライセンス: MIT
 - 商用利用: 可（ただしOpenAI API利用料は各自負担）
