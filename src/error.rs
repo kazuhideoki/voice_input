@@ -37,45 +37,6 @@ pub enum VoiceInputError {
     OpenAiConfigError(String),
 
     // ========================================
-    // スタック管理エラー (StackServiceError統合)
-    // ========================================
-    #[error("Stack not found: id={stack_id}, available={available_ids:?}")]
-    StackNotFound {
-        stack_id: u32,
-        available_ids: Vec<u32>,
-    },
-
-    #[error("Stack mode is disabled")]
-    StackModeDisabled,
-
-    #[error("Text too large: {size} characters")]
-    TextTooLarge { size: usize },
-
-    // ========================================
-    // UI関連エラー (UiError統合)
-    // ========================================
-    #[error("UI initialization failed: {0}")]
-    UiInitializationFailed(String),
-
-    #[error("UI channel closed")]
-    UiChannelClosed,
-
-    #[error("UI rendering error: {0}")]
-    UiRenderingError(String),
-
-    // ========================================
-    // ショートカット関連エラー (ShortcutError統合)
-    // ========================================
-    #[error("Shortcut initialization failed: {0}")]
-    ShortcutInitFailed(String),
-
-    #[error("Shortcut system requirement not met: {0}")]
-    ShortcutSystemRequirementNotMet(String),
-
-    #[error("Shortcut IPC channel closed")]
-    ShortcutIpcChannelClosed,
-
-    // ========================================
     // テキスト入力エラー (SubprocessInputError統合)
     // ========================================
     #[error("Text input spawn error: {0}")]
@@ -158,58 +119,6 @@ pub type Result<T> = std::result::Result<T, VoiceInputError>;
 // 既存エラー型からの自動変換実装
 // ========================================
 
-/// StackServiceError からの変換
-impl From<crate::application::StackServiceError> for VoiceInputError {
-    fn from(error: crate::application::StackServiceError) -> Self {
-        match error {
-            crate::application::StackServiceError::StackNotFound(stack_id, available_ids) => {
-                VoiceInputError::StackNotFound {
-                    stack_id,
-                    available_ids,
-                }
-            }
-            crate::application::StackServiceError::StackModeDisabled => {
-                VoiceInputError::StackModeDisabled
-            }
-            crate::application::StackServiceError::TextTooLarge(size) => {
-                VoiceInputError::TextTooLarge { size }
-            }
-        }
-    }
-}
-
-/// UiError からの変換
-impl From<crate::infrastructure::ui::UiError> for VoiceInputError {
-    fn from(error: crate::infrastructure::ui::UiError) -> Self {
-        match error {
-            crate::infrastructure::ui::UiError::InitializationFailed(msg) => {
-                VoiceInputError::UiInitializationFailed(msg)
-            }
-            crate::infrastructure::ui::UiError::ChannelClosed => VoiceInputError::UiChannelClosed,
-            crate::infrastructure::ui::UiError::RenderingError(msg) => {
-                VoiceInputError::UiRenderingError(msg)
-            }
-        }
-    }
-}
-
-/// ShortcutError からの変換
-impl From<crate::shortcut::ShortcutError> for VoiceInputError {
-    fn from(error: crate::shortcut::ShortcutError) -> Self {
-        match error {
-            crate::shortcut::ShortcutError::RdevInitFailed(msg) => {
-                VoiceInputError::ShortcutInitFailed(msg)
-            }
-            crate::shortcut::ShortcutError::IpcChannelClosed => {
-                VoiceInputError::ShortcutIpcChannelClosed
-            }
-            crate::shortcut::ShortcutError::SystemRequirementNotMet(msg) => {
-                VoiceInputError::ShortcutSystemRequirementNotMet(msg)
-            }
-        }
-    }
-}
-
 /// SubprocessInputError からの変換
 impl From<SubprocessInputError> for VoiceInputError {
     fn from(error: SubprocessInputError) -> Self {
@@ -288,9 +197,7 @@ impl VoiceInputError {
             | VoiceInputError::OpenAiApiError(_)
             | VoiceInputError::IpcConnectionFailed(_) => ErrorSeverity::Warning,
 
-            VoiceInputError::UiChannelClosed
-            | VoiceInputError::IpcChannelClosed
-            | VoiceInputError::ShortcutIpcChannelClosed => ErrorSeverity::Info,
+            VoiceInputError::IpcChannelClosed => ErrorSeverity::Info,
 
             _ => ErrorSeverity::Debug,
         }

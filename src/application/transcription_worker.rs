@@ -3,7 +3,6 @@
 //! # 責任
 //! - 録音結果の転写処理
 //! - 辞書変換の適用
-//! - スタックへの保存
 //! - ペースト処理
 
 #![allow(clippy::await_holding_refcell_ref)]
@@ -13,14 +12,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-use crate::application::{
-    StackService, TranscriptionMessage, TranscriptionOptions, TranscriptionService,
-};
+use crate::application::{TranscriptionMessage, TranscriptionOptions, TranscriptionService};
 use crate::error::Result;
-use crate::infrastructure::{
-    external::{sound::resume_apple_music, text_input},
-    ui::{StackDisplayInfo, UiNotification, UiProcessManager},
-};
+use crate::infrastructure::external::{sound::resume_apple_music, text_input};
 use crate::ipc::RecordingResult;
 
 /// 転写結果を処理
@@ -29,8 +23,6 @@ pub async fn handle_transcription(
     paste: bool,
     resume_music: bool,
     direct_input: bool,
-    stack_service: Option<Rc<RefCell<StackService>>>,
-    ui_manager: Option<Rc<RefCell<UiProcessManager>>>,
     transcription_service: Rc<RefCell<TranscriptionService>>,
 ) -> Result<()> {
     // エラーが発生しても確実に音楽を再開するためにdeferパターンで実装
@@ -54,44 +46,8 @@ pub async fn handle_transcription(
         .transcribe(result.audio_data.into(), options)
         .await?;
 
-    // スタックモードが有効な場合は自動保存
-    if let Some(stack_service_ref) = &stack_service {
-        if stack_service_ref.borrow().is_stack_mode_enabled() {
-            let stack_id = stack_service_ref.borrow_mut().save_stack(text.clone());
-            let preview = text.chars().take(30).collect::<String>();
-            println!(
-                "{}",
-                crate::application::UserFeedback::stack_saved(stack_id, &preview)
-            );
-
-            // UI にスタック追加を通知
-            if let Some(ui_manager_ref) = &ui_manager {
-                if let Ok(manager) = ui_manager_ref.try_borrow() {
-                    let stack_info = StackDisplayInfo {
-                        number: stack_id,
-                        preview: preview.clone(),
-                        created_at: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs()
-                            .to_string(),
-                        is_active: false,
-                        char_count: text.len(),
-                    };
-                    let _ = manager.notify(UiNotification::StackAdded(stack_info));
-                }
-            }
-        }
-    }
-
-    // スタックモードが有効な場合は自動ペーストを無効化
-    let should_paste = paste
-        && (stack_service.is_none()
-            || !stack_service
-                .as_ref()
-                .unwrap()
-                .borrow()
-                .is_stack_mode_enabled());
+    // 自動ペースト判定
+    let should_paste = paste;
 
     // 即貼り付け
     if should_paste {
@@ -123,9 +79,7 @@ pub async fn spawn_transcription_worker(
 ) {
     use tokio::task::spawn_local;
 
-    while let Some((result, paste, resume_music, direct_input, stack_service, ui_manager)) =
-        rx.recv().await
-    {
+    while let Some((result, paste, resume_music, direct_input)) = rx.recv().await {
         let permit = match semaphore.clone().acquire_owned().await {
             Ok(p) => p,
             Err(e) => {
@@ -141,8 +95,6 @@ pub async fn spawn_transcription_worker(
                 paste,
                 resume_music,
                 direct_input,
-                stack_service,
-                ui_manager,
                 transcription_service,
             )
             .await;

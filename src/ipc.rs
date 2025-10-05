@@ -1,6 +1,5 @@
 //! Unix Domain Socket (UDS) ベースのシンプルな IPC モジュール。
 //! `voice_input` CLI ↔ `voice_inputd` デーモン間の通信で利用します。
-use crate::domain::stack::StackInfo;
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
@@ -44,18 +43,6 @@ pub enum IpcCmd {
     Status,
     ListDevices,
     Health,
-    /// スタックモードを有効化
-    EnableStackMode,
-    /// スタックモードを無効化
-    DisableStackMode,
-    /// 指定番号のスタックをペースト
-    PasteStack {
-        number: u32,
-    },
-    /// スタック一覧を取得
-    ListStacks,
-    /// 全スタックをクリア
-    ClearStacks,
 }
 
 /// デーモンからの汎用レスポンス。
@@ -76,13 +63,6 @@ pub struct RecordingResult {
     pub duration_ms: u64,
 }
 
-/// スタック関連のレスポンス
-#[derive(Debug, Serialize, Deserialize)]
-pub struct IpcStackResp {
-    pub stacks: Vec<StackInfo>,
-    pub mode_enabled: bool,
-}
-
 use crate::infrastructure::audio::cpal_backend::AudioData;
 
 impl From<AudioData> for AudioDataDto {
@@ -99,7 +79,11 @@ impl From<AudioDataDto> for AudioData {
         } else {
             ("audio/wav", "audio.wav")
         };
-        AudioData { bytes: dto.0, mime_type: mime.0, file_name: mime.1.to_string() }
+        AudioData {
+            bytes: dto.0,
+            mime_type: mime.0,
+            file_name: mime.1.to_string(),
+        }
     }
 }
 
@@ -294,7 +278,11 @@ mod tests {
 
     #[test]
     fn test_from_audio_data_to_dto() {
-        let audio_data = AudioData { bytes: vec![1, 2, 3, 4], mime_type: "audio/wav", file_name: "audio.wav".to_string() };
+        let audio_data = AudioData {
+            bytes: vec![1, 2, 3, 4],
+            mime_type: "audio/wav",
+            file_name: "audio.wav".to_string(),
+        };
         let dto: AudioDataDto = audio_data.into();
         assert_eq!(dto.0, vec![1, 2, 3, 4]);
     }
@@ -342,69 +330,6 @@ mod tests {
 
         assert!(deserialized.ok);
         assert_eq!(deserialized.msg, "Success");
-    }
-
-    #[test]
-    fn test_stack_mode_commands_serialization() {
-        // EnableStackMode
-        let cmd = IpcCmd::EnableStackMode;
-        let json = serde_json::to_string(&cmd).unwrap();
-        let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
-        assert!(matches!(deserialized, IpcCmd::EnableStackMode));
-
-        // DisableStackMode
-        let cmd = IpcCmd::DisableStackMode;
-        let json = serde_json::to_string(&cmd).unwrap();
-        let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
-        assert!(matches!(deserialized, IpcCmd::DisableStackMode));
-
-        // PasteStack
-        let cmd = IpcCmd::PasteStack { number: 3 };
-        let json = serde_json::to_string(&cmd).unwrap();
-        let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
-        match deserialized {
-            IpcCmd::PasteStack { number } => assert_eq!(number, 3),
-            _ => panic!("Expected PasteStack command"),
-        }
-
-        // ListStacks
-        let cmd = IpcCmd::ListStacks;
-        let json = serde_json::to_string(&cmd).unwrap();
-        let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
-        assert!(matches!(deserialized, IpcCmd::ListStacks));
-
-        // ClearStacks
-        let cmd = IpcCmd::ClearStacks;
-        let json = serde_json::to_string(&cmd).unwrap();
-        let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
-        assert!(matches!(deserialized, IpcCmd::ClearStacks));
-    }
-
-    #[test]
-    fn test_ipc_stack_resp_serialization() {
-        use crate::domain::stack::StackInfo;
-
-        let resp = IpcStackResp {
-            stacks: vec![
-                StackInfo {
-                    number: 1,
-                    preview: "First stack...".to_string(),
-                    created_at: "2024-01-01 00:00:00".to_string(),
-                },
-                StackInfo {
-                    number: 2,
-                    preview: "Second stack...".to_string(),
-                    created_at: "2024-01-01 00:01:00".to_string(),
-                },
-            ],
-            mode_enabled: true,
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        let deserialized: IpcStackResp = serde_json::from_str(&json).unwrap();
-        assert!(deserialized.mode_enabled);
-        assert_eq!(deserialized.stacks.len(), 2);
-        assert_eq!(deserialized.stacks[0].number, 1);
-        assert_eq!(deserialized.stacks[1].number, 2);
     }
 
     #[test]

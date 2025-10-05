@@ -13,11 +13,10 @@
 
 use std::{error::Error, fs};
 
-use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use tokio::{
     net::{UnixListener, UnixStream},
-    sync::{Semaphore, mpsc},
+    sync::Semaphore,
     task::{LocalSet, spawn_local},
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
@@ -29,15 +28,6 @@ use voice_input::{
     load_env,
     utils::config::EnvConfig,
 };
-
-/// voice_inputdのCLI引数
-#[derive(Parser)]
-#[command(name = "voice_inputd")]
-#[command(about = "Voice Input Daemon - Background service for voice input processing")]
-struct Args {
-    // CLIフラグでのショートカットキー機能有効化は削除
-    // IpcCmd::EnableStackModeで自動有効化する設計に変更
-}
 
 // ────────────────────────────────────────────────────────
 // エントリポイント： single‑thread Tokio runtime
@@ -71,22 +61,9 @@ async fn async_main() -> Result<()> {
     // サービスコンテナを初期化
     let mut container = ServiceContainer::<CpalAudioBackend>::new()?;
     let command_handler = container.command_handler.clone();
-    let shortcut_service = container.shortcut_service.clone();
     let transcription_rx = container
         .take_transcription_rx()
         .expect("Transcription receiver should be available");
-
-    // ショートカットからのIPCコマンド処理用チャンネル
-    let (shortcut_tx, mut shortcut_rx) = mpsc::unbounded_channel::<IpcCmd>();
-
-    // ショートカットIPCコマンド処理ワーカー
-    let command_handler_for_shortcut = command_handler.clone();
-    spawn_local(async move {
-        while let Some(cmd) = shortcut_rx.recv().await {
-            println!("Processing shortcut command: {:?}", cmd);
-            let _ = command_handler_for_shortcut.borrow().handle(cmd).await;
-        }
-    });
 
     // 転写ワーカーの起動
     let semaphore = std::sync::Arc::new(Semaphore::new(2));
@@ -110,11 +87,8 @@ async fn async_main() -> Result<()> {
     loop {
         let (stream, _) = listener.accept().await?;
         let handler = command_handler.clone();
-        let shortcut_svc = shortcut_service.clone();
-        let shortcut_tx_clone = shortcut_tx.clone();
-
         spawn_local(async move {
-            let _ = handle_client(stream, handler, shortcut_svc, shortcut_tx_clone).await;
+            let _ = handle_client(stream, handler).await;
         });
     }
 }
@@ -125,8 +99,6 @@ async fn handle_client(
     command_handler: std::rc::Rc<
         std::cell::RefCell<voice_input::application::CommandHandler<CpalAudioBackend>>,
     >,
-    shortcut_service: std::rc::Rc<std::cell::RefCell<voice_input::shortcut::ShortcutService>>,
-    shortcut_tx: mpsc::UnboundedSender<IpcCmd>,
 ) -> Result<()> {
     let (r, w) = stream.into_split();
     let mut reader = FramedRead::new(r, LinesCodec::new());
@@ -136,38 +108,14 @@ async fn handle_client(
         let cmd: IpcCmd = serde_json::from_str(&line)
             .map_err(|e| VoiceInputError::IpcSerializationError(e.to_string()))?;
 
-        // ショートカットサービスの特殊処理
-        let resp = match &cmd {
-            IpcCmd::EnableStackMode => {
-                // ショートカットサービスを起動
-                if !shortcut_service.borrow().is_enabled() {
-                    println!("Starting shortcut service with stack mode...");
-                    if let Err(e) = shortcut_service
-                        .borrow_mut()
-                        .start(shortcut_tx.clone())
-                        .await
-                    {
-                        eprintln!("Failed to start shortcut service: {}", e);
-                    }
-                }
-                command_handler.borrow().handle(cmd).await
-            }
-            IpcCmd::DisableStackMode => {
-                // ショートカットサービスを停止
-                if shortcut_service.borrow().is_enabled() {
-                    println!("Stopping shortcut service with stack mode...");
-                    if let Err(e) = shortcut_service.borrow_mut().stop().await {
-                        eprintln!("Failed to stop shortcut service: {}", e);
-                    }
-                }
-                command_handler.borrow().handle(cmd).await
-            }
-            _ => command_handler.borrow().handle(cmd).await,
-        }
-        .unwrap_or_else(|e| IpcResp {
-            ok: false,
-            msg: e.to_string(),
-        });
+        let resp = command_handler
+            .borrow()
+            .handle(cmd)
+            .await
+            .unwrap_or_else(|e| IpcResp {
+                ok: false,
+                msg: e.to_string(),
+            });
 
         writer
             .send(

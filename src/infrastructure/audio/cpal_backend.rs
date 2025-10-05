@@ -1,6 +1,6 @@
 use super::AudioBackend;
-use crate::utils::config::EnvConfig;
 use super::encoder::{self, AudioFormat};
+use crate::utils::config::EnvConfig;
 use cpal::{
     Device, SampleFormat, Stream, StreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -153,7 +153,8 @@ fn select_input_device(host: &cpal::Host) -> Option<Device> {
 impl CpalAudioBackend {
     fn preferred_format() -> AudioFormat {
         let cfg = EnvConfig::get();
-        match std::env::var("VOICE_INPUT_AUDIO_FORMAT").ok()
+        match std::env::var("VOICE_INPUT_AUDIO_FORMAT")
+            .ok()
             .or_else(|| cfg.openai_api_key.as_ref().map(|_| "flac".to_string()))
             .unwrap_or_else(|| "flac".to_string())
             .to_ascii_lowercase()
@@ -549,14 +550,23 @@ impl AudioBackend for CpalAudioBackend {
                     }),
                     Err(e) => {
                         eprintln!("FLAC encode failed (fallback to WAV): {}", e);
-                        let wav = Self::combine_wav_data(&trimmed, state.sample_rate, state.channels)?;
-                        Ok(AudioData { bytes: wav, mime_type: "audio/wav", file_name: "audio.wav".to_string() })
+                        let wav =
+                            Self::combine_wav_data(&trimmed, state.sample_rate, state.channels)?;
+                        Ok(AudioData {
+                            bytes: wav,
+                            mime_type: "audio/wav",
+                            file_name: "audio.wav".to_string(),
+                        })
                     }
                 }
             }
             AudioFormat::Wav => {
                 let wav = Self::combine_wav_data(&trimmed, state.sample_rate, state.channels)?;
-                Ok(AudioData { bytes: wav, mime_type: "audio/wav", file_name: "audio.wav".to_string() })
+                Ok(AudioData {
+                    bytes: wav,
+                    mime_type: "audio/wav",
+                    file_name: "audio.wav".to_string(),
+                })
             }
         }
     }
@@ -874,7 +884,11 @@ mod tests {
     fn test_audio_data_struct() {
         // Data creation
         let data = vec![1, 2, 3, 4, 5];
-        let audio_data = AudioData { bytes: data.clone(), mime_type: "audio/wav", file_name: "audio.wav".to_string() };
+        let audio_data = AudioData {
+            bytes: data.clone(),
+            mime_type: "audio/wav",
+            file_name: "audio.wav".to_string(),
+        };
 
         // Data access
         assert_eq!(audio_data.bytes, data);

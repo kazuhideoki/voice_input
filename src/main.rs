@@ -2,7 +2,7 @@
 //! `Start` / `Stop` / `Toggle` / `Status` の各コマンドを `ipc::send_cmd` で送信します。
 use clap::Parser;
 use voice_input::{
-    cli::{Cli, Cmd, ConfigCmd, ConfigField, DictCmd, InputMode, StackModeCmd, resolve_input_mode},
+    cli::{Cli, Cmd, ConfigCmd, ConfigField, DictCmd, InputMode, resolve_input_mode},
     domain::dict::{DictRepository, EntryStatus, WordEntry},
     infrastructure::config::AppConfig,
     infrastructure::dict::JsonFileDictRepo,
@@ -121,15 +121,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             },
         },
-
-        /* スタック操作 → IPC */
-        Cmd::StackMode { action } => match action {
-            StackModeCmd::On => relay(IpcCmd::EnableStackMode)?,
-            StackModeCmd::Off => relay(IpcCmd::DisableStackMode)?,
-        },
-        Cmd::Paste { number } => relay(IpcCmd::PasteStack { number })?,
-        Cmd::ListStacks => relay(IpcCmd::ListStacks)?,
-        Cmd::ClearStacks => relay(IpcCmd::ClearStacks)?,
     }
     Ok(())
 }
