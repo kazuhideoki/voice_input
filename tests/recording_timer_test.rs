@@ -14,7 +14,7 @@ async fn test_recording_auto_stop_integration() {
 
     // 録音開始
     let start_output = Command::new("./target/debug/voice_input")
-        .arg("--no-paste")
+        .arg("start")
         .output()
         .expect("Failed to start recording");
 

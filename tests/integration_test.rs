@@ -122,89 +122,12 @@ async fn test_voice_input_direct_mode_preserves_clipboard() -> Result<(), Box<dy
 
 #[tokio::test]
 #[ignore] // 手動実行用
-async fn test_voice_input_paste_mode_uses_clipboard() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. テスト用のクリップボード内容を設定
-    let initial_content = "Initial clipboard content";
-    set_clipboard_content(initial_content).await?;
-
-    // 2. デーモンを起動
-    let daemon = DaemonProcess::start().await?;
-
-    // 3. ペーストモードで音声入力を開始（明示的に--copy-and-paste）
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--bin",
-            "voice_input",
-            "--",
-            "start",
-            "--copy-and-paste",
-        ])
-        .output()
-        .await?;
-
-    if !output.status.success() {
-        eprintln!(
-            "Start command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    // 4. 音声入力を停止
-    sleep(Duration::from_secs(1)).await;
-    Command::new("cargo")
-        .args(["run", "--bin", "voice_input", "--", "stop"])
-        .output()
-        .await?;
-
-    // 5. デーモンを停止
-    daemon.stop().await?;
-
-    Ok(())
-}
-
-#[tokio::test]
-#[cfg_attr(feature = "ci-test", ignore)]
-async fn test_conflicting_flags_error() -> Result<(), Box<dyn std::error::Error>> {
-    // 競合するフラグを指定した場合のエラーを確認
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--bin",
-            "voice_input",
-            "--",
-            "start",
-            "--copy-and-paste",
-            "--copy-only",
-        ])
-        .output()
-        .await?;
-
-    assert!(!output.status.success());
-
-    let error_output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(error_output.contains("Cannot specify both --copy-and-paste and --copy-only"));
-
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore] // 手動実行用
 async fn test_daemon_ipc_communication() -> Result<(), Box<dyn std::error::Error>> {
     // 1. デーモンを起動
     let daemon = DaemonProcess::start().await?;
 
     // 2. 各種コマンドを送信してIPCが正常に動作することを確認
-    let commands = vec![
-        vec!["start"],
-        vec!["stop"],
-        vec!["toggle", "--copy-and-paste"],
-        vec!["stop"],
-    ];
+    let commands = vec![vec!["start"], vec!["stop"], vec!["toggle"], vec!["stop"]];
 
     for cmd in commands {
         let output = Command::new("cargo")

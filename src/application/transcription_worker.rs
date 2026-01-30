@@ -3,7 +3,7 @@
 //! # 責任
 //! - 録音結果の転写処理
 //! - 辞書変換の適用
-//! - ペースト処理
+//! - 直接入力処理
 
 #![allow(clippy::await_holding_refcell_ref)]
 
@@ -20,9 +20,7 @@ use crate::ipc::RecordingResult;
 /// 転写結果を処理
 pub async fn handle_transcription(
     result: RecordingResult,
-    paste: bool,
     resume_music: bool,
-    direct_input: bool,
     transcription_service: Rc<RefCell<TranscriptionService>>,
 ) -> Result<()> {
     // エラーが発生しても確実に音楽を再開するためにdeferパターンで実装
@@ -46,25 +44,13 @@ pub async fn handle_transcription(
         .transcribe(result.audio_data.into(), options)
         .await?;
 
-    // 自動ペースト判定
-    let should_paste = paste;
-
-    // 即貼り付け
-    if should_paste {
-        tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
-
-        if direct_input {
-            // 直接入力方式（日本語対応）
-            match text_input::type_text(&text).await {
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("Direct input failed: {}", e);
-                    // フォールバック処理は削除（クリップボードを汚染しないため）
-                }
-            }
-        } else {
-            // direct_inputでない場合は何もしない（クリップボードを汚染しないため）
-            eprintln!("Paste mode without direct_input is no longer supported");
+    // 直接入力で即貼り付け
+    tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+    match text_input::type_text(&text).await {
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("Direct input failed: {}", e);
+            // フォールバック処理は削除（クリップボードを汚染しないため）
         }
     }
 
@@ -79,7 +65,7 @@ pub async fn spawn_transcription_worker(
 ) {
     use tokio::task::spawn_local;
 
-    while let Some((result, paste, resume_music, direct_input)) = rx.recv().await {
+    while let Some((result, resume_music)) = rx.recv().await {
         let permit = match semaphore.clone().acquire_owned().await {
             Ok(p) => p,
             Err(e) => {
@@ -90,14 +76,7 @@ pub async fn spawn_transcription_worker(
 
         let transcription_service = transcription_service.clone();
         spawn_local(async move {
-            let _ = handle_transcription(
-                result,
-                paste,
-                resume_music,
-                direct_input,
-                transcription_service,
-            )
-            .await;
+            let _ = handle_transcription(result, resume_music, transcription_service).await;
             drop(permit);
         });
     }

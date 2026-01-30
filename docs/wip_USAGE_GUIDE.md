@@ -41,31 +41,11 @@ voice_input stop   # 録音停止して文字起こし
 
 ```bash
 voice_input toggle
-# または
-voice_input toggle --direct-input
 ```
 
 - ✅ クリップボードを汚染しない
 - ✅ 高速（平均22ms）
 - ✅ 日本語・絵文字完全対応
-
-#### 2. クリップボード経由モード
-
-```bash
-voice_input toggle --copy-and-paste
-```
-
-- 互換性重視の場合に使用
-- 一部のアプリケーションで必要
-
-#### 3. コピーのみモード
-
-```bash
-voice_input toggle --copy-only
-```
-
-- クリップボードにコピーのみ
-- 手動でペーストする場合
 
 ### 辞書機能（自動置換）
 
@@ -149,9 +129,8 @@ voice_input toggle
 ### チャット・メッセージングでの活用
 
 ```bash
-# 素早い返信（コピーのみ → 手動Enter）
-voice_input toggle --copy-only
-# クリップボードの内容を貼り付けて送信
+# 素早い返信
+voice_input toggle
 ```
 
 ## 🛠️ 高度な使い方
@@ -176,24 +155,9 @@ voice_input toggle --copy-only
 ```bash
 # ~/.zshrc or ~/.bashrc に追加
 
-# 音声でコミットメッセージ
-vcommit() {
-    voice_input toggle --copy-only
-    git commit -m "$(pbpaste)"
-}
-
-# 音声でファイル名変更
-vrename() {
-    local oldname="$1"
-    echo "新しいファイル名を話してください"
-    voice_input toggle --copy-only
-    mv "$oldname" "$(pbpaste)"
-}
-
-# 音声メモ
-vmemo() {
-    voice_input toggle --copy-only
-    echo "$(date): $(pbpaste)" >> ~/voice_memos.txt
+# 音声入力のトグル
+vtoggle() {
+    voice_input toggle
 }
 ```
 

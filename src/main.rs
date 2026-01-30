@@ -2,7 +2,7 @@
 //! `Start` / `Stop` / `Toggle` / `Status` の各コマンドを `ipc::send_cmd` で送信します。
 use clap::Parser;
 use voice_input::{
-    cli::{Cli, Cmd, ConfigCmd, ConfigField, DictCmd, InputMode, resolve_input_mode},
+    cli::{Cli, Cmd, ConfigCmd, ConfigField, DictCmd},
     domain::dict::{DictRepository, EntryStatus, WordEntry},
     infrastructure::config::AppConfig,
     infrastructure::dict::JsonFileDictRepo,
@@ -30,49 +30,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     /* ───── コマンド解析 ──────────── */
-    match cli.cmd.unwrap_or(Cmd::Toggle {
-        prompt: None,
-        copy_and_paste: false,
-        copy_only: false,
-    }) {
+    match cli.cmd.unwrap_or(Cmd::Toggle { prompt: None }) {
         /* 録音系 → IPC */
-        Cmd::Start {
-            prompt,
-            copy_and_paste,
-            copy_only,
-        } => {
-            let input_mode = resolve_input_mode(copy_and_paste, copy_only)?;
-            let direct_input = input_mode == InputMode::Direct;
-            let paste = match input_mode {
-                InputMode::Direct => true,       // 直接入力の場合は常にペースト
-                InputMode::CopyAndPaste => true, // copy-and-pasteの場合も常にペースト
-                InputMode::CopyOnly => false,    // copy_onlyの場合はペーストしない
-            };
-            relay(IpcCmd::Start {
-                paste,
-                prompt,
-                direct_input,
-            })?
-        }
+        Cmd::Start { prompt } => relay(IpcCmd::Start { prompt })?,
         Cmd::Stop => relay(IpcCmd::Stop)?,
-        Cmd::Toggle {
-            prompt,
-            copy_and_paste,
-            copy_only,
-        } => {
-            let input_mode = resolve_input_mode(copy_and_paste, copy_only)?;
-            let direct_input = input_mode == InputMode::Direct;
-            let paste = match input_mode {
-                InputMode::Direct => true,       // 直接入力の場合は常にペースト
-                InputMode::CopyAndPaste => true, // copy-and-pasteの場合も常にペースト
-                InputMode::CopyOnly => false,    // copy_onlyの場合はペーストしない
-            };
-            relay(IpcCmd::Toggle {
-                paste,
-                prompt,
-                direct_input,
-            })?
-        }
+        Cmd::Toggle { prompt } => relay(IpcCmd::Toggle { prompt })?,
         Cmd::Status => relay(IpcCmd::Status)?,
         Cmd::Health => relay(IpcCmd::Health)?,
 

@@ -26,9 +26,7 @@ use crate::ipc::{IpcCmd, IpcResp, RecordingResult};
 /// 転写メッセージ
 pub type TranscriptionMessage = (
     RecordingResult,
-    bool, // paste
     bool, // resume_music
-    bool, // direct_input
 );
 
 /// コマンドハンドラー
@@ -59,21 +57,13 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     /// IPCコマンドを処理
     pub async fn handle(&self, cmd: IpcCmd) -> Result<IpcResp> {
         match cmd {
-            IpcCmd::Start {
-                paste,
-                prompt,
-                direct_input,
-            } => self.handle_start(paste, prompt, direct_input).await,
+            IpcCmd::Start { prompt } => self.handle_start(prompt).await,
             IpcCmd::Stop => self.handle_stop().await,
-            IpcCmd::Toggle {
-                paste,
-                prompt,
-                direct_input,
-            } => {
+            IpcCmd::Toggle { prompt } => {
                 if self.recording.borrow().is_recording() {
                     self.handle_stop().await
                 } else {
-                    self.handle_start(paste, prompt, direct_input).await
+                    self.handle_start(prompt).await
                 }
             }
             IpcCmd::Status => self.handle_status(),
@@ -83,12 +73,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     }
 
     /// 録音開始処理
-    async fn handle_start(
-        &self,
-        paste: bool,
-        prompt: Option<String>,
-        direct_input: bool,
-    ) -> Result<IpcResp> {
+    async fn handle_start(&self, prompt: Option<String>) -> Result<IpcResp> {
         // Apple Musicを一時停止
         let media_control = self.media_control.clone();
         let was_playing = media_control.borrow().pause_if_playing().await?;
@@ -98,11 +83,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         play_start_sound();
 
         // 録音オプションを構築
-        let options = RecordingOptions {
-            prompt,
-            paste,
-            direct_input,
-        };
+        let options = RecordingOptions { prompt };
 
         // 録音を開始
         let recording = self.recording.clone();
@@ -128,12 +109,11 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         let result = recording.borrow().stop_recording().await?;
 
         // コンテキスト情報を取得
-        let (_start_prompt, paste, direct_input, music_was_playing) =
-            self.recording.borrow().get_context_info()?;
+        let (_start_prompt, music_was_playing) = self.recording.borrow().get_context_info()?;
 
         // 転写キューに送信
         self.transcription_tx
-            .send((result, paste, music_was_playing, direct_input))
+            .send((result, music_was_playing))
             .map_err(|e| {
                 VoiceInputError::SystemError(format!(
                     "Failed to send to transcription queue: {}",
@@ -242,13 +222,11 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                             play_stop_sound();
 
                             if let Ok(result) = recording.borrow().stop_recording().await {
-                                let (_, paste, direct_input, music_was_playing) =
-                                    recording.borrow().get_context_info().unwrap_or((None, false, false, false));
+                                let (_, music_was_playing) =
+                                    recording.borrow().get_context_info().unwrap_or((None, false));
                                 let _ = tx.send((
                                     result,
-                                    paste,
                                     music_was_playing,
-                                    direct_input,
                                 ));
                             }
                         }

@@ -27,17 +27,15 @@ pub fn socket_path() -> PathBuf {
 pub enum IpcCmd {
     /// 録音開始
     Start {
-        paste: bool,
+        #[serde(default)]
         prompt: Option<String>,
-        direct_input: bool,
     },
     /// 録音停止
     Stop,
     /// 録音トグル
     Toggle {
-        paste: bool,
+        #[serde(default)]
         prompt: Option<String>,
-        direct_input: bool,
     },
     /// ステータス取得
     Status,
@@ -298,23 +296,15 @@ mod tests {
     fn test_ipc_compatibility() {
         // Test that existing IPC commands still work
         let cmd = IpcCmd::Start {
-            paste: true,
             prompt: Some("test prompt".to_string()),
-            direct_input: false,
         };
 
         let json = serde_json::to_string(&cmd).unwrap();
         let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
 
         match deserialized {
-            IpcCmd::Start {
-                paste,
-                prompt,
-                direct_input,
-            } => {
-                assert!(paste);
+            IpcCmd::Start { prompt } => {
                 assert_eq!(prompt, Some("test prompt".to_string()));
-                assert!(!direct_input);
             }
             _ => panic!("Expected Start command"),
         }
@@ -335,11 +325,7 @@ mod tests {
     #[test]
     fn test_backward_compatibility() {
         // 既存のIPCコマンドが引き続き動作することを確認
-        let cmd = IpcCmd::Start {
-            paste: true,
-            prompt: None,
-            direct_input: false,
-        };
+        let cmd = IpcCmd::Start { prompt: None };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("Start"));
 
@@ -350,21 +336,13 @@ mod tests {
         assert!(matches!(deserialized, IpcCmd::Stop));
 
         let cmd = IpcCmd::Toggle {
-            paste: false,
             prompt: Some("test".to_string()),
-            direct_input: true,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
         match deserialized {
-            IpcCmd::Toggle {
-                paste,
-                prompt,
-                direct_input,
-            } => {
-                assert!(!paste);
+            IpcCmd::Toggle { prompt } => {
                 assert_eq!(prompt, Some("test".to_string()));
-                assert!(direct_input);
             }
             _ => panic!("Expected Toggle command"),
         }

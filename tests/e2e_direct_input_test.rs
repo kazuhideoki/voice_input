@@ -36,12 +36,8 @@ fn send_ipc_cmd(cmd: &IpcCmd) -> Result<IpcResp, Box<dyn std::error::Error>> {
 #[test]
 #[ignore] // デーモンが起動している必要があるため、通常のテストでは無視
 fn test_direct_input_flag_e2e() {
-    // direct_input=trueでStartコマンドを送信
-    let cmd = IpcCmd::Start {
-        paste: true,
-        prompt: None,
-        direct_input: true,
-    };
+    // Startコマンドを送信
+    let cmd = IpcCmd::Start { prompt: None };
 
     match send_ipc_cmd(&cmd) {
         Ok(resp) => {
@@ -59,12 +55,8 @@ fn test_direct_input_flag_e2e() {
 #[test]
 #[ignore]
 fn test_no_direct_input_flag_e2e() {
-    // direct_input=falseでStartコマンドを送信
-    let cmd = IpcCmd::Start {
-        paste: true,
-        prompt: None,
-        direct_input: false,
-    };
+    // Startコマンドを送信（旧フラグは廃止）
+    let cmd = IpcCmd::Start { prompt: None };
 
     match send_ipc_cmd(&cmd) {
         Ok(resp) => {
@@ -80,11 +72,9 @@ fn test_no_direct_input_flag_e2e() {
 #[test]
 #[ignore]
 fn test_toggle_with_direct_input_e2e() {
-    // direct_input=trueでToggleコマンドを送信
+    // Toggleコマンドを送信
     let cmd = IpcCmd::Toggle {
-        paste: true,
         prompt: Some("test prompt".to_string()),
-        direct_input: true,
     };
 
     match send_ipc_cmd(&cmd) {
@@ -121,9 +111,7 @@ fn test_status_command_e2e() {
 fn test_ipc_cmd_json_format() {
     // IpcCmdが正しくJSONにシリアライズされることを確認
     let cmd = IpcCmd::Start {
-        paste: true,
         prompt: Some("test".to_string()),
-        direct_input: true,
     };
 
     let json = serde_json::to_string(&cmd).unwrap();
@@ -131,7 +119,5 @@ fn test_ipc_cmd_json_format() {
 
     // JSONに必要なフィールドが含まれていることを確認
     assert!(json.contains(r#""Start""#));
-    assert!(json.contains(r#""paste":true"#));
     assert!(json.contains(r#""prompt":"test""#));
-    assert!(json.contains(r#""direct_input":true"#));
 }

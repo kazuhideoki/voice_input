@@ -18,18 +18,6 @@ pub enum Cmd {
         /// Whisper へ追加のプロンプト
         #[arg(long)]
         prompt: Option<String>,
-        /// クリップボード経由でペースト（デフォルトの直接入力を無効化）
-        #[arg(
-            long,
-            help = "Use clipboard copy-and-paste method instead of direct input"
-        )]
-        copy_and_paste: bool,
-        /// クリップボードにコピーのみ（ペーストしない）
-        #[arg(
-            long,
-            help = "Only copy to clipboard without pasting (conflicts with --copy-and-paste)"
-        )]
-        copy_only: bool,
     },
     /// 録音停止
     Stop,
@@ -37,18 +25,6 @@ pub enum Cmd {
     Toggle {
         #[arg(long)]
         prompt: Option<String>,
-        /// クリップボード経由でペースト（デフォルトの直接入力を無効化）
-        #[arg(
-            long,
-            help = "Use clipboard copy-and-paste method instead of direct input"
-        )]
-        copy_and_paste: bool,
-        /// クリップボードにコピーのみ（ペーストしない）
-        #[arg(
-            long,
-            help = "Only copy to clipboard without pasting (conflicts with --copy-and-paste)"
-        )]
-        copy_only: bool,
     },
     /// デーモン状態取得
     Status,
@@ -93,24 +69,4 @@ pub enum ConfigField {
     /// 辞書ファイルの保存先を指定
     #[command(name = "dict-path")]
     DictPath { path: String },
-}
-
-/// フラグの競合をチェックし、入力モードを決定
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum InputMode {
-    Direct,       // デフォルト: 直接入力
-    CopyAndPaste, // クリップボード経由でペースト
-    CopyOnly,     // クリップボードにコピーのみ
-}
-
-pub fn resolve_input_mode(
-    copy_and_paste: bool,
-    copy_only: bool,
-) -> Result<InputMode, &'static str> {
-    match (copy_and_paste, copy_only) {
-        (true, true) => Err("Cannot specify both --copy-and-paste and --copy-only"),
-        (true, false) => Ok(InputMode::CopyAndPaste),
-        (false, true) => Ok(InputMode::CopyOnly),
-        (false, false) => Ok(InputMode::Direct), // デフォルトは直接入力
-    }
 }

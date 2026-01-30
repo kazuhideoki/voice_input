@@ -44,10 +44,6 @@ impl Default for RecordingConfig {
 pub struct RecordingOptions {
     /// 録音開始時のプロンプト
     pub prompt: Option<String>,
-    /// ペーストフラグ
-    pub paste: bool,
-    /// 直接入力フラグ
-    pub direct_input: bool,
 }
 
 /// 録音コンテキスト情報
@@ -61,10 +57,6 @@ pub struct RecordingContext {
     pub music_was_playing: bool,
     /// 録音開始時点で取得した選択テキストまたはCLIプロンプト
     pub start_prompt: Option<String>,
-    /// 転写完了後にペーストを行うか
-    pub paste: bool,
-    /// 直接入力を使用するか
-    pub direct_input: bool,
 }
 
 impl RecordingContext {
@@ -74,8 +66,6 @@ impl RecordingContext {
             cancel: None,
             music_was_playing: false,
             start_prompt: None,
-            paste: false,
-            direct_input: false,
         }
     }
 }
@@ -137,8 +127,6 @@ impl<T: AudioBackend> RecordingService<T> {
 
         // オプションを保存
         ctx.start_prompt = options.prompt;
-        ctx.paste = options.paste;
-        ctx.direct_input = options.direct_input;
 
         // レコーダーを開始
         self.recorder
@@ -222,17 +210,12 @@ impl<T: AudioBackend> RecordingService<T> {
     }
 
     /// 録音コンテキストの情報を取得
-    pub fn get_context_info(&self) -> Result<(Option<String>, bool, bool, bool)> {
+    pub fn get_context_info(&self) -> Result<(Option<String>, bool)> {
         let ctx = self
             .context
             .lock()
             .map_err(|e| VoiceInputError::SystemError(format!("Context lock error: {}", e)))?;
-        Ok((
-            ctx.start_prompt.clone(),
-            ctx.paste,
-            ctx.direct_input,
-            ctx.music_was_playing,
-        ))
+        Ok((ctx.start_prompt.clone(), ctx.music_was_playing))
     }
 
     /// Apple Music再生状態を設定
@@ -299,11 +282,7 @@ mod tests {
         let service = RecordingService::new(recorder, config);
 
         // 録音開始
-        let options = RecordingOptions {
-            prompt: None,
-            paste: false,
-            direct_input: false,
-        };
+        let options = RecordingOptions { prompt: None };
         service.start_recording(options).await.unwrap();
 
         // キャンセルレシーバーを取得
@@ -343,8 +322,6 @@ mod tests {
             // 録音開始
             let options = RecordingOptions {
                 prompt: Some(format!("Test {}", i)),
-                paste: false,
-                direct_input: false,
             };
             let session_id = service.start_recording(options).await.unwrap();
             assert!(session_id > 0, "Session ID should be positive");
@@ -396,10 +373,8 @@ mod tests {
         }
 
         // コンテキスト情報を取得
-        let (prompt, paste, direct_input, music_was_playing) = service.get_context_info().unwrap();
+        let (prompt, music_was_playing) = service.get_context_info().unwrap();
         assert!(prompt.is_none());
-        assert!(!paste);
-        assert!(!direct_input);
         assert!(music_was_playing);
     }
 }

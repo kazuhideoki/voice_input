@@ -108,9 +108,8 @@ async fn test_direct_input_fallback_simulation() -> Result<(), Box<dyn std::erro
             println!("Direct input succeeded");
         }
         Err(e) => {
-            eprintln!("Direct input failed: {}, would fallback to paste", e);
-            // ここでペースト方式にフォールバックする
-            // 実際のvoice_inputdではosascriptでCmd+Vを実行
+            eprintln!("Direct input failed: {}", e);
+            // クリップボード方式へのフォールバックは削除済み
         }
     }
 
