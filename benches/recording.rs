@@ -110,60 +110,9 @@ fn benchmark_memory_allocation(c: &mut Criterion) {
     group.finish();
 }
 
-fn benchmark_with_monitoring(c: &mut Criterion) {
-    use voice_input::monitoring::MemoryMonitor;
-
-    let mut group = c.benchmark_group("with_monitoring");
-
-    // メモリ監視ありとなしの比較
-    for duration_secs in [5, 10].iter() {
-        let sample_rate = 44100;
-        let bytes_per_sample = 2;
-        let channels = 1;
-        let audio_size = sample_rate * bytes_per_sample * channels * duration_secs;
-
-        // 監視なし
-        group.bench_with_input(
-            BenchmarkId::new("without_monitor", duration_secs),
-            duration_secs,
-            |b, &_duration| {
-                let backend = BenchmarkAudioBackend::new();
-                backend.set_simulated_size(audio_size);
-
-                b.iter(|| {
-                    let mut recorder = Recorder::new(backend.clone());
-                    recorder.start().unwrap();
-                    let _ = recorder.stop().unwrap();
-                });
-            },
-        );
-
-        // 監視あり
-        group.bench_with_input(
-            BenchmarkId::new("with_monitor", duration_secs),
-            duration_secs,
-            |b, &_duration| {
-                let backend = BenchmarkAudioBackend::new();
-                backend.set_simulated_size(audio_size);
-                let monitor = Arc::new(MemoryMonitor::new(500)); // 500MB threshold
-
-                b.iter(|| {
-                    let mut recorder =
-                        Recorder::new(backend.clone()).with_memory_monitor(monitor.clone());
-                    recorder.start().unwrap();
-                    let _ = recorder.stop().unwrap();
-                });
-            },
-        );
-    }
-
-    group.finish();
-}
-
 criterion_group!(
     benches,
     benchmark_recording_modes,
     benchmark_memory_allocation,
-    benchmark_with_monitoring,
 );
 criterion_main!(benches);

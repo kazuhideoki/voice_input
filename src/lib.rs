@@ -6,7 +6,6 @@ pub mod utils {
     pub mod config;
     pub mod env;
 }
-pub mod monitoring;
 
 pub mod cli;
 pub mod ipc;
