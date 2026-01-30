@@ -605,8 +605,9 @@ mod tests {
 
     static INPUT_DEVICE_ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    /// 入力デバイス優先順位の環境変数が考慮される
     #[test]
-    fn input_device_priority_env_is_handled() {
+    fn input_device_priority_env_is_respected() {
         let _guard = INPUT_DEVICE_ENV_LOCK.lock().unwrap();
         unsafe { std::env::set_var("INPUT_DEVICE_PRIORITY", "ClearlyNonexistentDevice") };
 
@@ -636,8 +637,9 @@ mod tests {
         }
     }
 
+    /// WAVヘッダーがRIFF/format/data構造を満たす
     #[test]
-    fn test_wav_header_structure() {
+    fn wav_header_has_expected_structure() {
         // 1秒のステレオ16bit 48kHzオーディオ
         let data_len = 48000 * 2 * 2; // sample_rate * channels * bytes_per_sample
         let header = CpalAudioBackend::create_wav_header(data_len, 48000, 2, 16);
@@ -674,8 +676,9 @@ mod tests {
         assert_eq!(data_size, data_len);
     }
 
+    /// モノラル設定のWAVヘッダーが正しい
     #[test]
-    fn test_wav_header_mono() {
+    fn wav_header_supports_mono() {
         // モノラル設定でのヘッダー生成
         let data_len = 44100 * 2; // 44.1kHz, mono, 16bit
         let header = CpalAudioBackend::create_wav_header(data_len, 44100, 1, 16);
@@ -695,8 +698,9 @@ mod tests {
         assert_eq!(block_align, 2); // 1 channel * 16 bits / 8
     }
 
+    /// サンプルレートがヘッダーに正しく反映される
     #[test]
-    fn test_wav_header_various_sample_rates() {
+    fn wav_header_reflects_sample_rate() {
         let sample_rates = vec![8000, 16000, 22050, 44100, 48000, 96000];
 
         for rate in sample_rates {
@@ -712,8 +716,9 @@ mod tests {
         }
     }
 
+    /// データ長0でもWAVヘッダーを生成できる
     #[test]
-    fn test_wav_header_empty_data() {
+    fn wav_header_allows_empty_data() {
         // データ長0でのヘッダー生成
         let header = CpalAudioBackend::create_wav_header(0, 48000, 2, 16);
 
@@ -728,8 +733,9 @@ mod tests {
         assert_eq!(data_size, 0);
     }
 
+    /// i16サンプルの変換が正しい
     #[test]
-    fn test_sample_trait_i16() {
+    fn sample_trait_handles_i16() {
         // i16 のサンプル変換テスト
         let sample: i16 = 1000;
         assert_eq!(sample.to_i16(), 1000);
@@ -744,8 +750,9 @@ mod tests {
         assert_eq!(sample.to_le_bytes(), [0x00, 0x00]);
     }
 
+    /// f32サンプルの変換が正しい
     #[test]
-    fn test_sample_trait_f32() {
+    fn sample_trait_handles_f32() {
         // f32 のサンプル変換テスト
 
         // 正確な値のテスト
@@ -773,8 +780,9 @@ mod tests {
         assert_eq!(sample.to_i16(), -16383); // ≈ i16::MIN / 2
     }
 
+    /// f32サンプルがPCMのリトルエンディアンに変換される
     #[test]
-    fn test_sample_f32_to_le_bytes() {
+    fn sample_f32_converts_to_le_bytes() {
         // f32 -> bytes 変換テスト
         let sample: f32 = 0.0;
         assert_eq!(Sample::as_pcm_le_bytes(&sample), [0x00, 0x00]);
@@ -785,8 +793,9 @@ mod tests {
         assert_eq!(reconstructed, i16::MAX);
     }
 
+    /// i16データをWAVに結合できる
     #[test]
-    fn test_combine_wav_data_i16() {
+    fn combine_wav_data_from_i16() {
         // i16データの結合テスト
         let pcm_data: Vec<i16> = vec![100, -100, 1000, -1000, 0];
         let result = CpalAudioBackend::combine_wav_data(&pcm_data, 48000, 2).unwrap();
@@ -806,8 +815,9 @@ mod tests {
         assert_eq!(&result[52..54], &[0u8, 0]); // 0
     }
 
+    /// f32データをWAVに結合できる
     #[test]
-    fn test_combine_wav_data_f32() {
+    fn combine_wav_data_from_f32() {
         // f32データの結合テスト
         let pcm_data: Vec<f32> = vec![0.0, 1.0, -1.0, 0.5, -0.5];
         let result = CpalAudioBackend::combine_wav_data(&pcm_data, 44100, 1).unwrap();
@@ -832,8 +842,9 @@ mod tests {
         assert_eq!(sample3, i16::MIN + 1); // -1.0 -> -32767
     }
 
+    /// 空のPCMデータでもWAVを生成できる
     #[test]
-    fn test_combine_wav_data_empty() {
+    fn combine_wav_data_with_empty_pcm() {
         // 空のPCMデータ
         let pcm_data: Vec<i16> = vec![];
         let result = CpalAudioBackend::combine_wav_data(&pcm_data, 48000, 2).unwrap();
@@ -846,8 +857,9 @@ mod tests {
         assert_eq!(data_size, 0);
     }
 
+    /// ステレオデータのインターリーブが保たれる
     #[test]
-    fn test_combine_wav_data_stereo_interleaved() {
+    fn combine_wav_data_preserves_stereo_interleaving() {
         // ステレオデータのインターリーブ確認
         // 左チャンネル: 100, 200
         // 右チャンネル: -100, -200
@@ -868,8 +880,9 @@ mod tests {
         assert_eq!(&result[50..52], &[56u8, 255]); // R: -200
     }
 
+    /// バックエンド初期状態で録音は開始されていない
     #[test]
-    fn test_memory_mode_only() {
+    fn backend_starts_idle_in_memory_mode() {
         // メモリモード専用になったことを確認
         let backend = CpalAudioBackend::default();
 
@@ -880,8 +893,9 @@ mod tests {
         assert!(!backend.is_recording());
     }
 
+    /// AudioDataがclone/debug/bytesアクセスに対応する
     #[test]
-    fn test_audio_data_struct() {
+    fn audio_data_struct_supports_clone_and_debug() {
         // Data creation
         let data = vec![1, 2, 3, 4, 5];
         let audio_data = AudioData {
@@ -901,8 +915,9 @@ mod tests {
         assert_eq!(cloned.bytes, data);
     }
 
+    /// メモリ録音状態が正しく初期化される
     #[test]
-    fn test_memory_recording_state_creation() {
+    fn memory_recording_state_initializes() {
         // メモリモードの状態作成
         let buffer = Arc::new(Mutex::new(Vec::<i16>::new()));
         let memory_state = MemoryRecordingState {
@@ -917,8 +932,9 @@ mod tests {
         assert!(memory_state.buffer.lock().unwrap().is_empty());
     }
 
+    /// recording_stateが初期状態でNoneである
     #[test]
-    fn test_cpal_backend_with_recording_state() {
+    fn backend_starts_without_recording_state() {
         let backend = CpalAudioBackend::default();
 
         // 初期状態はNone
@@ -928,8 +944,9 @@ mod tests {
         assert!(!backend.is_recording());
     }
 
+    /// バッファサイズ見積もりが期待値と一致する
     #[test]
-    fn test_estimate_buffer_size() {
+    fn estimate_buffer_size_matches_expected() {
         // 48kHz, 2ch, 1秒
         let size = CpalAudioBackend::estimate_buffer_size(1, 48000, 2);
         assert_eq!(size, 96000); // 48000 * 2 * 1
@@ -943,8 +960,9 @@ mod tests {
         assert_eq!(size, 2880000); // 48000 * 2 * 30
     }
 
+    /// 録音開始前の初期状態を確認できる
     #[test]
-    fn test_start_recording_setup() {
+    fn start_recording_initial_state_is_idle() {
         let backend = CpalAudioBackend::default();
 
         // 録音開始前の状態確認
@@ -955,8 +973,9 @@ mod tests {
         // ここではバックエンドの初期状態のみをテストする
     }
 
+    /// バックエンド初期化時に録音/ストリームが空である
     #[test]
-    fn test_backend_initialization() {
+    fn backend_initial_state_has_no_stream_or_recording() {
         let backend = CpalAudioBackend::default();
 
         // 録音開始前の状態確認
@@ -967,8 +986,9 @@ mod tests {
         assert!(backend.stream.lock().unwrap().is_none());
     }
 
+    /// メモリモード停止でFLACが返る
     #[test]
-    fn test_stop_recording_memory_mode() {
+    fn stop_recording_returns_flac_in_memory_mode() {
         // メモリモードでの動作をシミュレート
         let backend = CpalAudioBackend::default();
 
@@ -997,8 +1017,9 @@ mod tests {
         assert!(backend.recording_state.lock().unwrap().is_none());
     }
 
+    /// 空バッファでも停止時にFLACヘッダーが返る
     #[test]
-    fn test_stop_recording_with_empty_buffer() {
+    fn stop_recording_handles_empty_buffer() {
         // 空のバッファでの動作をテスト
         let backend = CpalAudioBackend::default();
 
@@ -1026,8 +1047,9 @@ mod tests {
         assert!(backend.recording_state.lock().unwrap().is_none());
     }
 
+    /// 30秒録音のメモリ使用量が想定範囲に収まる
     #[test]
-    fn test_memory_usage_30_seconds() {
+    fn memory_usage_for_30s_recording() {
         // 30秒録音のメモリ使用量テスト
         let sample_rate = 48000u32;
         let channels = 2u16;
@@ -1061,8 +1083,9 @@ mod tests {
         assert!((wav_size_mb - memory_size_mb).abs() < 0.01);
     }
 
+    /// 見積もりサイズで事前確保できる
     #[test]
-    fn test_buffer_capacity_optimization() {
+    fn buffer_capacity_matches_estimate() {
         // バッファの事前確保が適切に行われているかテスト
         let sample_rate = 48000;
         let channels = 2;
@@ -1084,9 +1107,10 @@ mod tests {
         assert_eq!(buffer.capacity(), estimated);
     }
 
+    /// 実デバイスでメモリモード録音できる
     #[test]
     #[cfg_attr(feature = "ci-test", ignore)]
-    fn test_real_recording_memory_mode() {
+    fn real_device_records_in_memory_mode() {
         // 実際のデバイスでメモリモード録音をテスト（CI環境では無視）
         let backend = CpalAudioBackend::default();
 
@@ -1122,6 +1146,7 @@ mod tests {
         }
     }
 
+    /// 先頭と末尾の無音が除去される
     #[test]
     fn trim_silence_removes_leading_and_trailing_silence() {
         let sample_rate = 16_000;
@@ -1143,6 +1168,7 @@ mod tests {
         assert!(trimmed.iter().all(|&s| s == 2000));
     }
 
+    /// ステレオ音声でも無音除去が機能する
     #[test]
     fn trim_silence_handles_stereo_audio() {
         let sample_rate = 48_000;
@@ -1166,6 +1192,7 @@ mod tests {
         );
     }
 
+    /// 全て無音でも最低限のサンプルが残る
     #[test]
     fn trim_silence_keeps_minimum_when_all_silent() {
         let sample_rate = 16_000;

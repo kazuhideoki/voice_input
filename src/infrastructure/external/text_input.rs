@@ -28,9 +28,10 @@ pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
 
+    /// 空文字列でも処理が落ちない
     #[tokio::test]
     #[cfg_attr(feature = "ci-test", ignore)]
-    async fn test_empty_text() {
+    async fn empty_text_is_handled() {
         let result = type_text("").await;
         // 空文字列でも正常に処理されるべき
         match result {
@@ -39,9 +40,10 @@ mod tests {
         }
     }
 
+    /// 短いテキストを直接入力できる
     #[tokio::test]
     #[cfg_attr(feature = "ci-test", ignore)]
-    async fn test_simple_text() {
+    async fn simple_text_is_inputtable() {
         let result = type_text("Hello").await;
         match result {
             Ok(_) => println!("✅ Direct input test successful"),
@@ -51,9 +53,10 @@ mod tests {
         }
     }
 
+    /// 日本語テキストを直接入力できる
     #[tokio::test]
     #[cfg_attr(feature = "ci-test", ignore)]
-    async fn test_japanese_text() {
+    async fn japanese_text_is_inputtable() {
         // 日本語テキストのテスト
         let result = type_text("こんにちは").await;
         match result {

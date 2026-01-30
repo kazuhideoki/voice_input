@@ -146,8 +146,9 @@ mod tests {
         }
     }
 
+    /// 再生中なら一時停止し記録状態にする
     #[tokio::test]
-    async fn test_pause_if_playing_when_playing() {
+    async fn pause_if_playing_pauses_and_marks_state() {
         let controller = Box::new(MockMediaController::new(true));
         let service = MediaControlService::with_controller(controller);
 
@@ -156,8 +157,9 @@ mod tests {
         assert!(service.is_paused_by_recording().unwrap());
     }
 
+    /// 再生中でなければ一時停止しない
     #[tokio::test]
-    async fn test_pause_if_playing_when_not_playing() {
+    async fn pause_if_playing_noop_when_not_playing() {
         let controller = Box::new(MockMediaController::new(false));
         let service = MediaControlService::with_controller(controller);
 
@@ -166,8 +168,9 @@ mod tests {
         assert!(!service.is_paused_by_recording().unwrap());
     }
 
+    /// 録音による一時停止状態なら再開できる
     #[tokio::test]
-    async fn test_resume_if_paused() {
+    async fn resume_if_paused_restores_playback() {
         let controller = Box::new(MockMediaController::new(true));
         let playing_ref = controller.playing.clone();
         let service = MediaControlService::with_controller(controller);
@@ -182,8 +185,9 @@ mod tests {
         assert!(!service.is_paused_by_recording().unwrap());
     }
 
+    /// 一時停止していない場合は再開が無視される
     #[tokio::test]
-    async fn test_resume_if_paused_when_not_paused() {
+    async fn resume_if_paused_noop_when_not_paused() {
         let controller = Box::new(MockMediaController::new(false));
         let playing_ref = controller.playing.clone();
         let service = MediaControlService::with_controller(controller);

@@ -171,8 +171,9 @@ mod tests {
         }
     }
 
+    /// 辞書変換が転写結果に適用される
     #[tokio::test]
-    async fn test_transcribe_with_dictionary() {
+    async fn transcription_applies_dictionary() {
         let client = Box::new(MockTranscriptionClient::new("これはテストです"));
         let dict_repo = Box::new(MockDictRepo::new());
         let service = TranscriptionService::new(client, dict_repo, 1);
@@ -188,8 +189,9 @@ mod tests {
         assert_eq!(result, "これはtestです");
     }
 
+    /// 同時転写が制限内で完了する
     #[tokio::test]
-    async fn test_concurrent_limit() {
+    async fn concurrent_transcriptions_complete_within_limit() {
         let client = Box::new(MockTranscriptionClient::new("test"));
         let dict_repo = Box::new(MockDictRepo::new());
         let service = Arc::new(TranscriptionService::new(client, dict_repo, 1));

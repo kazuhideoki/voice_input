@@ -8,30 +8,34 @@ fn run_cmd(args: &[&str]) -> std::process::Output {
         .expect("Failed to run command")
 }
 
+/// 廃止されたcopy-and-pasteフラグは拒否される
 #[test]
-fn test_copy_and_paste_flag_rejected() {
+fn copy_and_paste_flag_is_rejected() {
     let output = run_cmd(&["start", "--copy-and-paste"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("unexpected argument") || stderr.contains("found argument"));
 }
 
+/// 廃止されたcopy-onlyフラグは拒否される
 #[test]
-fn test_copy_only_flag_rejected() {
+fn copy_only_flag_is_rejected() {
     let output = run_cmd(&["start", "--copy-only"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("unexpected argument") || stderr.contains("found argument"));
 }
 
+/// ヘルプに廃止フラグが表示されない
 #[test]
-fn test_help_does_not_show_clipboard_flags() {
+fn help_hides_clipboard_flags() {
     let output = run_cmd(&["start", "--help"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("--copy-and-paste"));
     assert!(!stdout.contains("--copy-only"));
 }
 
+/// startコマンドがデフォルト引数で実行できる
 #[test]
-fn test_default_behavior() {
+fn start_command_accepts_default_args() {
     let output = run_cmd(&["start"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("error: unexpected argument"));

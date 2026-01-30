@@ -132,9 +132,10 @@ async fn handle_client(
 mod tests {
     use super::*;
 
+    /// サービスコンテナが初期化できる
     #[tokio::test(flavor = "current_thread")]
     #[ignore = "Requires audio device"]
-    async fn test_daemon_initialization() -> Result<()> {
+    async fn daemon_initializes_service_container() -> Result<()> {
         // サービスコンテナが正しく初期化されることを確認
         let container = ServiceContainer::<CpalAudioBackend>::new();
 

@@ -103,6 +103,7 @@ pub trait DictRepository: Send + Sync {
 mod tests {
     use super::*;
 
+    /// 置換時にテキストとヒット数が更新される
     #[test]
     fn replace_updates_hits_and_text() {
         let mut entries = vec![
@@ -126,6 +127,7 @@ mod tests {
         assert_eq!(entries[1].hit, 2); // bar appeared once, plus previous 1
     }
 
+    /// Draft状態のエントリは置換対象にならない
     #[test]
     fn draft_entries_are_ignored() {
         let mut entries = vec![

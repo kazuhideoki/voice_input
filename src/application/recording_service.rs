@@ -271,8 +271,9 @@ mod tests {
         }
     }
 
+    /// 録音中のみキャンセルチャネルが取得できる
     #[tokio::test]
-    async fn test_cancel_channel_behavior() {
+    async fn cancel_channel_available_only_while_recording() {
         // RecordingServiceを作成
         let backend = MockAudioBackend::new();
         let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
@@ -308,8 +309,9 @@ mod tests {
         );
     }
 
+    /// 複数回の開始・停止サイクルが成立する
     #[tokio::test]
-    async fn test_multiple_start_stop_cycles() {
+    async fn multiple_start_stop_cycles_work() {
         let backend = MockAudioBackend::new();
         let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
         let config = RecordingConfig {
@@ -348,8 +350,9 @@ mod tests {
         }
     }
 
+    /// コンテキスト状態が期待通りに遷移する
     #[test]
-    fn test_context_state_transitions() {
+    fn context_state_transitions_are_consistent() {
         let backend = MockAudioBackend::new();
         let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
         let config = RecordingConfig {

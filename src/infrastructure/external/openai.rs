@@ -144,15 +144,17 @@ mod tests {
     use super::*;
     use crate::infrastructure::audio::cpal_backend::AudioData;
 
+    /// 転写レスポンスのJSONをパースできる
     #[test]
-    fn parse_transcription_response_json() {
+    fn transcription_response_parses_json() {
         let json = r#"{"text":"こんにちは"}"#;
         let resp: TranscriptionResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.text, "こんにちは");
     }
 
+    /// APIキー有無に応じてクライアント生成結果が変わる
     #[tokio::test]
-    async fn test_openai_client_new() {
+    async fn openai_client_new_respects_api_key_presence() {
         // テスト用の初期化（既に初期化済みなら何もしない）
         EnvConfig::test_init();
 
@@ -168,8 +170,9 @@ mod tests {
         }
     }
 
+    /// ダミー音声での転写がエラーになることを確認する
     #[tokio::test]
-    async fn test_transcribe_audio_memory() {
+    async fn transcribe_audio_rejects_dummy_memory_audio() {
         // テスト用の初期化
         EnvConfig::test_init();
 
@@ -211,8 +214,9 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// 実在しないファイル相当の転写がエラーになることを確認する
     #[tokio::test]
-    async fn test_transcribe_audio_file() {
+    async fn transcribe_audio_rejects_missing_file_data() {
         // テスト用の初期化
         EnvConfig::test_init();
 

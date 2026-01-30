@@ -83,9 +83,10 @@ fn print_results(metrics: &PerformanceMetrics) {
     println!("═══════════════════════════════════════════════");
 }
 
+/// メモリモードの録音と転写の所要時間を測定できる
 #[tokio::test]
 #[ignore]
-async fn test_performance_measurement() {
+async fn performance_measurement_in_memory_mode() {
     // OpenAI APIキーが設定されているか確認
     if env::var("OPENAI_API_KEY").is_err() {
         eprintln!("⚠️  OPENAI_API_KEY not set. Skipping performance test.");
@@ -109,9 +110,10 @@ async fn test_performance_measurement() {
     print_results(&metrics);
 }
 
+/// 30秒録音時のメモリ使用量を観測できる
 #[tokio::test]
 #[ignore]
-async fn test_memory_usage() {
+async fn memory_usage_for_30s_recording() {
     println!("\n🧪 Memory Usage Test");
     println!("Testing memory consumption with longer recording...\n");
 

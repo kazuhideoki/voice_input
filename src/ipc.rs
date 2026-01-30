@@ -157,8 +157,9 @@ mod tests {
         }
     }
 
+    /// 環境変数が未設定ならデフォルトのソケットパスを使う
     #[test]
-    fn test_socket_path_default() {
+    fn socket_path_uses_default_when_env_unset() {
         with_env_lock(|| {
             let orig_path = store_env("VOICE_INPUT_SOCKET_PATH");
             let orig_dir = store_env("VOICE_INPUT_SOCKET_DIR");
@@ -172,8 +173,9 @@ mod tests {
         });
     }
 
+    /// ソケットパス環境変数が設定されていれば優先される
     #[test]
-    fn test_socket_path_env_override() {
+    fn socket_path_uses_env_override() {
         with_env_lock(|| {
             let orig_path = store_env("VOICE_INPUT_SOCKET_PATH");
             let orig_dir = store_env("VOICE_INPUT_SOCKET_DIR");
@@ -187,8 +189,9 @@ mod tests {
         });
     }
 
+    /// ソケットディレクトリ環境変数が設定されていれば反映される
     #[test]
-    fn test_socket_dir_env_override() {
+    fn socket_path_uses_env_dir_override() {
         with_env_lock(|| {
             let orig_path = store_env("VOICE_INPUT_SOCKET_PATH");
             let orig_dir = store_env("VOICE_INPUT_SOCKET_DIR");
@@ -205,16 +208,18 @@ mod tests {
         });
     }
 
+    /// AudioDataDtoがバイト列を保持する
     #[test]
-    fn test_audio_data_dto_struct() {
+    fn audio_data_dto_holds_bytes() {
         let wav_data = vec![0u8, 1, 2, 3, 4, 5];
         let audio_data = AudioDataDto(wav_data.clone());
 
         assert_eq!(audio_data.0, wav_data);
     }
 
+    /// AudioDataDtoがJSONで往復できる
     #[test]
-    fn test_audio_data_dto_serde() {
+    fn audio_data_dto_roundtrips_json() {
         let wav_data = vec![0u8, 1, 2, 3, 4, 5];
         let audio_data = AudioDataDto(wav_data.clone());
 
@@ -223,8 +228,9 @@ mod tests {
         assert_eq!(deserialized.0, wav_data);
     }
 
+    /// RecordingResultが音声と時間を保持する
     #[test]
-    fn test_recording_result_creation() {
+    fn recording_result_holds_audio_and_duration() {
         let audio_data = AudioDataDto(vec![1, 2, 3]);
         let duration_ms = 1500u64;
 
@@ -237,8 +243,9 @@ mod tests {
         assert_eq!(result.audio_data.0, vec![1, 2, 3]);
     }
 
+    /// RecordingResultがフィールドを保持できる
     #[test]
-    fn test_recording_result_serialization() {
+    fn recording_result_stores_fields() {
         let audio_data = AudioDataDto(vec![10, 20, 30]);
         let duration_ms = 3000u64;
 
@@ -251,8 +258,9 @@ mod tests {
         assert_eq!(result.audio_data.0, vec![10, 20, 30]);
     }
 
+    /// AudioDataDtoがJSONでシリアライズできる
     #[test]
-    fn test_json_serialization() {
+    fn audio_data_dto_serializes_to_json() {
         let data = AudioDataDto(vec![1, 2, 3, 4, 5]);
         let json = serde_json::to_string(&data).unwrap();
         let deserialized: AudioDataDto = serde_json::from_str(&json).unwrap();
@@ -260,8 +268,9 @@ mod tests {
         assert_eq!(deserialized.0, vec![1, 2, 3, 4, 5]);
     }
 
+    /// RecordingResultがJSONで往復できる
     #[test]
-    fn test_recording_result_json() {
+    fn recording_result_roundtrips_json() {
         let result = RecordingResult {
             audio_data: AudioDataDto(vec![10, 20, 30]),
             duration_ms: 2500,
@@ -274,8 +283,9 @@ mod tests {
         assert_eq!(deserialized.audio_data.0, vec![10, 20, 30]);
     }
 
+    /// AudioDataからAudioDataDtoへ変換できる
     #[test]
-    fn test_from_audio_data_to_dto() {
+    fn audio_data_converts_to_dto() {
         let audio_data = AudioData {
             bytes: vec![1, 2, 3, 4],
             mime_type: "audio/wav",
@@ -285,15 +295,17 @@ mod tests {
         assert_eq!(dto.0, vec![1, 2, 3, 4]);
     }
 
+    /// AudioDataDtoからAudioDataへ変換できる
     #[test]
-    fn test_from_dto_to_audio_data() {
+    fn dto_converts_to_audio_data() {
         let dto = AudioDataDto(vec![5, 6, 7, 8]);
         let audio_data: AudioData = dto.into();
         assert_eq!(audio_data.bytes, vec![5, 6, 7, 8]);
     }
 
+    /// IpcCmd/IpcRespがJSONで互換性を保つ
     #[test]
-    fn test_ipc_compatibility() {
+    fn ipc_cmd_and_resp_roundtrip() {
         // Test that existing IPC commands still work
         let cmd = IpcCmd::Start {
             prompt: Some("test prompt".to_string()),
@@ -322,8 +334,9 @@ mod tests {
         assert_eq!(deserialized.msg, "Success");
     }
 
+    /// 既存IPCコマンドが後方互換で動作する
     #[test]
-    fn test_backward_compatibility() {
+    fn ipc_commands_remain_backward_compatible() {
         // 既存のIPCコマンドが引き続き動作することを確認
         let cmd = IpcCmd::Start { prompt: None };
         let json = serde_json::to_string(&cmd).unwrap();

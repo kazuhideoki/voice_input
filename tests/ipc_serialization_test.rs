@@ -1,7 +1,8 @@
 use voice_input::ipc::IpcCmd;
 
+/// Startコマンドがシリアライズ/デシリアライズで保持される
 #[test]
-fn test_ipccmd_serialization_start() {
+fn start_command_serializes_roundtrip() {
     let start_cmd = IpcCmd::Start {
         prompt: Some("test prompt".to_string()),
     };
@@ -17,8 +18,9 @@ fn test_ipccmd_serialization_start() {
     }
 }
 
+/// Toggleコマンドがシリアライズ/デシリアライズで保持される
 #[test]
-fn test_ipccmd_serialization_toggle() {
+fn toggle_command_serializes_roundtrip() {
     let toggle_cmd = IpcCmd::Toggle { prompt: None };
 
     let json = serde_json::to_string(&toggle_cmd).unwrap();
@@ -32,8 +34,9 @@ fn test_ipccmd_serialization_toggle() {
     }
 }
 
+/// 各種IpcCmdがJSONラウンドトリップで同一になる
 #[test]
-fn test_ipccmd_json_roundtrip() {
+fn ipc_cmds_roundtrip_via_json() {
     // Test various combinations
     let commands = vec![
         IpcCmd::Start { prompt: None },
@@ -59,8 +62,9 @@ fn test_ipccmd_json_roundtrip() {
     }
 }
 
+/// StartコマンドのJSONに必要なフィールドが含まれる
 #[test]
-fn test_ipccmd_json_format() {
+fn start_command_json_format_contains_prompt() {
     // Verify the actual JSON format
     let cmd = IpcCmd::Start {
         prompt: Some("test".to_string()),

@@ -1,9 +1,10 @@
 use std::time::Duration;
 use super::*;
 
+/// メモリモードで録音から転写まで完了しファイルを作成しない
 #[tokio::test]
 #[cfg_attr(feature = "ci-test", ignore)]
-async fn test_memory_mode_end_to_end() -> Result<(), Box<dyn std::error::Error>> {
+async fn memory_mode_records_and_transcribes_end_to_end() -> Result<(), Box<dyn std::error::Error>> {
     // デーモン起動（メモリモード）
     let daemon = start_voice_inputd()?;
     wait_for_daemon_ready()?;
@@ -44,9 +45,10 @@ async fn test_memory_mode_end_to_end() -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+/// メモリモードで長時間録音しても転写できる
 #[tokio::test]
 #[cfg_attr(feature = "ci-test", ignore)]
-async fn test_memory_mode_long_recording() -> Result<(), Box<dyn std::error::Error>> {
+async fn memory_mode_handles_long_recording() -> Result<(), Box<dyn std::error::Error>> {
     // デーモン起動（メモリモード）
     let daemon = start_voice_inputd()?;
     wait_for_daemon_ready()?;
@@ -73,9 +75,10 @@ async fn test_memory_mode_long_recording() -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+/// メモリモードで連続録音しても安定して動作する
 #[tokio::test]
 #[cfg_attr(feature = "ci-test", ignore)]
-async fn test_memory_mode_multiple_recordings() -> Result<(), Box<dyn std::error::Error>> {
+async fn memory_mode_handles_multiple_recordings() -> Result<(), Box<dyn std::error::Error>> {
     // デーモン起動（メモリモード）
     let daemon = start_voice_inputd()?;
     wait_for_daemon_ready()?;
@@ -112,9 +115,10 @@ async fn test_memory_mode_multiple_recordings() -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+/// 無効なコマンド送信後も録音が継続される
 #[tokio::test]
 #[cfg_attr(feature = "ci-test", ignore)]
-async fn test_memory_mode_error_handling() -> Result<(), Box<dyn std::error::Error>> {
+async fn memory_mode_continues_after_invalid_command() -> Result<(), Box<dyn std::error::Error>> {
     // デーモン起動（メモリモード）
     let daemon = start_voice_inputd()?;
     wait_for_daemon_ready()?;

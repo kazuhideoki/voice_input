@@ -100,6 +100,7 @@ fn kill_daemon(tmp: &TempDir, child: &mut Child) {
     let _ = fs::remove_file(socket_path(tmp));
 }
 
+/// デバイス一覧コマンドが成功する
 #[test]
 #[cfg_attr(feature = "ci-test", ignore)]
 fn list_devices_runs() -> Result<(), Box<dyn std::error::Error>> {
@@ -115,6 +116,7 @@ fn list_devices_runs() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// toggleコマンドで開始と停止ができる
 #[test]
 #[cfg_attr(feature = "ci-test", ignore)]
 fn toggle_start_stop() -> Result<(), Box<dyn std::error::Error>> {
@@ -134,6 +136,7 @@ fn toggle_start_stop() -> Result<(), Box<dyn std::error::Error>> {
     kill_daemon(&tmp, &mut daemon);
     Ok(())
 }
+/// statusコマンドがIdle状態を返す
 #[test]
 #[cfg_attr(feature = "ci-test", ignore)]
 fn status_returns_idle() -> Result<(), Box<dyn std::error::Error>> {
@@ -149,6 +152,7 @@ fn status_returns_idle() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// healthコマンドが成功する
 #[test]
 #[cfg_attr(feature = "ci-test", ignore)]
 fn health_check_runs() -> Result<(), Box<dyn std::error::Error>> {
@@ -164,6 +168,7 @@ fn health_check_runs() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// 辞書の追加・一覧・削除ができる
 #[test]
 #[cfg_attr(feature = "ci-test", ignore)]
 fn dict_add_list_remove() -> Result<(), Box<dyn std::error::Error>> {
@@ -193,6 +198,7 @@ fn dict_add_list_remove() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// dict-path変更時に辞書が移動される
 #[test]
 #[cfg_attr(feature = "ci-test", ignore)]
 fn config_set_moves_dict() -> Result<(), Box<dyn std::error::Error>> {

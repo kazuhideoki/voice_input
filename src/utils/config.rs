@@ -94,8 +94,9 @@ impl EnvConfig {
 mod tests {
     use super::*;
 
+    /// 環境変数設定を初期化できる
     #[test]
-    fn test_env_config_init() {
+    fn env_config_can_initialize() {
         // テスト用初期化
         EnvConfig::test_init();
 
@@ -107,8 +108,9 @@ mod tests {
         assert!(config.openai_api_key.is_some() || config.openai_api_key.is_none());
     }
 
+    /// テスト用初期化を繰り返しても取得できる
     #[test]
-    fn test_env_config_test_init() {
+    fn init_is_idempotent_for_tests() {
         // test_init()を呼び出して既存の設定を確認
         EnvConfig::test_init();
 

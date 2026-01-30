@@ -33,9 +33,10 @@ fn send_ipc_cmd(cmd: &IpcCmd) -> Result<IpcResp, Box<dyn std::error::Error>> {
     Ok(resp)
 }
 
+/// デーモン起動時にStartコマンドへ応答できる
 #[test]
 #[ignore] // デーモンが起動している必要があるため、通常のテストでは無視
-fn test_direct_input_flag_e2e() {
+fn start_command_responds_in_daemon() {
     // Startコマンドを送信
     let cmd = IpcCmd::Start { prompt: None };
 
@@ -52,9 +53,10 @@ fn test_direct_input_flag_e2e() {
     }
 }
 
+/// 旧フラグ廃止後もStartコマンドが通る
 #[test]
 #[ignore]
-fn test_no_direct_input_flag_e2e() {
+fn start_command_works_without_deprecated_flag() {
     // Startコマンドを送信（旧フラグは廃止）
     let cmd = IpcCmd::Start { prompt: None };
 
@@ -69,9 +71,10 @@ fn test_no_direct_input_flag_e2e() {
     }
 }
 
+/// Toggleコマンドがプロンプト付きでも成功する
 #[test]
 #[ignore]
-fn test_toggle_with_direct_input_e2e() {
+fn toggle_command_with_prompt_succeeds() {
     // Toggleコマンドを送信
     let cmd = IpcCmd::Toggle {
         prompt: Some("test prompt".to_string()),
@@ -88,9 +91,10 @@ fn test_toggle_with_direct_input_e2e() {
     }
 }
 
+/// Statusコマンドが録音状態を返す
 #[test]
 #[ignore]
-fn test_status_command_e2e() {
+fn status_command_reports_recording_state() {
     // Statusコマンドは常に動作するはず
     let cmd = IpcCmd::Status;
 
@@ -107,8 +111,9 @@ fn test_status_command_e2e() {
     }
 }
 
+/// IpcCmdがJSONに正しくシリアライズされる
 #[test]
-fn test_ipc_cmd_json_format() {
+fn ipc_cmd_serializes_to_json() {
     // IpcCmdが正しくJSONにシリアライズされることを確認
     let cmd = IpcCmd::Start {
         prompt: Some("test".to_string()),

@@ -280,8 +280,9 @@ pub mod test_helpers {
 mod tests {
     use super::test_helpers::*;
 
+    /// テスト用のサービスコンテナを構築できる
     #[tokio::test]
-    async fn test_service_container_creation() {
+    async fn service_container_can_be_built() {
         // テスト用のEnvConfig初期化
         let _ = crate::utils::config::EnvConfig::init();
 
@@ -293,8 +294,9 @@ mod tests {
         assert!(container.transcription_rx.is_some());
     }
 
+    /// transcription_rxは一度だけ取得できる
     #[tokio::test]
-    async fn test_take_transcription_rx() {
+    async fn transcription_rx_can_be_taken_once() {
         // テスト用のEnvConfig初期化
         let _ = crate::utils::config::EnvConfig::init();
 

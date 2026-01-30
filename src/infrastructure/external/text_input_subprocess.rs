@@ -88,9 +88,10 @@ pub async fn type_text_via_subprocess(text: &str) -> Result<(), SubprocessInputE
 mod tests {
     use super::*;
 
+    /// サブプロセス経由で複数テキストを入力できる
     #[tokio::test]
     #[ignore] // 手動実行用
-    async fn test_subprocess_input() {
+    async fn subprocess_inputs_multiple_texts() {
         let test_texts = vec![
             "Hello, World!",
             "こんにちは、世界！",

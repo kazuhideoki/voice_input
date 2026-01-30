@@ -61,6 +61,7 @@ mod tests {
         (repo, tmp)
     }
 
+    /// 辞書ファイルが存在しない場合は空で返る
     #[test]
     fn load_returns_empty_when_file_missing() {
         let (repo, _tmp) = repo_in_tmp();
@@ -68,6 +69,7 @@ mod tests {
         assert!(entries.is_empty());
     }
 
+    /// 保存した辞書を再読込できる
     #[test]
     fn save_and_load_roundtrip() {
         let (repo, _tmp) = repo_in_tmp();
@@ -85,6 +87,7 @@ mod tests {
         assert_eq!(loaded[0].hit, list[0].hit);
     }
 
+    /// upsertで追加と更新ができる
     #[test]
     fn upsert_adds_and_updates() {
         let (repo, _tmp) = repo_in_tmp();
@@ -111,6 +114,7 @@ mod tests {
         assert_eq!(loaded[0].hit, 2);
     }
 
+    /// deleteでエントリが削除される
     #[test]
     fn delete_removes_entry() {
         let (repo, _tmp) = repo_in_tmp();

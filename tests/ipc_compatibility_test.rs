@@ -1,7 +1,8 @@
 use voice_input::ipc::IpcCmd;
 
+/// プロンプトが省略された旧形式でもデシリアライズできる
 #[test]
-fn test_backward_compatibility_without_prompt() {
+fn backward_compatibility_without_prompt() {
     // prompt が省略された旧形式でも受け付ける
     let old_json = r#"{"Start":{}}"#;
 
@@ -9,8 +10,9 @@ fn test_backward_compatibility_without_prompt() {
     assert!(result.is_ok(), "Expected deserialization to succeed");
 }
 
+/// 旧クライアント由来の余計なフィールドを無視して受け入れる
 #[test]
-fn test_backward_compatibility_with_extra_fields() {
+fn backward_compatibility_with_extra_fields() {
     // 旧クライアントのフィールドが混在しても無視される
     let json_with_extra = r#"{"Start":{"paste":true,"prompt":"test","direct_input":false}}"#;
     let cmd: IpcCmd = serde_json::from_str(json_with_extra).unwrap();
@@ -23,8 +25,9 @@ fn test_backward_compatibility_with_extra_fields() {
     }
 }
 
+/// Toggleコマンドが余計なフィールドを含んでも受け付ける
 #[test]
-fn test_toggle_backward_compatibility() {
+fn toggle_accepts_extra_fields() {
     // Test Toggle command compatibility with extra fields
     let old_json = r#"{"Toggle":{"paste":false,"prompt":null,"direct_input":true}}"#;
 
@@ -32,8 +35,9 @@ fn test_toggle_backward_compatibility() {
     assert!(result.is_ok(), "Expected deserialization to succeed");
 }
 
+/// 他のコマンドは従来通りデシリアライズできる
 #[test]
-fn test_other_commands_unchanged() {
+fn other_commands_remain_compatible() {
     // Test that other commands work as before
     let commands = vec![
         (r#"{"Stop":null}"#, "Stop"),
@@ -55,8 +59,9 @@ fn test_other_commands_unchanged() {
     }
 }
 
+/// 未知フィールドがあっても前方互換で無視される
 #[test]
-fn test_future_compatibility() {
+fn forward_compatibility_ignores_unknown_fields() {
     // Test that extra fields in JSON are ignored (forward compatibility)
     let json_with_extra = r#"{"Start":{"prompt":"test","future_field":"ignored"}}"#;
 

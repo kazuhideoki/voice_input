@@ -1,7 +1,8 @@
 use voice_input::infrastructure::audio::cpal_backend::CpalAudioBackend;
 
+/// WAVヘッダーがRIFF/format/data構造を満たす
 #[test]
-fn test_wav_header_structure() {
+fn wav_header_has_expected_structure() {
     // 1秒のステレオ16bit 48kHzオーディオ
     let data_len = 48000 * 2 * 2; // sample_rate * channels * bytes_per_sample
     let header = CpalAudioBackend::create_wav_header(data_len, 48000, 2, 16);
@@ -38,8 +39,9 @@ fn test_wav_header_structure() {
     assert_eq!(data_size, data_len);
 }
 
+/// モノラル設定のWAVヘッダーが正しい
 #[test]
-fn test_wav_header_mono() {
+fn wav_header_supports_mono() {
     // モノラル設定でのヘッダー生成
     let data_len = 44100 * 1 * 2; // 44.1kHz, mono, 16bit
     let header = CpalAudioBackend::create_wav_header(data_len, 44100, 1, 16);
@@ -59,8 +61,9 @@ fn test_wav_header_mono() {
     assert_eq!(block_align, 2); // 1 channel * 16 bits / 8
 }
 
+/// サンプルレートがヘッダーに正しく反映される
 #[test]
-fn test_wav_header_various_sample_rates() {
+fn wav_header_reflects_sample_rate() {
     let sample_rates = vec![8000, 16000, 22050, 44100, 48000, 96000];
     
     for rate in sample_rates {
@@ -75,8 +78,9 @@ fn test_wav_header_various_sample_rates() {
     }
 }
 
+/// データ長0でもWAVヘッダーを生成できる
 #[test]
-fn test_wav_header_empty_data() {
+fn wav_header_allows_empty_data() {
     // データ長0でのヘッダー生成
     let header = CpalAudioBackend::create_wav_header(0, 48000, 2, 16);
     

@@ -70,8 +70,9 @@ mod tests {
         }
     }
 
+    /// stopがAudioDataを返す
     #[test]
-    fn test_recorder_stop() {
+    fn stop_returns_audio_data() {
         let backend = MockAudioBackend::new(true);
         let mut recorder = Recorder::new(backend);
 

@@ -4,9 +4,10 @@
 //! 予期しない早期停止が発生しないことを保証します。
 
 // 代わりに、統合テストとして実装
+/// 自動停止タイマーが約30秒で録音を停止する
 #[tokio::test(flavor = "current_thread")]
 #[ignore] // デーモンが必要なためignore
-async fn test_recording_auto_stop_integration() {
+async fn recording_auto_stop_after_30s() {
     use std::process::Command;
     use std::time::{Duration, Instant};
 

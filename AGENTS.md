@@ -26,6 +26,12 @@
 - Tests are written with Rust’s built-in test framework; name files `*_test.rs` and place shared helpers in `tests/common/`.
 - Mark device/daemon-dependent tests with `#[cfg_attr(feature = "ci-test", ignore)]`.
 - Use `cargo test --features ci-test` for CI parity.
+- Test function names must not use `test_` / `_test` prefixes or suffixes (e.g., `test_*`, `*_test`).
+- Test function names should clearly describe the verification intent.
+- Every test must include a Japanese doc comment that explains the specification.
+- Example:
+  - `/// データが登録出来る`
+  - `enable_data_recording()`
 
 ## Commit & Pull Request Guidelines
 - Commit messages are short and descriptive (often Japanese), sometimes prefixed with verbs like `fix`, `delete`, or `doc`. Keep them concise and action-oriented.

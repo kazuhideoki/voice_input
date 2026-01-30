@@ -67,10 +67,10 @@ async fn set_clipboard_content(content: &str) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
+/// 直接入力モードではクリップボード内容が保持される
 #[tokio::test]
 #[ignore] // 手動実行用：cargo test --test integration_test -- --ignored
-async fn test_voice_input_direct_mode_preserves_clipboard() -> Result<(), Box<dyn std::error::Error>>
-{
+async fn direct_mode_preserves_clipboard_content() -> Result<(), Box<dyn std::error::Error>> {
     // 1. テスト用のクリップボード内容を設定
     let test_clipboard_content = "Test clipboard content - should not be changed";
     set_clipboard_content(test_clipboard_content).await?;
@@ -120,9 +120,10 @@ async fn test_voice_input_direct_mode_preserves_clipboard() -> Result<(), Box<dy
     Ok(())
 }
 
+/// デーモンがIPCコマンドを受け付ける
 #[tokio::test]
 #[ignore] // 手動実行用
-async fn test_daemon_ipc_communication() -> Result<(), Box<dyn std::error::Error>> {
+async fn daemon_accepts_ipc_commands() -> Result<(), Box<dyn std::error::Error>> {
     // 1. デーモンを起動
     let daemon = DaemonProcess::start().await?;
 
