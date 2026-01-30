@@ -2,3 +2,4 @@
 .mcp.json
 .DS_Store
 .env
+AGENTS.override.md
