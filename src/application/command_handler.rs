@@ -22,6 +22,7 @@ use crate::infrastructure::{
     external::sound::{play_start_sound, play_stop_sound},
 };
 use crate::ipc::{IpcCmd, IpcResp, RecordingResult};
+use crate::utils::profiling;
 
 /// 転写メッセージ
 pub type TranscriptionMessage = (
@@ -111,6 +112,8 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         // コンテキスト情報を取得
         let (_start_prompt, music_was_playing) = self.recording.borrow().get_context_info()?;
 
+        let audio_bytes = result.audio_data.0.len();
+
         // 転写キューに送信
         self.transcription_tx
             .send((result, music_was_playing))
@@ -120,6 +123,10 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                     e
                 ))
             })?;
+
+        if profiling::enabled() {
+            profiling::log_point("transcription.queued", &format!("bytes={}", audio_bytes));
+        }
 
         Ok(IpcResp {
             ok: true,

@@ -2,6 +2,7 @@
 //! WAV ファイルを multipart/form-data で転写エンドポイントに送信します。
 use crate::infrastructure::audio::cpal_backend::AudioData;
 use crate::utils::config::EnvConfig;
+use crate::utils::profiling;
 use reqwest::{Client, Proxy, multipart};
 use serde::Deserialize;
 
@@ -49,6 +50,18 @@ impl OpenAiClient {
 
     /// AudioDataから直接転写を実行
     pub async fn transcribe_audio(&self, audio_data: AudioData) -> Result<String, String> {
+        if profiling::enabled() {
+            profiling::log_point(
+                "openai.request",
+                &format!(
+                    "bytes={} mime={} model={}",
+                    audio_data.bytes.len(),
+                    audio_data.mime_type,
+                    self.model
+                ),
+            );
+        }
+
         let part = multipart::Part::bytes(audio_data.bytes)
             .file_name(audio_data.file_name)
             .mime_str(audio_data.mime_type)
@@ -64,6 +77,7 @@ impl OpenAiClient {
         file_part: multipart::Part,
         prompt: Option<&str>,
     ) -> Result<String, String> {
+        let overall_timer = profiling::Timer::start("openai.transcribe_total");
         let url = "https://api.openai.com/v1/audio/transcriptions";
 
         // multipart/form-data
@@ -81,30 +95,56 @@ impl OpenAiClient {
         }
 
         // 送信
-        let response = self
+        let request = self
             .client
             .post(url)
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .multipart(form)
+            .multipart(form);
+
+        let send_timer = profiling::Timer::start("openai.send");
+        let response = request
             .send()
             .await
             .map_err(|e| format!("Failed to send request: {}", e))?;
+        send_timer.log();
 
         let status = response.status();
+        let read_timer = profiling::Timer::start("openai.read_body");
         let body = response
             .text()
             .await
             .map_err(|e| format!("Failed to read response: {}", e))?;
+        if profiling::enabled() {
+            read_timer.log_with(&format!("status={} bytes={}", status, body.len()));
+        } else {
+            read_timer.log();
+        }
 
         if !status.is_success() {
+            if profiling::enabled() {
+                overall_timer.log_with(&format!("status={}", status));
+            } else {
+                overall_timer.log();
+            }
             return Err(format!(
                 "API request failed with status {}: {}",
                 status, body
             ));
         }
 
+        let parse_timer = profiling::Timer::start("openai.parse_json");
         let transcription: TranscriptionResponse =
             serde_json::from_str(&body).map_err(|e| format!("Failed to parse response: {}", e))?;
+        parse_timer.log();
+        if profiling::enabled() {
+            overall_timer.log_with(&format!(
+                "status={} text_len={}",
+                status,
+                transcription.text.len()
+            ));
+        } else {
+            overall_timer.log();
+        }
         Ok(transcription.text)
     }
 }

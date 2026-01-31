@@ -1,6 +1,7 @@
 use super::AudioBackend;
 use super::encoder::{self, AudioFormat};
 use crate::utils::config::EnvConfig;
+use crate::utils::profiling;
 use cpal::{
     Device, SampleFormat, Stream, StreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -426,6 +427,33 @@ impl CpalAudioBackend {
         Cow::Owned(samples[start_idx..end_idx].to_vec())
     }
 
+    fn downmix_to_mono(samples: &[i16], channels: u16) -> Vec<i16> {
+        let channels = channels as usize;
+        if channels <= 1 {
+            return samples.to_vec();
+        }
+
+        // フレームごとに平均してモノラル化する（ステレオ/多ch対応）
+        let mut mono = Vec::with_capacity(samples.len() / channels + 1);
+        let mut iter = samples.chunks_exact(channels);
+
+        for frame in &mut iter {
+            let sum: i32 = frame.iter().map(|&s| s as i32).sum();
+            let avg = sum / channels as i32;
+            mono.push(avg.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
+        }
+
+        // 端数フレームがある場合は平均して最後の1サンプルにまとめる
+        let remainder = iter.remainder();
+        if !remainder.is_empty() {
+            let sum: i32 = remainder.iter().map(|&s| s as i32).sum();
+            let avg = sum / remainder.len() as i32;
+            mono.push(avg.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
+        }
+
+        mono
+    }
+
     /// 利用可能な入力デバイス名を返すユーティリティ
     pub fn list_devices() -> Vec<String> {
         let host = cpal::default_host();
@@ -521,6 +549,7 @@ impl AudioBackend for CpalAudioBackend {
 
     /// 録音を停止し、音声データを返します。
     fn stop_recording(&self) -> Result<AudioData, Box<dyn Error>> {
+        let overall_timer = profiling::Timer::start("audio.stop_recording");
         if !self.is_recording() {
             return Err(CpalBackendError::NotRecording.into());
         }
@@ -539,19 +568,58 @@ impl AudioBackend for CpalAudioBackend {
 
         // メモリモード: バッファからエンコード（既定: FLAC）
         let samples = state.buffer.lock().unwrap();
+        let samples_len = samples.len();
+        let trim_timer = profiling::Timer::start("audio.trim_silence");
         let trimmed = Self::trim_silence(&samples, state.sample_rate, state.channels);
-        match Self::preferred_format() {
+        if profiling::enabled() {
+            trim_timer.log_with(&format!(
+                "samples={} trimmed={} rate={} ch={}",
+                samples_len,
+                trimmed.len(),
+                state.sample_rate,
+                state.channels
+            ));
+        } else {
+            trim_timer.log();
+        }
+
+        // エンコード前にモノラル化して送信サイズを減らす
+        let (processed_samples, processed_channels) = if state.channels > 1 {
+            let mono = Self::downmix_to_mono(trimmed.as_ref(), state.channels);
+            (Cow::Owned(mono), 1u16)
+        } else {
+            (trimmed, state.channels)
+        };
+
+        let result = match Self::preferred_format() {
             AudioFormat::Flac => {
-                match encoder::flac::encode_flac_i16(&trimmed, state.sample_rate, state.channels) {
-                    Ok(flac) => Ok(AudioData {
-                        bytes: flac,
-                        mime_type: "audio/flac",
-                        file_name: "audio.flac".to_string(),
-                    }),
+                let encode_timer = profiling::Timer::start("audio.encode_flac");
+                match encoder::flac::encode_flac_i16(
+                    &processed_samples,
+                    state.sample_rate,
+                    processed_channels,
+                ) {
+                    Ok(flac) => {
+                        if profiling::enabled() {
+                            encode_timer.log_with(&format!("bytes={}", flac.len()));
+                        } else {
+                            encode_timer.log();
+                        }
+                        Ok(AudioData {
+                            bytes: flac,
+                            mime_type: "audio/flac",
+                            file_name: "audio.flac".to_string(),
+                        })
+                    }
                     Err(e) => {
+                        encode_timer.log();
                         eprintln!("FLAC encode failed (fallback to WAV): {}", e);
-                        let wav =
-                            Self::combine_wav_data(&trimmed, state.sample_rate, state.channels)?;
+                        profiling::log_point("audio.encode_flac.error", "fallback=wav");
+                        let wav = Self::combine_wav_data(
+                            &processed_samples,
+                            state.sample_rate,
+                            processed_channels,
+                        )?;
                         Ok(AudioData {
                             bytes: wav,
                             mime_type: "audio/wav",
@@ -561,14 +629,42 @@ impl AudioBackend for CpalAudioBackend {
                 }
             }
             AudioFormat::Wav => {
-                let wav = Self::combine_wav_data(&trimmed, state.sample_rate, state.channels)?;
+                let encode_timer = profiling::Timer::start("audio.encode_wav");
+                let wav =
+                    Self::combine_wav_data(&processed_samples, state.sample_rate, processed_channels)?;
+                if profiling::enabled() {
+                    encode_timer.log_with(&format!("bytes={}", wav.len()));
+                } else {
+                    encode_timer.log();
+                }
                 Ok(AudioData {
                     bytes: wav,
                     mime_type: "audio/wav",
                     file_name: "audio.wav".to_string(),
                 })
             }
+        };
+
+        if profiling::enabled() {
+            if let Ok(data) = result.as_ref() {
+                profiling::log_point("audio.converted_size", &format!("bytes={}", data.bytes.len()));
+            }
         }
+
+        if profiling::enabled() {
+            match result.as_ref() {
+                Ok(data) => overall_timer.log_with(&format!(
+                    "bytes={} mime={}",
+                    data.bytes.len(),
+                    data.mime_type
+                )),
+                Err(_) => overall_timer.log(),
+            }
+        } else {
+            overall_timer.log();
+        }
+
+        result
     }
 
     /// 録音中かどうかを確認します。

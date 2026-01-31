@@ -16,6 +16,7 @@ use crate::application::{TranscriptionMessage, TranscriptionOptions, Transcripti
 use crate::error::Result;
 use crate::infrastructure::external::{sound::resume_apple_music, text_input};
 use crate::ipc::RecordingResult;
+use crate::utils::profiling;
 
 /// 転写結果を処理
 pub async fn handle_transcription(
@@ -23,6 +24,8 @@ pub async fn handle_transcription(
     resume_music: bool,
     transcription_service: Rc<RefCell<TranscriptionService>>,
 ) -> Result<()> {
+    let overall_timer = profiling::Timer::start("transcription.handle");
+
     // エラーが発生しても確実に音楽を再開するためにdeferパターンで実装
     let _defer_guard = scopeguard::guard(resume_music, |should_resume| {
         if should_resume {
@@ -46,12 +49,30 @@ pub async fn handle_transcription(
 
     // 直接入力で即貼り付け
     tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+    let input_timer = profiling::Timer::start("text_input");
     match text_input::type_text(&text).await {
-        Ok(_) => {}
+        Ok(_) => {
+            if profiling::enabled() {
+                input_timer.log_with(&format!("ok=true text_len={}", text.len()));
+            } else {
+                input_timer.log();
+            }
+        }
         Err(e) => {
+            if profiling::enabled() {
+                input_timer.log_with(&format!("ok=false text_len={}", text.len()));
+            } else {
+                input_timer.log();
+            }
             eprintln!("Direct input failed: {}", e);
             // フォールバック処理は削除（クリップボードを汚染しないため）
         }
+    }
+
+    if profiling::enabled() {
+        overall_timer.log_with(&format!("text_len={}", text.len()));
+    } else {
+        overall_timer.log();
     }
 
     Ok(())

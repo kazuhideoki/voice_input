@@ -2,6 +2,7 @@
 //!
 //! rdevとの競合を避けるため、別プロセスでEnigo操作を実行
 
+use crate::utils::profiling;
 use std::error::Error;
 use std::fmt;
 use tokio::process::Command;
@@ -54,11 +55,24 @@ pub async fn type_text_via_subprocess(text: &str) -> Result<(), SubprocessInputE
         .join("enigo_helper");
 
     // サブプロセスを起動してテキストを入力
+    let timer = profiling::Timer::start("text_input.subprocess");
     let output = Command::new(&helper_path)
         .arg(text)
         .output()
         .await
         .map_err(|e| SubprocessInputError::SpawnError(format!("{}: {:?}", e, helper_path)))?;
+
+    if profiling::enabled() {
+        timer.log_with(&format!(
+            "ok={} code={:?} text_len={} stderr_bytes={}",
+            output.status.success(),
+            output.status.code(),
+            text.len(),
+            output.stderr.len()
+        ));
+    } else {
+        timer.log();
+    }
 
     if output.status.success() {
         Ok(())

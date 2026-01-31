@@ -13,6 +13,7 @@ use crate::domain::dict::{DictRepository, apply_replacements};
 use crate::error::{Result, VoiceInputError};
 use crate::infrastructure::audio::cpal_backend::AudioData;
 use crate::infrastructure::dict::JsonFileDictRepo;
+use crate::utils::profiling;
 
 /// 転写オプション
 #[derive(Clone, Debug)]
@@ -71,17 +72,36 @@ impl TranscriptionService {
         audio: AudioData,
         options: TranscriptionOptions,
     ) -> Result<String> {
+        let overall_timer = profiling::Timer::start("transcription.total");
+
         // セマフォで同時実行数を制限
         let _permit = self.semaphore.acquire().await.map_err(|e| {
             VoiceInputError::SystemError(format!("Semaphore acquire failed: {}", e))
         })?;
 
         // 転写実行
+        let api_timer = profiling::Timer::start("transcription.api");
         let text = self.client.transcribe(audio, &options.language).await?;
+        api_timer.log();
 
         // 辞書変換を適用
+        let dict_timer = profiling::Timer::start("transcription.dict");
         let processed = self.apply_dictionary(&text)?;
+        if profiling::enabled() {
+            dict_timer.log_with(&format!(
+                "text_len={} processed_len={}",
+                text.len(),
+                processed.len()
+            ));
+        } else {
+            dict_timer.log();
+        }
 
+        if profiling::enabled() {
+            overall_timer.log_with(&format!("processed_len={}", processed.len()));
+        } else {
+            overall_timer.log();
+        }
         Ok(processed)
     }
 
@@ -112,7 +132,9 @@ impl TranscriptionService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::profiling;
     use async_trait::async_trait;
+    use scopeguard::guard;
     use std::sync::Mutex;
 
     /// テスト用のモック転写クライアント
@@ -187,6 +209,28 @@ mod tests {
 
         let result = service.transcribe(audio, options).await.unwrap();
         assert_eq!(result, "これはtestです");
+    }
+
+    /// 転写処理でプロファイルログが出力される
+    #[tokio::test]
+    async fn profile_log_is_emitted_during_transcription() {
+        let _guard = guard((), |_| profiling::clear_enabled_override());
+        profiling::set_enabled_override(true);
+        profiling::reset_log_count();
+
+        let client = Box::new(MockTranscriptionClient::new("これはテストです"));
+        let dict_repo = Box::new(MockDictRepo::new());
+        let service = TranscriptionService::new(client, dict_repo, 1);
+
+        let audio = AudioData {
+            bytes: vec![0u8; 100],
+            mime_type: "audio/wav",
+            file_name: "audio.wav".to_string(),
+        };
+        let options = TranscriptionOptions::default();
+
+        let _ = service.transcribe(audio, options).await.unwrap();
+        assert!(profiling::log_count() > 0);
     }
 
     /// 同時転写が制限内で完了する
