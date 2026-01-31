@@ -21,31 +21,31 @@ path = "src/bin/voice_inputd.rs"
 # 依存クレート ― ご指定をそのまま使用
 # ─────────────────────────────────────────
 [dependencies]
-tokio = { version = "1.28.0", features = ["full"] }
-futures = "0.3.28"
+tokio = { version = "1.49.0", features = ["full"] }
+futures = "0.3.31"
 cpal = "0.15.3"
-reqwest = { version = "0.11", features = ["multipart", "json"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-dotenvy = "0.15.0"
-clap = { version = "4.5", features = ["derive"] }
-tokio-util = { version = "0.7", features = ["codec"] }
+reqwest = { version = "0.13.1", features = ["multipart", "json"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+dotenvy = "0.15.7"
+clap = { version = "4.5.56", features = ["derive"] }
+tokio-util = { version = "0.7.18", features = ["codec"] }
 directories = "6.0.0"
 scopeguard = "1.2.0"
-enigo = "0.2.0"
-chrono = "0.4"
-once_cell = "1.19"
-thiserror = "1.0"
-async-trait = "0.1"
-flacenc = "0.5"
+enigo = "0.6.1"
+chrono = "0.4.43"
+once_cell = "1.21.3"
+thiserror = "2.0.18"
+async-trait = "0.1.89"
+flacenc = "0.5.1"
 
 [features]
 default = []
 ci-test = []  # CI環境で安全に実行できるテストのみを有効化
 
 [dev-dependencies]
-tempfile = "3.8"
-criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3.24.0"
+criterion = { version = "0.8.1", features = ["html_reports"] }
 
 [[bench]]
 name = "recording"
