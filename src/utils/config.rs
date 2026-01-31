@@ -89,36 +89,3 @@ impl EnvConfig {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 環境変数設定を初期化できる
-    #[test]
-    fn env_config_can_initialize() {
-        // テスト用初期化
-        EnvConfig::test_init();
-
-        // 設定が取得できることを確認
-        let config = EnvConfig::get();
-
-        // 少なくとも設定が存在することを確認
-        // 実際の値は環境に依存するため、存在チェックのみ
-        assert!(config.openai_api_key.is_some() || config.openai_api_key.is_none());
-    }
-
-    /// テスト用初期化を繰り返しても取得できる
-    #[test]
-    fn init_is_idempotent_for_tests() {
-        // test_init()を呼び出して既存の設定を確認
-        EnvConfig::test_init();
-
-        // 設定が正しく取得できることを確認
-        let config = EnvConfig::get();
-
-        // APIキーの存在を確認
-        // 実際の値は環境に依存するため、存在チェックのみ
-        assert!(config.openai_api_key.is_some() || config.openai_api_key.is_none());
-    }
-}
