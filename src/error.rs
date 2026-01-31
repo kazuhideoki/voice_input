@@ -18,9 +18,6 @@ pub enum VoiceInputError {
     #[error("Recording already active")]
     RecordingAlreadyActive,
 
-    #[error("Audio device error: {0}")]
-    AudioDeviceError(String),
-
     #[error("Audio backend error: {0}")]
     AudioBackendError(String),
 
@@ -30,24 +27,9 @@ pub enum VoiceInputError {
     #[error("Transcription failed: {0}")]
     TranscriptionFailed(String),
 
-    #[error("OpenAI API error: {0}")]
-    OpenAiApiError(String),
-
-    #[error("OpenAI configuration error: {0}")]
-    OpenAiConfigError(String),
-
     // ========================================
     // テキスト入力エラー (SubprocessInputError統合)
     // ========================================
-    #[error("Text input spawn error: {0}")]
-    TextInputSpawnError(String),
-
-    #[error("Text input execution error: {0}")]
-    TextInputExecutionError(String),
-
-    #[error("Text input helper not found: {0}")]
-    TextInputHelperNotFound(String),
-
     // ========================================
     // IPC関連エラー
     // ========================================
@@ -57,59 +39,14 @@ pub enum VoiceInputError {
     #[error("IPC serialization error: {0}")]
     IpcSerializationError(String),
 
-    #[error("IPC channel closed")]
-    IpcChannelClosed,
-
     // ========================================
     // 設定関連エラー
     // ========================================
     #[error("Configuration initialization error: {0}")]
     ConfigInitError(String),
 
-    #[error("Configuration missing value: {0}")]
-    ConfigMissingValue(String),
-
-    // ========================================
-    // ファイルI/O関連エラー
-    // ========================================
-    #[error("File not found: {path}")]
-    FileNotFound { path: String },
-
-    #[error("File read error: {path}: {source}")]
-    FileReadError {
-        path: String,
-        source: std::io::Error,
-    },
-
-    #[error("File write error: {path}: {source}")]
-    FileWriteError {
-        path: String,
-        source: std::io::Error,
-    },
-
-    // ========================================
-    // システム関連エラー
-    // ========================================
-    #[error("Network error: {0}")]
-    NetworkError(String),
-
     #[error("System error: {0}")]
     SystemError(String),
-
-    #[error("Permission denied: {reason}")]
-    PermissionDenied { reason: String },
-
-    // ========================================
-    // 外部ライブラリからの自動変換
-    // ========================================
-    #[error("Standard I/O error")]
-    Io(#[from] std::io::Error),
-
-    #[error("JSON serialization error")]
-    SerdeJson(#[from] serde_json::Error),
-
-    #[error("HTTP request error")]
-    Reqwest(#[from] reqwest::Error),
 }
 
 /// 統一Result型エイリアス
@@ -123,13 +60,9 @@ pub type Result<T> = std::result::Result<T, VoiceInputError>;
 impl From<SubprocessInputError> for VoiceInputError {
     fn from(error: SubprocessInputError) -> Self {
         match error {
-            SubprocessInputError::SpawnError(msg) => VoiceInputError::TextInputSpawnError(msg),
-            SubprocessInputError::ExecutionError(msg) => {
-                VoiceInputError::TextInputExecutionError(msg)
-            }
-            SubprocessInputError::HelperNotFound(msg) => {
-                VoiceInputError::TextInputHelperNotFound(msg)
-            }
+            SubprocessInputError::SpawnError(msg)
+            | SubprocessInputError::ExecutionError(msg)
+            | SubprocessInputError::HelperNotFound(msg) => VoiceInputError::SystemError(msg),
         }
     }
 }
@@ -166,38 +99,20 @@ impl From<VoiceInputError> for String {
 impl VoiceInputError {
     /// エラーが再試行可能かどうかを判定
     pub fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            VoiceInputError::NetworkError(_)
-                | VoiceInputError::OpenAiApiError(_)
-                | VoiceInputError::IpcConnectionFailed(_)
-                | VoiceInputError::Reqwest(_)
-        )
+        matches!(self, VoiceInputError::IpcConnectionFailed(_))
     }
 
     /// エラーがユーザーアクションで解決可能かどうかを判定
     pub fn is_user_actionable(&self) -> bool {
-        matches!(
-            self,
-            VoiceInputError::ConfigMissingValue(_)
-                | VoiceInputError::OpenAiConfigError(_)
-                | VoiceInputError::PermissionDenied { .. }
-                | VoiceInputError::TextInputHelperNotFound(_)
-        )
+        matches!(self, VoiceInputError::ConfigInitError(_))
     }
 
     /// エラーの重要度レベルを取得（ログレベル代替）
     pub fn severity(&self) -> ErrorSeverity {
         match self {
-            VoiceInputError::PermissionDenied { .. }
-            | VoiceInputError::ConfigMissingValue(_)
-            | VoiceInputError::FileNotFound { .. } => ErrorSeverity::Error,
+            VoiceInputError::ConfigInitError(_) => ErrorSeverity::Error,
 
-            VoiceInputError::NetworkError(_)
-            | VoiceInputError::OpenAiApiError(_)
-            | VoiceInputError::IpcConnectionFailed(_) => ErrorSeverity::Warning,
-
-            VoiceInputError::IpcChannelClosed => ErrorSeverity::Info,
+            VoiceInputError::IpcConnectionFailed(_) => ErrorSeverity::Warning,
 
             _ => ErrorSeverity::Debug,
         }

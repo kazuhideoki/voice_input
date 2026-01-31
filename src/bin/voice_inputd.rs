@@ -85,7 +85,10 @@ async fn async_main() -> Result<()> {
 
     // クライアント接続ループ
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, _) = listener
+            .accept()
+            .await
+            .map_err(|e| VoiceInputError::IpcConnectionFailed(e.to_string()))?;
         let handler = command_handler.clone();
         spawn_local(async move {
             let _ = handle_client(stream, handler).await;
