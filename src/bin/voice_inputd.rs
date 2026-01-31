@@ -4,7 +4,7 @@
 //! CLI から Unix Domain Socket (UDS) 経由で受け取ったコマンドをハンドリングし、
 //!  - 録音の開始 / 停止
 //!  - OpenAI API を用いた文字起こし
-//!  - クリップボードへの貼り付け & Apple Music の自動ポーズ / 再開
+//!  - 直接入力 & Apple Music の自動ポーズ / 再開
 //!    を非同期・協調的に実行します。
 //!
 //! *ソケットパス*: `/tmp/voice_input.sock`

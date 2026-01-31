@@ -4,7 +4,7 @@
 - `src/` holds the Rust library and binaries; `src/bin/` contains the CLI (`voice_input`) and daemon (`voice_inputd`) entrypoints.
 - `src/application/`, `src/domain/`, and `src/infrastructure/` follow a layered architecture; shared utilities live in `src/utils/`.
 - Integration and E2E tests live in `tests/` (e.g., `tests/e2e/`, `tests/unit/`). Benchmarks are in `benches/`.
-- Developer scripts are in `scripts/`, and additional docs are in `docs/`.
+- Developer scripts are in `scripts/`, and additional docs are in `README.md`
 
 ## Build, Test, and Development Commands
 - `cargo build` / `cargo build --release`: debug or optimized builds.

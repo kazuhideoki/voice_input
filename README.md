@@ -3,7 +3,7 @@
 Rust 製の **音声録音・文字起こし CLI / デーモン** です。
 `voice_input` はクライアント CLI、`voice_inputd` はバックグラウンド常駐デーモンとして動作します。
 
-[CLI] → [/tmp/voice_input.sock] → [voice_inputd] → (録音 / 転写 / クリップボード)
+[CLI] → [/tmp/voice_input.sock] → [voice_inputd] → (録音 / 転写 / 直接入力)
 
 ## 特徴
 
@@ -27,7 +27,8 @@ cp .env.example .env
 - OPENAI_API_KEY=your_openai_api_key_here
 - OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe # デフォルト
 - INPUT_DEVICE_PRIORITY="device1,device2,device3"
-- VOICE_INPUT_USE_SUBPROCESS=true # 移行期間中の旧実装（subprocess方式）使用（非推奨）
+- VOICE_INPUT_ENV_PATH=/path/to/.env
+- XDG_DATA_HOME=/custom/xdg/data
 
 環境変数は`src/utils/config.rs`のEnvConfigで型安全に管理され、起動時に一度だけ読み込まれます。
 
@@ -155,7 +156,7 @@ voice_input toggle
 - ✅ クリップボードの内容を保持
 - ✅ 日本語・絵文字を含むすべての文字に対応
 - ✅ 既存のアクセシビリティ権限で動作
-- ✅ 高速（平均: 0.02秒）
+- ✅ 直接入力のため手動ペーストが不要
 
 デーモンと外部依存の状態をまとめて確認:
 
@@ -219,23 +220,10 @@ cargo clippy -- -D warnings
 
 ### パフォーマンス
 
-メモリ処理による高速パフォーマンスを測定できます：
+メモリ処理のパフォーマンス測定はベンチマークで行えます：
 
 ```bash
-# パフォーマンステストの実行
-# 1. OpenAI APIキーを設定
-export OPENAI_API_KEY="your_api_key_here"
-export INPUT_DEVICE_PRIORITY="device1,device2,device3"
-
-# 2. 音声デバイスの確認
-cargo run --bin voice_inputd &
-cargo run --bin voice_input -- --list-devices
-pkill voice_inputd
-
-# 3. テスト実行
-cargo test --test performance_test -- --ignored --nocapture
-
-# 4. ベンチマーク実行（詳細な性能測定）
+# ベンチマーク実行（詳細な性能測定）
 cargo bench
 ```
 
@@ -244,16 +232,10 @@ cargo bench
 - ディスクI/Oの完全排除による高速化
 - 一時ファイル作成・削除のオーバーヘッド排除
 - システムコールの削減
-- メモリ監視によるオーバーヘッド: 1%未満
 
-#### メモリ使用量の監視
+#### メモリ使用量の確認
 
-録音中のメモリ使用量はリアルタイムで監視され、設定した閾値を超えると警告が表示されます。
-
-```bash
-# メモリ監視付きベンチマークの実行
-cargo test --test benchmarks::recording_bench -- benchmark_memory_monitor_overhead --nocapture
-```
+メモリ使用量の目安はユニットテストで確認できます。
 
 ### CI/CD
 
@@ -276,8 +258,7 @@ CI実行前にローカルで品質チェックを実行できます：
 # ベンチマークを含む完全チェック
 ./scripts/quality-check.sh --bench
 
-# メモリ監視テストを含む
-./scripts/quality-check.sh --memory
+# メモリに関する測定は performance_test または bench で実行
 ```
 
 ### Rustバージョン管理
@@ -300,5 +281,4 @@ components = ["rustfmt", "clippy"]
 
 ### エージェント向けドキュメント連携
 
-- [CLAUDE.md](./CLAUDE.md)
-- [AGENTS.md](./AGENTS.md) を参照してください。
+- [AGENTS.md](./AGENTS.md)
