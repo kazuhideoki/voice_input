@@ -24,6 +24,7 @@ use voice_input::{
     application::{ServiceContainer, spawn_transcription_worker},
     error::{Result, VoiceInputError},
     infrastructure::audio::CpalAudioBackend,
+    infrastructure::external::text_input,
     ipc::{IpcCmd, IpcResp, socket_path},
     load_env,
     utils::config::EnvConfig,
@@ -76,6 +77,8 @@ async fn async_main() -> Result<()> {
             TranscriptionService::with_default_repo(Box::new(OpenAiTranscriptionAdapter::new()?)),
         ))
     };
+
+    text_input::init_worker().map_err(|e| VoiceInputError::SystemError(e.to_string()))?;
 
     spawn_local(spawn_transcription_worker(
         semaphore.clone(),

@@ -3,7 +3,7 @@
 //! このモジュールは voice_input アプリケーション全体で使用する統一エラー型を定義します。
 //! 既存の散在したエラー型を統合し、一貫したエラーハンドリングを提供します。
 
-use crate::infrastructure::external::text_input_subprocess::SubprocessInputError;
+use crate::infrastructure::external::text_input_worker::TextInputWorkerError;
 use thiserror::Error;
 
 /// voice_input アプリケーション全体で使用する統一エラー型
@@ -37,16 +37,16 @@ pub enum VoiceInputError {
     OpenAiConfigError(String),
 
     // ========================================
-    // テキスト入力エラー (SubprocessInputError統合)
+    // テキスト入力エラー
     // ========================================
-    #[error("Text input spawn error: {0}")]
-    TextInputSpawnError(String),
+    #[error("Text input worker init failed: {0}")]
+    TextInputWorkerInitFailed(String),
 
-    #[error("Text input execution error: {0}")]
-    TextInputExecutionError(String),
+    #[error("Text input worker input failed: {0}")]
+    TextInputWorkerInputFailed(String),
 
-    #[error("Text input helper not found: {0}")]
-    TextInputHelperNotFound(String),
+    #[error("Text input worker channel closed: {0}")]
+    TextInputWorkerChannelClosed(String),
 
     // ========================================
     // IPC関連エラー
@@ -119,16 +119,21 @@ pub type Result<T> = std::result::Result<T, VoiceInputError>;
 // 既存エラー型からの自動変換実装
 // ========================================
 
-/// SubprocessInputError からの変換
-impl From<SubprocessInputError> for VoiceInputError {
-    fn from(error: SubprocessInputError) -> Self {
+/// TextInputWorkerError からの変換
+impl From<TextInputWorkerError> for VoiceInputError {
+    fn from(error: TextInputWorkerError) -> Self {
         match error {
-            SubprocessInputError::SpawnError(msg) => VoiceInputError::TextInputSpawnError(msg),
-            SubprocessInputError::ExecutionError(msg) => {
-                VoiceInputError::TextInputExecutionError(msg)
+            TextInputWorkerError::EnigoInitFailed(msg) => {
+                VoiceInputError::TextInputWorkerInitFailed(msg)
             }
-            SubprocessInputError::HelperNotFound(msg) => {
-                VoiceInputError::TextInputHelperNotFound(msg)
+            TextInputWorkerError::WorkerSpawnFailed(msg) => {
+                VoiceInputError::TextInputWorkerInitFailed(msg)
+            }
+            TextInputWorkerError::InputFailed(msg) => {
+                VoiceInputError::TextInputWorkerInputFailed(msg)
+            }
+            TextInputWorkerError::ChannelClosed(msg) => {
+                VoiceInputError::TextInputWorkerChannelClosed(msg)
             }
         }
     }
@@ -182,7 +187,7 @@ impl VoiceInputError {
             VoiceInputError::ConfigMissingValue(_)
                 | VoiceInputError::OpenAiConfigError(_)
                 | VoiceInputError::PermissionDenied { .. }
-                | VoiceInputError::TextInputHelperNotFound(_)
+                | VoiceInputError::TextInputWorkerInitFailed(_)
         )
     }
 

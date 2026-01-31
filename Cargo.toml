@@ -17,11 +17,6 @@ path = "src/main.rs"
 name = "voice_inputd"            # 常駐デーモン
 path = "src/bin/voice_inputd.rs"
 
-
-[[bin]]
-name = "enigo_helper"           # Enigo入力専用ヘルパー
-path = "src/bin/enigo_helper.rs"
-
 # ─────────────────────────────────────────
 # 依存クレート ― ご指定をそのまま使用
 # ─────────────────────────────────────────
