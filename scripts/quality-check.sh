@@ -24,9 +24,8 @@ echo "✅ All tests passed"
 # E2Eテスト（環境依存のものはスキップ）
 echo ""
 echo "🌐 Running E2E tests (ci-safe mode)..."
-cargo test --features ci-test --test e2e_memory_mode_test || true
-cargo test --features ci-test --test e2e_file_mode_test || true
-cargo test --features ci-test --test e2e_mode_switch_test || true
+cargo test --features ci-test --test e2e_direct_input_test || true
+cargo test --features ci-test --test voice_inputd_direct_input_test || true
 
 # ベンチマーク（任意）
 if [ "$1" = "--bench" ]; then
