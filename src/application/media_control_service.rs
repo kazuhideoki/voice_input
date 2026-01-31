@@ -71,7 +71,7 @@ impl MediaControlService {
         }
 
         // 実際のApple Music制御を使用
-        let was_playing = pause_apple_music();
+        let was_playing = pause_apple_music().await;
         *self
             .paused_by_recording
             .lock()

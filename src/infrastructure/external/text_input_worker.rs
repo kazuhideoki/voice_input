@@ -111,10 +111,7 @@ pub fn start_text_input_worker() -> Result<TextInputWorkerHandle, TextInputWorke
 }
 
 fn run_worker(mut rx: mpsc::UnboundedReceiver<TextInputRequest>) {
-    let settings = Settings {
-        mac_delay: 20,
-        ..Default::default()
-    };
+    let settings = Settings::default();
 
     let mut enigo = match Enigo::new(&settings) {
         Ok(enigo) => enigo,
