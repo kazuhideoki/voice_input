@@ -10,8 +10,8 @@ use std::rc::Rc;
 use tokio::sync::mpsc;
 
 use crate::application::{
-    CommandHandler, MediaControlService, RecordingConfig, RecordingService, TranscriptionMessage,
-    TranscriptionService, traits::TranscriptionClient,
+    CommandHandler, MediaControlService, RecordingConfig, RecordingService, TranscriptionClient,
+    TranscriptionMessage, TranscriptionService,
 };
 use crate::domain::recorder::Recorder;
 use crate::error::Result;

@@ -6,15 +6,31 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::application::traits::MediaController;
 use crate::error::{Result, VoiceInputError};
 use crate::infrastructure::external::sound::{pause_apple_music, resume_apple_music};
+#[cfg(test)]
+use async_trait::async_trait;
+
+/// メディア制御の抽象化（テスト用）
+#[cfg(test)]
+#[async_trait]
+pub(crate) trait MediaController: Send + Sync {
+    /// Apple Musicが再生中かチェック
+    async fn is_playing(&self) -> Result<bool>;
+
+    /// Apple Musicを一時停止
+    async fn pause(&self) -> Result<()>;
+
+    /// Apple Musicを再生再開
+    async fn resume(&self) -> Result<()>;
+}
 
 /// メディア制御サービス
 pub struct MediaControlService {
     /// 録音によって一時停止されたかを記録
     paused_by_recording: Arc<Mutex<bool>>,
-    /// メディアコントローラー（オプショナル：テスト時のモック用）
+    /// メディアコントローラー（テスト時のモック用）
+    #[cfg(test)]
     controller: Option<Box<dyn MediaController>>,
 }
 
@@ -23,12 +39,14 @@ impl MediaControlService {
     pub fn new() -> Self {
         Self {
             paused_by_recording: Arc::new(Mutex::new(false)),
+            #[cfg(test)]
             controller: None,
         }
     }
 
     /// カスタムコントローラーで作成（テスト用）
-    pub fn with_controller(controller: Box<dyn MediaController>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn with_controller(controller: Box<dyn MediaController>) -> Self {
         Self {
             paused_by_recording: Arc::new(Mutex::new(false)),
             controller: Some(controller),
@@ -37,29 +55,28 @@ impl MediaControlService {
 
     /// 再生中の場合は一時停止し、状態を記録
     pub async fn pause_if_playing(&self) -> Result<bool> {
-        if let Some(ref controller) = self.controller {
-            // モックコントローラーを使用
-            if controller.is_playing().await? {
-                controller.pause().await?;
-                *self
-                    .paused_by_recording
-                    .lock()
-                    .map_err(|e| VoiceInputError::SystemError(format!("Lock error: {}", e)))? =
-                    true;
-                Ok(true)
-            } else {
-                Ok(false)
+        #[cfg(test)]
+        {
+            if let Some(ref controller) = self.controller {
+                // モックコントローラーを使用
+                if controller.is_playing().await? {
+                    controller.pause().await?;
+                    *self.paused_by_recording.lock().map_err(|e| {
+                        VoiceInputError::SystemError(format!("Lock error: {}", e))
+                    })? = true;
+                    return Ok(true);
+                }
+                return Ok(false);
             }
-        } else {
-            // 実際のApple Music制御を使用
-            let was_playing = pause_apple_music();
-            *self
-                .paused_by_recording
-                .lock()
-                .map_err(|e| VoiceInputError::SystemError(format!("Lock error: {}", e)))? =
-                was_playing;
-            Ok(was_playing)
         }
+
+        // 実際のApple Music制御を使用
+        let was_playing = pause_apple_music();
+        *self
+            .paused_by_recording
+            .lock()
+            .map_err(|e| VoiceInputError::SystemError(format!("Lock error: {}", e)))? = was_playing;
+        Ok(was_playing)
     }
 
     /// 録音によって一時停止されていた場合は再開
@@ -70,10 +87,19 @@ impl MediaControlService {
             .map_err(|e| VoiceInputError::SystemError(format!("Lock error: {}", e)))?;
 
         if should_resume {
-            if let Some(ref controller) = self.controller {
-                // モックコントローラーを使用
-                controller.resume().await?;
-            } else {
+            #[cfg(test)]
+            {
+                if let Some(ref controller) = self.controller {
+                    // モックコントローラーを使用
+                    controller.resume().await?;
+                } else {
+                    // 実際のApple Music制御を使用
+                    resume_apple_music();
+                }
+            }
+
+            #[cfg(not(test))]
+            {
                 // 実際のApple Music制御を使用
                 resume_apple_music();
             }
@@ -146,7 +172,7 @@ mod tests {
         }
     }
 
-    /// 再生中なら一時停止し記録状態にする
+    /// モックコントローラーで再生中なら一時停止し記録状態にする
     #[tokio::test]
     async fn pause_if_playing_pauses_and_marks_state() {
         let controller = Box::new(MockMediaController::new(true));
@@ -157,7 +183,7 @@ mod tests {
         assert!(service.is_paused_by_recording().unwrap());
     }
 
-    /// 再生中でなければ一時停止しない
+    /// モックコントローラーで再生中でなければ一時停止しない
     #[tokio::test]
     async fn pause_if_playing_noop_when_not_playing() {
         let controller = Box::new(MockMediaController::new(false));
@@ -168,7 +194,7 @@ mod tests {
         assert!(!service.is_paused_by_recording().unwrap());
     }
 
-    /// 録音による一時停止状態なら再開できる
+    /// モックコントローラーで録音による一時停止状態なら再開できる
     #[tokio::test]
     async fn resume_if_paused_restores_playback() {
         let controller = Box::new(MockMediaController::new(true));
@@ -185,7 +211,7 @@ mod tests {
         assert!(!service.is_paused_by_recording().unwrap());
     }
 
-    /// 一時停止していない場合は再開が無視される
+    /// モックコントローラーで一時停止していない場合は再開が無視される
     #[tokio::test]
     async fn resume_if_paused_noop_when_not_paused() {
         let controller = Box::new(MockMediaController::new(false));

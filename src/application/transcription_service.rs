@@ -8,12 +8,19 @@
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-use crate::application::traits::TranscriptionClient;
 use crate::domain::dict::{DictRepository, apply_replacements};
 use crate::error::{Result, VoiceInputError};
 use crate::infrastructure::audio::cpal_backend::AudioData;
 use crate::infrastructure::dict::JsonFileDictRepo;
 use crate::utils::profiling;
+use async_trait::async_trait;
+
+/// 音声文字起こし機能の抽象化
+#[async_trait]
+pub trait TranscriptionClient: Send + Sync {
+    /// 音声データを文字起こし
+    async fn transcribe(&self, audio: AudioData, language: &str) -> Result<String>;
+}
 
 /// 転写オプション
 #[derive(Clone, Debug)]
