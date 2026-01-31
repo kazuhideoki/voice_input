@@ -630,8 +630,11 @@ impl AudioBackend for CpalAudioBackend {
             }
             AudioFormat::Wav => {
                 let encode_timer = profiling::Timer::start("audio.encode_wav");
-                let wav =
-                    Self::combine_wav_data(&processed_samples, state.sample_rate, processed_channels)?;
+                let wav = Self::combine_wav_data(
+                    &processed_samples,
+                    state.sample_rate,
+                    processed_channels,
+                )?;
                 if profiling::enabled() {
                     encode_timer.log_with(&format!("bytes={}", wav.len()));
                 } else {
@@ -647,7 +650,10 @@ impl AudioBackend for CpalAudioBackend {
 
         if profiling::enabled() {
             if let Ok(data) = result.as_ref() {
-                profiling::log_point("audio.converted_size", &format!("bytes={}", data.bytes.len()));
+                profiling::log_point(
+                    "audio.converted_size",
+                    &format!("bytes={}", data.bytes.len()),
+                );
             }
         }
 

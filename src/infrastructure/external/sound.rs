@@ -84,27 +84,29 @@ pub fn resume_apple_music() {
     "#;
 
     // エラーハンドリングを強化
-    match std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(play_script)
-        .output()
-    {
-        Ok(output) => {
-            if output.status.success() {
-                if let Ok(result) = String::from_utf8(output.stdout) {
-                    println!("Music resume result: '{}'", result.trim());
-                }
-            } else {
-                // エラー出力がある場合は表示
-                if let Ok(err) = String::from_utf8(output.stderr) {
-                    if !err.trim().is_empty() {
-                        eprintln!("Music resume error: {}", err.trim());
+    std::thread::spawn(move || {
+        match std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(play_script)
+            .output()
+        {
+            Ok(output) => {
+                if output.status.success() {
+                    if let Ok(result) = String::from_utf8(output.stdout) {
+                        println!("Music resume result: '{}'", result.trim());
+                    }
+                } else {
+                    // エラー出力がある場合は表示
+                    if let Ok(err) = String::from_utf8(output.stderr) {
+                        if !err.trim().is_empty() {
+                            eprintln!("Music resume error: {}", err.trim());
+                        }
                     }
                 }
             }
+            Err(e) => {
+                eprintln!("Failed to execute osascript: {}", e);
+            }
         }
-        Err(e) => {
-            eprintln!("Failed to execute osascript: {}", e);
-        }
-    }
+    });
 }

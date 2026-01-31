@@ -29,9 +29,10 @@ pub async fn handle_transcription(
     // エラーが発生しても確実に音楽を再開するためにdeferパターンで実装
     let _defer_guard = scopeguard::guard(resume_music, |should_resume| {
         if should_resume {
-            // 念のため少し遅延を入れて他の処理が完了するのを待つ
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            resume_apple_music();
+            tokio::task::spawn_local(async move {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                resume_apple_music();
+            });
         }
     });
 
