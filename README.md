@@ -220,23 +220,10 @@ cargo clippy -- -D warnings
 
 ### パフォーマンス
 
-メモリ処理のパフォーマンス測定は次のテストで行えます：
+メモリ処理のパフォーマンス測定はベンチマークで行えます：
 
 ```bash
-# パフォーマンステストの実行
-# 1. OpenAI APIキーを設定
-export OPENAI_API_KEY="your_api_key_here"
-export INPUT_DEVICE_PRIORITY="device1,device2,device3"
-
-# 2. 音声デバイスの確認
-cargo run --bin voice_inputd &
-cargo run --bin voice_input -- --list-devices
-pkill voice_inputd
-
-# 3. テスト実行
-cargo test --test performance_test -- --ignored --nocapture
-
-# 4. ベンチマーク実行（詳細な性能測定）
+# ベンチマーク実行（詳細な性能測定）
 cargo bench
 ```
 
@@ -248,7 +235,7 @@ cargo bench
 
 #### メモリ使用量の確認
 
-メモリ使用量の目安はユニット/パフォーマンステストで確認できます。
+メモリ使用量の目安はユニットテストで確認できます。
 
 ### CI/CD
 
