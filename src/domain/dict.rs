@@ -36,6 +36,7 @@ impl std::fmt::Display for EntryStatus {
 ///
 /// `entries` の各 `surface` を `replacement` へ置換し、
 /// 置換が行われた回数だけ `hit` をインクリメントします。
+/// TODO 事前構造化（surface_chars のキャッシュ） や、必要なら Aho-Corasick の導入検討で、辞書サイズ増加時の劣化を防ぐ
 pub fn apply_replacements(text: &str, entries: &mut [WordEntry]) -> String {
     for e in entries
         .iter_mut()
