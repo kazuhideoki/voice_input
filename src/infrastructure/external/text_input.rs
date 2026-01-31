@@ -24,7 +24,7 @@ pub fn init_worker() -> Result<(), TextInputWorkerError> {
 
 /// メイン入力関数
 ///
-/// subprocessを使用してテキストを入力します。
+/// 常駐ワーカーを使用してテキストを入力します。
 ///
 /// # Example
 /// ```no_run
