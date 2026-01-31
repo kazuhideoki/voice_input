@@ -2,9 +2,14 @@ use super::AudioBackend;
 use super::encoder::{self, AudioFormat};
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
+use audioadapter_buffers::SizeError;
 use cpal::{
     Device, SampleFormat, Stream, StreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
+};
+use rubato::{
+    Async, FixedAsync, ResampleError, Resampler, ResamplerConstructionError,
+    SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use std::{
     borrow::Cow,
@@ -31,10 +36,34 @@ struct MemoryRecordingState {
     channels: u16,
 }
 
+struct ProcessedAudio<'a> {
+    samples: Cow<'a, [i16]>,
+    sample_rate: u32,
+    channels: u16,
+}
+
+struct ResampleOutcome {
+    samples: Vec<i16>,
+    sample_rate: u32,
+}
+
+const TARGET_SAMPLE_RATE: u32 = 16_000;
+const MIN_RESAMPLE_FRAMES: usize = 256;
+
 /// Audio processing errors
 #[derive(Debug)]
 pub enum AudioError {
     DataTooLarge(usize),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum AudioResampleError {
+    #[error("resampler construction failed: {0}")]
+    Construction(#[from] ResamplerConstructionError),
+    #[error("resampling failed: {0}")]
+    Processing(#[from] ResampleError),
+    #[error("buffer size mismatch: {0}")]
+    Buffer(#[from] SizeError),
 }
 
 impl fmt::Display for AudioError {
@@ -454,6 +483,84 @@ impl CpalAudioBackend {
         mono
     }
 
+    fn resample_to_16khz(
+        samples: &[i16],
+        sample_rate: u32,
+    ) -> Result<ResampleOutcome, AudioResampleError> {
+        if sample_rate == TARGET_SAMPLE_RATE {
+            return Ok(ResampleOutcome {
+                samples: samples.to_vec(),
+                sample_rate,
+            });
+        }
+
+        if samples.is_empty() {
+            return Ok(ResampleOutcome {
+                samples: Vec::new(),
+                sample_rate,
+            });
+        }
+
+        if samples.len() < MIN_RESAMPLE_FRAMES {
+            return Ok(ResampleOutcome {
+                samples: samples.to_vec(),
+                sample_rate,
+            });
+        }
+
+        let input_frames = samples.len();
+        let chunk_size = input_frames.min(1024);
+        let resample_ratio = TARGET_SAMPLE_RATE as f64 / sample_rate as f64;
+        let params = SincInterpolationParameters {
+            sinc_len: 256,
+            f_cutoff: 0.95,
+            interpolation: SincInterpolationType::Linear,
+            oversampling_factor: 256,
+            window: WindowFunction::BlackmanHarris2,
+        };
+
+        let mut resampler = Async::<f32>::new_sinc(
+            resample_ratio,
+            2.0,
+            &params,
+            chunk_size,
+            1,
+            FixedAsync::Input,
+        )?;
+
+        let input_f32: Vec<f32> = samples
+            .iter()
+            .map(|&s| {
+                if s == i16::MIN {
+                    -1.0
+                } else {
+                    s as f32 / i16::MAX as f32
+                }
+            })
+            .collect();
+        let input =
+            audioadapter_buffers::direct::InterleavedSlice::new(&input_f32, 1, input_frames)?;
+        let output_frames_capacity = resampler.process_all_needed_output_len(input_frames);
+        let mut output = vec![0.0f32; output_frames_capacity];
+        let mut output_adapter = audioadapter_buffers::direct::InterleavedSlice::new_mut(
+            &mut output,
+            1,
+            output_frames_capacity,
+        )?;
+        let (_, output_frames) =
+            resampler.process_all_into_buffer(&input, &mut output_adapter, input_frames, None)?;
+        output.truncate(output_frames);
+
+        let resampled = output
+            .iter()
+            .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+            .collect();
+        Ok(ResampleOutcome {
+            samples: resampled,
+            sample_rate: TARGET_SAMPLE_RATE,
+        })
+    }
+
     /// 利用可能な入力デバイス名を返すユーティリティ
     pub fn list_devices() -> Vec<String> {
         let host = cpal::default_host();
@@ -584,20 +691,39 @@ impl AudioBackend for CpalAudioBackend {
         }
 
         // エンコード前にモノラル化して送信サイズを減らす
-        let (processed_samples, processed_channels) = if state.channels > 1 {
+        let mut processed = if state.channels > 1 {
             let mono = Self::downmix_to_mono(trimmed.as_ref(), state.channels);
-            (Cow::Owned(mono), 1u16)
+            ProcessedAudio {
+                samples: Cow::Owned(mono),
+                sample_rate: state.sample_rate,
+                channels: 1,
+            }
         } else {
-            (trimmed, state.channels)
+            ProcessedAudio {
+                samples: trimmed,
+                sample_rate: state.sample_rate,
+                channels: state.channels,
+            }
         };
+
+        if processed.sample_rate != TARGET_SAMPLE_RATE {
+            let resample_timer = profiling::Timer::start("audio.resample_16khz");
+            let resampled = Self::resample_to_16khz(&processed.samples, processed.sample_rate)?;
+            processed = ProcessedAudio {
+                samples: Cow::Owned(resampled.samples),
+                sample_rate: resampled.sample_rate,
+                channels: processed.channels,
+            };
+            resample_timer.log();
+        }
 
         let result = match Self::preferred_format() {
             AudioFormat::Flac => {
                 let encode_timer = profiling::Timer::start("audio.encode_flac");
                 match encoder::flac::encode_flac_i16(
-                    &processed_samples,
-                    state.sample_rate,
-                    processed_channels,
+                    &processed.samples,
+                    processed.sample_rate,
+                    processed.channels,
                 ) {
                     Ok(flac) => {
                         if profiling::enabled() {
@@ -616,9 +742,9 @@ impl AudioBackend for CpalAudioBackend {
                         eprintln!("FLAC encode failed (fallback to WAV): {}", e);
                         profiling::log_point("audio.encode_flac.error", "fallback=wav");
                         let wav = Self::combine_wav_data(
-                            &processed_samples,
-                            state.sample_rate,
-                            processed_channels,
+                            &processed.samples,
+                            processed.sample_rate,
+                            processed.channels,
                         )?;
                         Ok(AudioData {
                             bytes: wav,
@@ -631,9 +757,9 @@ impl AudioBackend for CpalAudioBackend {
             AudioFormat::Wav => {
                 let encode_timer = profiling::Timer::start("audio.encode_wav");
                 let wav = Self::combine_wav_data(
-                    &processed_samples,
-                    state.sample_rate,
-                    processed_channels,
+                    &processed.samples,
+                    processed.sample_rate,
+                    processed.channels,
                 )?;
                 if profiling::enabled() {
                     encode_timer.log_with(&format!("bytes={}", wav.len()));
@@ -1305,5 +1431,43 @@ mod tests {
 
         assert!(!trimmed.is_empty());
         assert!(trimmed.iter().all(|&s| s == 0));
+    }
+
+    /// 48kHz の音声を 16kHz に変換するとサンプル数が 1/3 になる
+    #[test]
+    fn resample_to_16khz_downscales_frame_count() {
+        let sample_rate = 48_000;
+        let samples = vec![1000i16; sample_rate as usize];
+
+        let resampled = CpalAudioBackend::resample_to_16khz(&samples, sample_rate).unwrap();
+
+        assert_eq!(resampled.samples.len(), 16_000);
+        assert_eq!(resampled.sample_rate, TARGET_SAMPLE_RATE);
+    }
+
+    /// すでに 16kHz の場合はリサンプリングを行わない
+    #[test]
+    fn resample_to_16khz_skips_when_rate_matches() {
+        let sample_rate = 16_000;
+        let samples = vec![1000i16; sample_rate as usize];
+
+        let resampled = CpalAudioBackend::resample_to_16khz(&samples, sample_rate).unwrap();
+
+        assert_eq!(resampled.samples.len(), samples.len());
+        assert_eq!(resampled.samples, samples);
+        assert_eq!(resampled.sample_rate, sample_rate);
+    }
+
+    /// 極端に短い入力はリサンプリングをスキップする
+    #[test]
+    fn resample_to_16khz_skips_when_too_short() {
+        let sample_rate = 48_000;
+        let samples = vec![1000i16; MIN_RESAMPLE_FRAMES - 1];
+
+        let resampled = CpalAudioBackend::resample_to_16khz(&samples, sample_rate).unwrap();
+
+        assert_eq!(resampled.samples.len(), samples.len());
+        assert_eq!(resampled.samples, samples);
+        assert_eq!(resampled.sample_rate, sample_rate);
     }
 }

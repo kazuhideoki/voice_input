@@ -38,6 +38,9 @@ once_cell = "1.19"
 thiserror = "1.0"
 async-trait = "0.1"
 flacenc = "0.5"
+rubato = "1.0.1"
+audioadapter = "2.0.0"
+audioadapter-buffers = "2.0.0"
 
 [features]
 default = []
