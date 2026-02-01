@@ -7,7 +7,7 @@
 //!  - 直接入力 & Apple Music の自動ポーズ / 再開
 //!    を非同期・協調的に実行します。
 //!
-//! *ソケットパス*: `/tmp/voice_input.sock`
+//! *ソケットパス*: `/tmp/voice_input.sock`（環境変数で上書き可能）
 
 #![allow(clippy::await_holding_refcell_ref)]
 

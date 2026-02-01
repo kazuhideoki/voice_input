@@ -1,5 +1,6 @@
 //! OpenAI STT API ラッパ。
-//! WAV ファイルを multipart/form-data で転写エンドポイントに送信します。
+//! AudioData（既定: FLAC、失敗時にWAVへフォールバック）を
+//! multipart/form-data で転写エンドポイントに送信します。
 use crate::infrastructure::audio::cpal_backend::AudioData;
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;

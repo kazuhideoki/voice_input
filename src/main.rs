@@ -1,5 +1,6 @@
 //! voice_input CLI: `voice_inputd` デーモンの簡易コントローラ。
-//! `Start` / `Stop` / `Toggle` / `Status` の各コマンドを `ipc::send_cmd` で送信します。
+//! 録音操作（Start/Stop/Toggle/Status）のほか、ヘルスチェック、デバイス一覧、
+//! 辞書操作、設定操作の各コマンドを `ipc::send_cmd` で送信します。
 use clap::Parser;
 use voice_input::{
     cli::{Cli, Cmd, ConfigCmd, ConfigField, DictCmd},

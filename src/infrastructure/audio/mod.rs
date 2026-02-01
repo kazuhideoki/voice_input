@@ -11,8 +11,8 @@ pub trait AudioBackend {
     fn start_recording(&self) -> Result<(), Box<dyn Error>>;
 
     /// 録音を停止し、音声データを返します。
-    /// メモリモードの場合はWAVフォーマットのバイトデータ、
-    /// レガシーモードの場合はWAVファイルのパスを返します。
+    /// AudioData にはバイト列と mime_type（既定: FLAC、失敗時にWAVへフォールバック）
+    /// および file_name が含まれます。
     fn stop_recording(&self) -> Result<AudioData, Box<dyn Error>>;
 
     /// 現在録音中であれば `true`。
