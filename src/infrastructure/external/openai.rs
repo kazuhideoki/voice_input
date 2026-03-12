@@ -25,6 +25,14 @@ struct StreamingCompletedResponse {
     pub text: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct StreamingEventEnvelope {
+    #[serde(rename = "type")]
+    pub event_type: Option<String>,
+    pub delta: Option<String>,
+    pub text: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum StreamingTranscriptionEvent {
     Delta(String),
@@ -357,22 +365,34 @@ fn parse_streaming_frame(frame: &[u8]) -> Result<Option<StreamingTranscriptionEv
         }
     }
 
-    let Some(event_name) = event_name else {
+    let data = data_lines.join("\n");
+    if data.is_empty() {
+        return Ok(None);
+    }
+
+    let envelope: StreamingEventEnvelope = serde_json::from_str(&data)
+        .map_err(|e| format!("Failed to parse streaming event payload: {}", e))?;
+    let Some(event_name) = event_name.or(envelope.event_type.clone()) else {
         return Ok(None);
     };
 
-    let data = data_lines.join("\n");
     match event_name.as_str() {
-        "transcript.text.delta" => {
-            let payload: StreamingDeltaResponse = serde_json::from_str(&data)
-                .map_err(|e| format!("Failed to parse streaming delta: {}", e))?;
-            Ok(Some(StreamingTranscriptionEvent::Delta(payload.delta)))
-        }
-        "transcript.text.done" => {
-            let payload: StreamingCompletedResponse = serde_json::from_str(&data)
-                .map_err(|e| format!("Failed to parse streaming completion: {}", e))?;
-            Ok(Some(StreamingTranscriptionEvent::Completed(payload.text)))
-        }
+        "transcript.text.delta" => match envelope.delta {
+            Some(delta) => Ok(Some(StreamingTranscriptionEvent::Delta(delta))),
+            None => {
+                let payload: StreamingDeltaResponse = serde_json::from_str(&data)
+                    .map_err(|e| format!("Failed to parse streaming delta: {}", e))?;
+                Ok(Some(StreamingTranscriptionEvent::Delta(payload.delta)))
+            }
+        },
+        "transcript.text.done" => match envelope.text {
+            Some(text) => Ok(Some(StreamingTranscriptionEvent::Completed(text))),
+            None => {
+                let payload: StreamingCompletedResponse = serde_json::from_str(&data)
+                    .map_err(|e| format!("Failed to parse streaming completion: {}", e))?;
+                Ok(Some(StreamingTranscriptionEvent::Completed(payload.text)))
+            }
+        },
         _ => Ok(None),
     }
 }
@@ -530,12 +550,9 @@ mod tests {
     #[test]
     fn streaming_deltas_can_be_concatenated_in_received_order() {
         let body = concat!(
-            "event: transcript.text.delta\n",
-            "data: {\"delta\":\"こん\"}\n\n",
-            "event: transcript.text.delta\n",
-            "data: {\"delta\":\"にちは\"}\n\n",
-            "event: transcript.text.done\n",
-            "data: {\"text\":\"こんにちは\"}\n\n"
+            "data: {\"type\":\"transcript.text.delta\",\"delta\":\"こん\"}\n\n",
+            "data: {\"type\":\"transcript.text.delta\",\"delta\":\"にちは\"}\n\n",
+            "data: {\"type\":\"transcript.text.done\",\"text\":\"こんにちは\"}\n\n"
         );
 
         let events = parse_streaming_events(body).expect("stream should parse");
@@ -554,10 +571,8 @@ mod tests {
     #[test]
     fn streaming_events_support_crlf_delimiters() {
         let body = concat!(
-            "event: transcript.text.delta\r\n",
-            "data: {\"delta\":\"こん\"}\r\n\r\n",
-            "event: transcript.text.done\r\n",
-            "data: {\"text\":\"こんにちは\"}\r\n\r\n"
+            "data: {\"type\":\"transcript.text.delta\",\"delta\":\"こん\"}\r\n\r\n",
+            "data: {\"type\":\"transcript.text.done\",\"text\":\"こんにちは\"}\r\n\r\n"
         );
 
         let events = parse_streaming_events(body).expect("stream should parse");
@@ -575,7 +590,7 @@ mod tests {
     #[test]
     fn streaming_parser_handles_multibyte_utf8_split_across_chunks() {
         let mut parser = StreamingEventParser::default();
-        let utf8_bytes = "event: transcript.text.delta\ndata: {\"delta\":\"こ".as_bytes();
+        let utf8_bytes = "data: {\"type\":\"transcript.text.delta\",\"delta\":\"こ".as_bytes();
         let multibyte_tail = "ん\"}\n\n".as_bytes();
 
         let events = parser
@@ -598,19 +613,42 @@ mod tests {
         let mut parser = StreamingEventParser::default();
 
         let first = parser
-            .push_chunk("event: transcript.text.delta\r\ndata: {\"delta\":\"こん\"}\r".as_bytes())
+            .push_chunk(
+                "data: {\"type\":\"transcript.text.delta\",\"delta\":\"こん\"}\r".as_bytes(),
+            )
             .expect("first chunk should buffer");
         assert!(first.is_empty());
 
         let second = parser
             .push_chunk(
-                "\n\r\nevent: transcript.text.done\r\ndata: {\"text\":\"こんにちは\"}\r\n\r\n"
+                "\n\r\ndata: {\"type\":\"transcript.text.done\",\"text\":\"こんにちは\"}\r\n\r\n"
                     .as_bytes(),
             )
             .expect("second chunk should parse");
 
         assert_eq!(
             second,
+            vec![
+                StreamingTranscriptionEvent::Delta("こん".to_string()),
+                StreamingTranscriptionEvent::Completed("こんにちは".to_string()),
+            ]
+        );
+    }
+
+    /// 旧来のeventヘッダ付きレスポンスも後方互換でパースできる
+    #[test]
+    fn streaming_parser_supports_legacy_event_header_format() {
+        let body = concat!(
+            "event: transcript.text.delta\n",
+            "data: {\"delta\":\"こん\"}\n\n",
+            "event: transcript.text.done\n",
+            "data: {\"text\":\"こんにちは\"}\n\n"
+        );
+
+        let events = parse_streaming_events(body).expect("legacy stream should parse");
+
+        assert_eq!(
+            events,
             vec![
                 StreamingTranscriptionEvent::Delta("こん".to_string()),
                 StreamingTranscriptionEvent::Completed("こんにちは".to_string()),

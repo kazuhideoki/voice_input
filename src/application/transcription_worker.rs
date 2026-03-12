@@ -213,7 +213,10 @@ pub async fn spawn_transcription_worker(
 
         let transcription_service = transcription_service.clone();
         spawn_local(async move {
-            let _ = handle_transcription(result, resume_music, transcription_service).await;
+            if let Err(e) = handle_transcription(result, resume_music, transcription_service).await
+            {
+                eprintln!("Transcription handling failed: {}", e);
+            }
             drop(permit);
         });
     }
