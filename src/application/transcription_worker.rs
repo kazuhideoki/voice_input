@@ -82,7 +82,6 @@ pub async fn handle_transcription(
 }
 
 async fn type_text_with_profile(text: &str) {
-    tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
     let input_timer = profiling::Timer::start("text_input");
     match text_input::type_text(text).await {
         Ok(_) => {
@@ -109,7 +108,6 @@ async fn apply_text_patch_with_profile(current: &str, next: &str) {
         return;
     }
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
     let input_timer = profiling::Timer::start("text_input.patch");
     match text_input::replace_suffix(delete_count, &append_text).await {
         Ok(_) => {
