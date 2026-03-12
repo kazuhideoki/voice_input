@@ -102,14 +102,35 @@ async fn type_text_with_profile(text: &str) {
     }
 }
 
-async fn apply_text_patch_with_profile(current: &str, next: &str) {
+async fn type_text_continuous_with_profile(text: &str) {
+    let input_timer = profiling::Timer::start("text_input.continuous");
+    match text_input::type_text_continuous(text).await {
+        Ok(_) => {
+            if profiling::enabled() {
+                input_timer.log_with(&format!("ok=true text_len={}", text.len()));
+            } else {
+                input_timer.log();
+            }
+        }
+        Err(e) => {
+            if profiling::enabled() {
+                input_timer.log_with(&format!("ok=false text_len={}", text.len()));
+            } else {
+                input_timer.log();
+            }
+            eprintln!("Direct input continuous failed: {}", e);
+        }
+    }
+}
+
+async fn apply_text_patch_continuous_with_profile(current: &str, next: &str) {
     let (delete_count, append_text) = diff_text_for_patch(current, next);
     if delete_count == 0 && append_text.is_empty() {
         return;
     }
 
-    let input_timer = profiling::Timer::start("text_input.patch");
-    match text_input::replace_suffix(delete_count, &append_text).await {
+    let input_timer = profiling::Timer::start("text_input.patch_continuous");
+    match text_input::replace_suffix_continuous(delete_count, &append_text).await {
         Ok(_) => {
             if profiling::enabled() {
                 input_timer.log_with(&format!(
@@ -131,7 +152,7 @@ async fn apply_text_patch_with_profile(current: &str, next: &str) {
             } else {
                 input_timer.log();
             }
-            eprintln!("Direct input patch failed: {}", e);
+            eprintln!("Direct input continuous patch failed: {}", e);
         }
     }
 }
@@ -153,7 +174,8 @@ fn diff_text_for_patch(current: &str, next: &str) -> (usize, String) {
 #[async_trait(?Send)]
 trait TextApplier {
     async fn type_text(&self, text: &str);
-    async fn patch_text(&self, current: &str, next: &str);
+    async fn type_text_continuous(&self, text: &str);
+    async fn patch_text_continuous(&self, current: &str, next: &str);
 }
 
 struct ProfiledTextApplier;
@@ -164,8 +186,12 @@ impl TextApplier for ProfiledTextApplier {
         type_text_with_profile(text).await;
     }
 
-    async fn patch_text(&self, current: &str, next: &str) {
-        apply_text_patch_with_profile(current, next).await;
+    async fn type_text_continuous(&self, text: &str) {
+        type_text_continuous_with_profile(text).await;
+    }
+
+    async fn patch_text_continuous(&self, current: &str, next: &str) {
+        apply_text_patch_continuous_with_profile(current, next).await;
     }
 }
 
@@ -177,7 +203,11 @@ async fn process_streaming_events(
     while let Some(event) = event_rx.recv().await {
         match event {
             TranscriptionEvent::Delta(delta) => {
-                text_applier.type_text(&delta).await;
+                if rendered_text.is_empty() {
+                    text_applier.type_text(&delta).await;
+                } else {
+                    text_applier.type_text_continuous(&delta).await;
+                }
                 rendered_text.push_str(&delta);
             }
             TranscriptionEvent::Completed(text) if rendered_text.is_empty() => {
@@ -185,7 +215,9 @@ async fn process_streaming_events(
                 break;
             }
             TranscriptionEvent::Completed(text) => {
-                text_applier.patch_text(&rendered_text, &text).await;
+                text_applier
+                    .patch_text_continuous(&rendered_text, &text)
+                    .await;
                 break;
             }
         }
@@ -261,10 +293,16 @@ mod tests {
                 self.calls.borrow_mut().push(format!("type:{text}"));
             }
 
-            async fn patch_text(&self, current: &str, next: &str) {
+            async fn type_text_continuous(&self, text: &str) {
                 self.calls
                     .borrow_mut()
-                    .push(format!("patch:{current}->{next}"));
+                    .push(format!("type_continuous:{text}"));
+            }
+
+            async fn patch_text_continuous(&self, current: &str, next: &str) {
+                self.calls
+                    .borrow_mut()
+                    .push(format!("patch_continuous:{current}->{next}"));
                 self.completed.set(true);
             }
         }
@@ -293,8 +331,8 @@ mod tests {
             *calls.borrow(),
             vec![
                 "type:これは".to_string(),
-                "type:テストです".to_string(),
-                "patch:これはテストです->これはtestです".to_string()
+                "type_continuous:テストです".to_string(),
+                "patch_continuous:これはテストです->これはtestです".to_string()
             ]
         );
         assert!(completed.get());

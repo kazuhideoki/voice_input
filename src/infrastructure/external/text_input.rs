@@ -52,6 +52,24 @@ pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
     result.map_err(|e| Box::new(e) as Box<dyn Error>)
 }
 
+/// 連続入力の一部としてテキストを入力する
+pub async fn type_text_continuous(text: &str) -> Result<(), Box<dyn Error>> {
+    let handle = TEXT_INPUT_WORKER.get().ok_or_else(|| {
+        TextInputWorkerError::ChannelClosed("text input worker not initialized".to_string())
+    })?;
+
+    let timer = profiling::Timer::start("text_input.worker_continuous");
+    let result = handle.type_text_continuous(text).await;
+
+    if profiling::enabled() {
+        timer.log_with(&format!("ok={} text_len={}", result.is_ok(), text.len()));
+    } else {
+        timer.log();
+    }
+
+    result.map_err(|e| Box::new(e) as Box<dyn Error>)
+}
+
 /// 入力済みテキストの末尾差分を置き換える
 pub async fn replace_suffix(delete_count: usize, text: &str) -> Result<(), Box<dyn Error>> {
     let handle = TEXT_INPUT_WORKER.get().ok_or_else(|| {
@@ -60,6 +78,32 @@ pub async fn replace_suffix(delete_count: usize, text: &str) -> Result<(), Box<d
 
     let timer = profiling::Timer::start("text_input.worker_replace");
     let result = handle.replace_suffix(delete_count, text).await;
+
+    if profiling::enabled() {
+        timer.log_with(&format!(
+            "ok={} delete_count={} text_len={}",
+            result.is_ok(),
+            delete_count,
+            text.len()
+        ));
+    } else {
+        timer.log();
+    }
+
+    result.map_err(|e| Box::new(e) as Box<dyn Error>)
+}
+
+/// 連続入力の一部として入力済みテキストの末尾差分を置き換える
+pub async fn replace_suffix_continuous(
+    delete_count: usize,
+    text: &str,
+) -> Result<(), Box<dyn Error>> {
+    let handle = TEXT_INPUT_WORKER.get().ok_or_else(|| {
+        TextInputWorkerError::ChannelClosed("text input worker not initialized".to_string())
+    })?;
+
+    let timer = profiling::Timer::start("text_input.worker_replace_continuous");
+    let result = handle.replace_suffix_continuous(delete_count, text).await;
 
     if profiling::enabled() {
         timer.log_with(&format!(

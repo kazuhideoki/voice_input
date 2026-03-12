@@ -51,6 +51,8 @@ pub enum TextInputRequest {
     TypeText {
         /// 入力するテキスト
         text: String,
+        /// 入力実行モード
+        mode: TextInputExecutionMode,
         /// 完了通知用のチャネル
         completion: oneshot::Sender<Result<(), TextInputWorkerError>>,
     },
@@ -60,6 +62,8 @@ pub enum TextInputRequest {
         delete_count: usize,
         /// 追加するテキスト
         text: String,
+        /// 入力実行モード
+        mode: TextInputExecutionMode,
         /// 完了通知用のチャネル
         completion: oneshot::Sender<Result<(), TextInputWorkerError>>,
     },
@@ -75,14 +79,33 @@ impl TextInputRequest {
     }
 }
 
+/// テキスト入力の実行モード
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextInputExecutionMode {
+    /// 単発入力として準備と待機を含めて処理する
+    Standalone,
+    /// 連続入力として追加の待機を省いて処理する
+    Continuous,
+}
+
 /// テキスト入力エンジンのインターフェース
 #[async_trait]
 pub trait TextInputEngine: Send + Sync {
     /// テキストを入力する
     async fn type_text(&self, text: &str) -> Result<(), TextInputWorkerError>;
 
+    /// 連続入力の一部としてテキストを入力する
+    async fn type_text_continuous(&self, text: &str) -> Result<(), TextInputWorkerError>;
+
     /// 入力済みテキストの末尾差分を置き換える
     async fn replace_suffix(
+        &self,
+        delete_count: usize,
+        text: &str,
+    ) -> Result<(), TextInputWorkerError>;
+
+    /// 連続入力の一部として末尾差分を置き換える
+    async fn replace_suffix_continuous(
         &self,
         delete_count: usize,
         text: &str,
@@ -106,10 +129,27 @@ impl TextInputWorkerHandle {
         &self,
         text: String,
     ) -> Result<oneshot::Receiver<Result<(), TextInputWorkerError>>, TextInputWorkerError> {
+        self.send_with_mode(text, TextInputExecutionMode::Standalone)
+    }
+
+    /// 連続入力をリクエストし、完了通知の受信側を返す
+    pub fn send_continuous(
+        &self,
+        text: String,
+    ) -> Result<oneshot::Receiver<Result<(), TextInputWorkerError>>, TextInputWorkerError> {
+        self.send_with_mode(text, TextInputExecutionMode::Continuous)
+    }
+
+    fn send_with_mode(
+        &self,
+        text: String,
+        mode: TextInputExecutionMode,
+    ) -> Result<oneshot::Receiver<Result<(), TextInputWorkerError>>, TextInputWorkerError> {
         let (tx, rx) = oneshot::channel();
         self.sender
             .send(TextInputRequest::TypeText {
                 text,
+                mode,
                 completion: tx,
             })
             .map_err(|e| TextInputWorkerError::ChannelClosed(format!("send failed: {}", e)))?;
@@ -122,11 +162,30 @@ impl TextInputWorkerHandle {
         delete_count: usize,
         text: String,
     ) -> Result<oneshot::Receiver<Result<(), TextInputWorkerError>>, TextInputWorkerError> {
+        self.send_replace_suffix_with_mode(delete_count, text, TextInputExecutionMode::Standalone)
+    }
+
+    /// 連続入力用の差分置き換えをリクエストし、完了通知の受信側を返す
+    pub fn send_replace_suffix_continuous(
+        &self,
+        delete_count: usize,
+        text: String,
+    ) -> Result<oneshot::Receiver<Result<(), TextInputWorkerError>>, TextInputWorkerError> {
+        self.send_replace_suffix_with_mode(delete_count, text, TextInputExecutionMode::Continuous)
+    }
+
+    fn send_replace_suffix_with_mode(
+        &self,
+        delete_count: usize,
+        text: String,
+        mode: TextInputExecutionMode,
+    ) -> Result<oneshot::Receiver<Result<(), TextInputWorkerError>>, TextInputWorkerError> {
         let (tx, rx) = oneshot::channel();
         self.sender
             .send(TextInputRequest::ReplaceSuffix {
                 delete_count,
                 text,
+                mode,
                 completion: tx,
             })
             .map_err(|e| TextInputWorkerError::ChannelClosed(format!("send failed: {}", e)))?;
@@ -143,12 +202,30 @@ impl TextInputEngine for TextInputWorkerHandle {
         })?
     }
 
+    async fn type_text_continuous(&self, text: &str) -> Result<(), TextInputWorkerError> {
+        let receiver = self.send_continuous(text.to_string())?;
+        receiver.await.map_err(|_| {
+            TextInputWorkerError::ChannelClosed("completion channel dropped".to_string())
+        })?
+    }
+
     async fn replace_suffix(
         &self,
         delete_count: usize,
         text: &str,
     ) -> Result<(), TextInputWorkerError> {
         let receiver = self.send_replace_suffix(delete_count, text.to_string())?;
+        receiver.await.map_err(|_| {
+            TextInputWorkerError::ChannelClosed("completion channel dropped".to_string())
+        })?
+    }
+
+    async fn replace_suffix_continuous(
+        &self,
+        delete_count: usize,
+        text: &str,
+    ) -> Result<(), TextInputWorkerError> {
+        let receiver = self.send_replace_suffix_continuous(delete_count, text.to_string())?;
         receiver.await.map_err(|_| {
             TextInputWorkerError::ChannelClosed("completion channel dropped".to_string())
         })?
@@ -188,33 +265,47 @@ fn run_worker(mut rx: mpsc::UnboundedReceiver<TextInputRequest>) {
 
     while let Some(req) = rx.blocking_recv() {
         match req {
-            TextInputRequest::TypeText { text, completion } => {
-                let result = type_text_with_enigo(&mut enigo, &text);
+            TextInputRequest::TypeText {
+                text,
+                mode,
+                completion,
+            } => {
+                let result = type_text_with_enigo(&mut enigo, &text, mode);
                 let _ = completion.send(result);
             }
             TextInputRequest::ReplaceSuffix {
                 delete_count,
                 text,
+                mode,
                 completion,
             } => {
-                let result = replace_suffix_with_enigo(&mut enigo, delete_count, &text);
+                let result = replace_suffix_with_enigo(&mut enigo, delete_count, &text, mode);
                 let _ = completion.send(result);
             }
         }
     }
 }
 
-fn type_text_with_enigo(enigo: &mut Enigo, text: &str) -> Result<(), TextInputWorkerError> {
-    prepare_input(enigo)?;
-    input_text(enigo, text)
+fn type_text_with_enigo(
+    enigo: &mut Enigo,
+    text: &str,
+    mode: TextInputExecutionMode,
+) -> Result<(), TextInputWorkerError> {
+    if mode == TextInputExecutionMode::Standalone {
+        prepare_input(enigo)?;
+    }
+    input_text(enigo, text, mode)
 }
 
 fn replace_suffix_with_enigo(
     enigo: &mut Enigo,
     delete_count: usize,
     text: &str,
+    mode: TextInputExecutionMode,
 ) -> Result<(), TextInputWorkerError> {
-    prepare_input(enigo)?;
+    if mode == TextInputExecutionMode::Standalone {
+        prepare_input(enigo)?;
+    }
 
     for _ in 0..delete_count {
         enigo
@@ -222,7 +313,7 @@ fn replace_suffix_with_enigo(
             .map_err(|e| TextInputWorkerError::InputFailed(e.to_string()))?;
     }
 
-    input_text(enigo, text)
+    input_text(enigo, text, mode)
 }
 
 fn prepare_input(enigo: &mut Enigo) -> Result<(), TextInputWorkerError> {
@@ -234,12 +325,18 @@ fn prepare_input(enigo: &mut Enigo) -> Result<(), TextInputWorkerError> {
     Ok(())
 }
 
-fn input_text(enigo: &mut Enigo, text: &str) -> Result<(), TextInputWorkerError> {
+fn input_text(
+    enigo: &mut Enigo,
+    text: &str,
+    mode: TextInputExecutionMode,
+) -> Result<(), TextInputWorkerError> {
     if let Err(e) = enigo.text(text) {
         return Err(TextInputWorkerError::InputFailed(e.to_string()));
     }
 
-    std::thread::sleep(std::time::Duration::from_millis(30));
+    if mode == TextInputExecutionMode::Standalone {
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
     Ok(())
 }
 
@@ -258,7 +355,29 @@ mod tests {
         assert!(receiver.is_ok());
         let request = rx.try_recv().expect("request should be sent");
         match request {
-            TextInputRequest::TypeText { text, .. } => assert_eq!(text, "hello"),
+            TextInputRequest::TypeText { text, mode, .. } => {
+                assert_eq!(text, "hello");
+                assert_eq!(mode, TextInputExecutionMode::Standalone);
+            }
+            TextInputRequest::ReplaceSuffix { .. } => panic!("unexpected replace request"),
+        }
+    }
+
+    /// 連続入力リクエストは継続モードで送信される
+    #[test]
+    fn continuous_type_request_uses_continuous_mode() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<TextInputRequest>();
+        let handle = TextInputWorkerHandle::new(tx);
+
+        let receiver = handle.send_continuous("hello".to_string());
+
+        assert!(receiver.is_ok());
+        let request = rx.try_recv().expect("request should be sent");
+        match request {
+            TextInputRequest::TypeText { text, mode, .. } => {
+                assert_eq!(text, "hello");
+                assert_eq!(mode, TextInputExecutionMode::Continuous);
+            }
             TextInputRequest::ReplaceSuffix { .. } => panic!("unexpected replace request"),
         }
     }
@@ -290,10 +409,39 @@ mod tests {
         let request = rx.try_recv().expect("request should be sent");
         match request {
             TextInputRequest::ReplaceSuffix {
-                delete_count, text, ..
+                delete_count,
+                text,
+                mode,
+                ..
             } => {
                 assert_eq!(delete_count, 2);
                 assert_eq!(text, "world");
+                assert_eq!(mode, TextInputExecutionMode::Standalone);
+            }
+            TextInputRequest::TypeText { .. } => panic!("unexpected type request"),
+        }
+    }
+
+    /// 連続差分置き換えリクエストは継続モードで送信される
+    #[test]
+    fn continuous_replace_suffix_request_uses_continuous_mode() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<TextInputRequest>();
+        let handle = TextInputWorkerHandle::new(tx);
+
+        let receiver = handle.send_replace_suffix_continuous(2, "world".to_string());
+
+        assert!(receiver.is_ok());
+        let request = rx.try_recv().expect("request should be sent");
+        match request {
+            TextInputRequest::ReplaceSuffix {
+                delete_count,
+                text,
+                mode,
+                ..
+            } => {
+                assert_eq!(delete_count, 2);
+                assert_eq!(text, "world");
+                assert_eq!(mode, TextInputExecutionMode::Continuous);
             }
             TextInputRequest::TypeText { .. } => panic!("unexpected type request"),
         }
