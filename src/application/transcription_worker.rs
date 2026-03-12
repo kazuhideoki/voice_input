@@ -20,6 +20,7 @@ use crate::infrastructure::external::{sound::resume_apple_music, text_input};
 use crate::ipc::RecordingResult;
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
+use async_trait::async_trait;
 
 /// 転写結果を処理
 pub async fn handle_transcription(
@@ -48,23 +49,7 @@ pub async fn handle_transcription(
     let text = if EnvConfig::get().openai_transcribe_streaming {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
         let input_task = tokio::task::spawn_local(async move {
-            let mut rendered_text = String::new();
-            while let Some(event) = event_rx.recv().await {
-                match event {
-                    TranscriptionEvent::Delta(delta) => {
-                        type_text_with_profile(&delta).await;
-                        rendered_text.push_str(&delta);
-                    }
-                    TranscriptionEvent::Completed(text) if rendered_text.is_empty() => {
-                        type_text_with_profile(&text).await;
-                        break;
-                    }
-                    TranscriptionEvent::Completed(text) => {
-                        apply_text_patch_with_profile(&rendered_text, &text).await;
-                        break;
-                    }
-                }
-            }
+            process_streaming_events(&mut event_rx, &ProfiledTextApplier).await;
         });
 
         let text = transcription_service
@@ -167,6 +152,48 @@ fn diff_text_for_patch(current: &str, next: &str) -> (usize, String) {
     (delete_count, append_text)
 }
 
+#[async_trait(?Send)]
+trait TextApplier {
+    async fn type_text(&self, text: &str);
+    async fn patch_text(&self, current: &str, next: &str);
+}
+
+struct ProfiledTextApplier;
+
+#[async_trait(?Send)]
+impl TextApplier for ProfiledTextApplier {
+    async fn type_text(&self, text: &str) {
+        type_text_with_profile(text).await;
+    }
+
+    async fn patch_text(&self, current: &str, next: &str) {
+        apply_text_patch_with_profile(current, next).await;
+    }
+}
+
+async fn process_streaming_events(
+    event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<TranscriptionEvent>,
+    text_applier: &dyn TextApplier,
+) {
+    let mut rendered_text = String::new();
+    while let Some(event) = event_rx.recv().await {
+        match event {
+            TranscriptionEvent::Delta(delta) => {
+                text_applier.type_text(&delta).await;
+                rendered_text.push_str(&delta);
+            }
+            TranscriptionEvent::Completed(text) if rendered_text.is_empty() => {
+                text_applier.type_text(&text).await;
+                break;
+            }
+            TranscriptionEvent::Completed(text) => {
+                text_applier.patch_text(&rendered_text, &text).await;
+                break;
+            }
+        }
+    }
+}
+
 /// 転写ワーカーを起動
 pub async fn spawn_transcription_worker(
     semaphore: Arc<Semaphore>,
@@ -194,7 +221,11 @@ pub async fn spawn_transcription_worker(
 
 #[cfg(test)]
 mod tests {
-    use super::diff_text_for_patch;
+    use super::{TextApplier, diff_text_for_patch, process_streaming_events};
+    use crate::application::TranscriptionEvent;
+    use async_trait::async_trait;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
 
     /// 末尾追記だけなら削除せず差分だけ追加する
     #[test]
@@ -212,5 +243,59 @@ mod tests {
 
         assert_eq!(delete_count, 5);
         assert_eq!(append_text, "testです");
+    }
+
+    /// Deltaの後にCompletedが来たら差分置き換えで最終文字列へ補正する
+    #[tokio::test]
+    async fn streaming_events_use_replace_suffix_after_delta_input() {
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        struct MockTextApplier {
+            calls: Rc<RefCell<Vec<String>>>,
+            completed: Rc<Cell<bool>>,
+        }
+
+        #[async_trait(?Send)]
+        impl TextApplier for MockTextApplier {
+            async fn type_text(&self, text: &str) {
+                self.calls.borrow_mut().push(format!("type:{text}"));
+            }
+
+            async fn patch_text(&self, current: &str, next: &str) {
+                self.calls
+                    .borrow_mut()
+                    .push(format!("patch:{current}->{next}"));
+                self.completed.set(true);
+            }
+        }
+
+        let calls = Rc::new(RefCell::new(Vec::<String>::new()));
+        let completed = Rc::new(Cell::new(false));
+        let text_applier = MockTextApplier {
+            calls: calls.clone(),
+            completed: completed.clone(),
+        };
+
+        event_tx
+            .send(TranscriptionEvent::Delta("これは".to_string()))
+            .unwrap();
+        event_tx
+            .send(TranscriptionEvent::Delta("テストです".to_string()))
+            .unwrap();
+        event_tx
+            .send(TranscriptionEvent::Completed("これはtestです".to_string()))
+            .unwrap();
+        drop(event_tx);
+
+        process_streaming_events(&mut event_rx, &text_applier).await;
+
+        assert_eq!(
+            *calls.borrow(),
+            vec![
+                "type:これは".to_string(),
+                "type:テストです".to_string(),
+                "patch:これはテストです->これはtestです".to_string()
+            ]
+        );
+        assert!(completed.get());
     }
 }

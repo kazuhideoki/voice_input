@@ -570,4 +570,51 @@ mod tests {
             ]
         );
     }
+
+    /// UTF-8の途中バイトで分割されても完成フレーム単位でパースできる
+    #[test]
+    fn streaming_parser_handles_multibyte_utf8_split_across_chunks() {
+        let mut parser = StreamingEventParser::default();
+        let utf8_bytes = "event: transcript.text.delta\ndata: {\"delta\":\"こ".as_bytes();
+        let multibyte_tail = "ん\"}\n\n".as_bytes();
+
+        let events = parser
+            .push_chunk(utf8_bytes)
+            .expect("first chunk should buffer");
+        assert!(events.is_empty());
+
+        let events = parser
+            .push_chunk(multibyte_tail)
+            .expect("second chunk should parse");
+        assert_eq!(
+            events,
+            vec![StreamingTranscriptionEvent::Delta("こん".to_string())]
+        );
+    }
+
+    /// 区切り文字がchunkをまたいでもイベント境界を認識できる
+    #[test]
+    fn streaming_parser_handles_split_crlf_frame_separator() {
+        let mut parser = StreamingEventParser::default();
+
+        let first = parser
+            .push_chunk("event: transcript.text.delta\r\ndata: {\"delta\":\"こん\"}\r".as_bytes())
+            .expect("first chunk should buffer");
+        assert!(first.is_empty());
+
+        let second = parser
+            .push_chunk(
+                "\n\r\nevent: transcript.text.done\r\ndata: {\"text\":\"こんにちは\"}\r\n\r\n"
+                    .as_bytes(),
+            )
+            .expect("second chunk should parse");
+
+        assert_eq!(
+            second,
+            vec![
+                StreamingTranscriptionEvent::Delta("こん".to_string()),
+                StreamingTranscriptionEvent::Completed("こんにちは".to_string()),
+            ]
+        );
+    }
 }
