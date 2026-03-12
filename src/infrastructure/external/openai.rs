@@ -1,16 +1,34 @@
 //! OpenAI STT API ラッパ。
 //! AudioData（既定: FLAC、失敗時にWAVへフォールバック）を
 //! multipart/form-data で転写エンドポイントに送信します。
+use crate::application::TranscriptionEvent;
 use crate::infrastructure::audio::cpal_backend::AudioData;
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use reqwest::{Client, Proxy, multipart};
 use serde::Deserialize;
+use tokio::sync::mpsc;
 
 /// STT API のレスポンス JSON。
 #[derive(Debug, Deserialize)]
 struct TranscriptionResponse {
     pub text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamingDeltaResponse {
+    pub delta: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamingCompletedResponse {
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum StreamingTranscriptionEvent {
+    Delta(String),
+    Completed(String),
 }
 
 /// Dictionary suggestion (surface -> replacement)
@@ -36,8 +54,15 @@ impl OpenAiClient {
             .clone()
             .ok_or("OPENAI_API_KEY environment variable is not set")?;
 
-        let model = std::env::var("OPENAI_TRANSCRIBE_MODEL")
-            .unwrap_or_else(|_| "gpt-4o-mini-transcribe".to_string());
+        let model = config.openai_transcribe_model.as_str().to_string();
+        if config.openai_transcribe_streaming
+            && !config.openai_transcribe_model.supports_streaming()
+        {
+            return Err(format!(
+                "OPENAI_TRANSCRIBE_MODEL={} does not support streaming",
+                model
+            ));
+        }
 
         let client =
             build_http_client().map_err(|e| format!("Failed to build HTTP client: {}", e))?;
@@ -70,6 +95,33 @@ impl OpenAiClient {
 
         // 既存の転写処理を実行
         self.transcribe_with_part(part, None).await
+    }
+
+    /// AudioDataから直接ストリーミング転写を実行
+    pub async fn transcribe_audio_streaming(
+        &self,
+        audio_data: AudioData,
+        event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
+    ) -> Result<String, String> {
+        if profiling::enabled() {
+            profiling::log_point(
+                "openai.streaming_request",
+                &format!(
+                    "bytes={} mime={} model={}",
+                    audio_data.bytes.len(),
+                    audio_data.mime_type,
+                    self.model
+                ),
+            );
+        }
+
+        let part = multipart::Part::bytes(audio_data.bytes)
+            .file_name(audio_data.file_name)
+            .mime_str(audio_data.mime_type)
+            .map_err(|e| format!("Failed to create multipart: {}", e))?;
+
+        self.transcribe_streaming_with_part(part, None, event_tx)
+            .await
     }
 
     /// 共通の転写処理
@@ -147,6 +199,181 @@ impl OpenAiClient {
             overall_timer.log();
         }
         Ok(transcription.text)
+    }
+
+    async fn transcribe_streaming_with_part(
+        &self,
+        file_part: multipart::Part,
+        prompt: Option<&str>,
+        event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
+    ) -> Result<String, String> {
+        let overall_timer = profiling::Timer::start("openai.streaming_transcribe_total");
+        let url = "https://api.openai.com/v1/audio/transcriptions";
+
+        let mut form = multipart::Form::new()
+            .part("file", file_part)
+            .text("model", self.model.clone())
+            .text("language", "ja")
+            .text("stream", "true");
+
+        if let Some(prompt_text) = prompt {
+            let formatted_prompt = format!(
+                "The following text provides relevant context. Please consider this when creating the transcription: {:?}",
+                prompt_text
+            );
+            form = form.text("prompt", formatted_prompt);
+        }
+
+        let send_timer = profiling::Timer::start("openai.streaming_send");
+        let mut response = self
+            .client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to send request: {}", e))?;
+        send_timer.log();
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response
+                .text()
+                .await
+                .map_err(|e| format!("Failed to read response: {}", e))?;
+            if profiling::enabled() {
+                overall_timer.log_with(&format!("status={}", status));
+            } else {
+                overall_timer.log();
+            }
+            return Err(format!(
+                "API request failed with status {}: {}",
+                status, body
+            ));
+        }
+
+        let mut parser = StreamingEventParser::default();
+        let mut final_text = None;
+
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| format!("Failed to read response chunk: {}", e))?
+        {
+            let chunk = std::str::from_utf8(&chunk)
+                .map_err(|e| format!("Failed to decode response chunk: {}", e))?;
+            for event in parser.push_chunk(chunk)? {
+                match event {
+                    StreamingTranscriptionEvent::Delta(delta) => {
+                        let _ = event_tx.send(TranscriptionEvent::Delta(delta));
+                    }
+                    StreamingTranscriptionEvent::Completed(text) => {
+                        final_text = Some(text);
+                    }
+                }
+            }
+        }
+
+        for event in parser.finish()? {
+            match event {
+                StreamingTranscriptionEvent::Delta(delta) => {
+                    let _ = event_tx.send(TranscriptionEvent::Delta(delta));
+                }
+                StreamingTranscriptionEvent::Completed(text) => {
+                    final_text = Some(text);
+                }
+            }
+        }
+
+        let text = final_text.ok_or("Streaming response completed without final text")?;
+
+        if profiling::enabled() {
+            overall_timer.log_with(&format!("status={} text_len={}", status, text.len()));
+        } else {
+            overall_timer.log();
+        }
+
+        Ok(text)
+    }
+}
+
+#[derive(Default)]
+struct StreamingEventParser {
+    buffer: String,
+}
+
+impl StreamingEventParser {
+    fn push_chunk(&mut self, chunk: &str) -> Result<Vec<StreamingTranscriptionEvent>, String> {
+        self.buffer.push_str(chunk);
+        self.drain_complete_events()
+    }
+
+    fn finish(&mut self) -> Result<Vec<StreamingTranscriptionEvent>, String> {
+        if self.buffer.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let remainder = std::mem::take(&mut self.buffer);
+        parse_streaming_frame(&remainder).map(|event| event.into_iter().collect())
+    }
+
+    fn drain_complete_events(&mut self) -> Result<Vec<StreamingTranscriptionEvent>, String> {
+        let mut events = Vec::new();
+
+        while let Some(separator) = self.buffer.find("\n\n") {
+            let frame = self.buffer[..separator].to_string();
+            self.buffer.drain(..separator + 2);
+            if let Some(event) = parse_streaming_frame(&frame)? {
+                events.push(event);
+            }
+        }
+
+        Ok(events)
+    }
+}
+
+#[cfg(test)]
+fn parse_streaming_events(body: &str) -> Result<Vec<StreamingTranscriptionEvent>, String> {
+    let mut parser = StreamingEventParser::default();
+    let mut events = parser.push_chunk(body)?;
+    events.extend(parser.finish()?);
+    Ok(events)
+}
+
+fn parse_streaming_frame(frame: &str) -> Result<Option<StreamingTranscriptionEvent>, String> {
+    let normalized = frame.replace("\r\n", "\n");
+    let mut event_name = None;
+    let mut data_lines = Vec::new();
+
+    for line in normalized.lines() {
+        if let Some(value) = line.strip_prefix("event:") {
+            event_name = Some(value.trim().to_string());
+        } else if let Some(value) = line.strip_prefix("data:") {
+            let data = value.trim();
+            if data == "[DONE]" {
+                return Ok(None);
+            }
+            data_lines.push(data);
+        }
+    }
+
+    let Some(event_name) = event_name else {
+        return Ok(None);
+    };
+
+    let data = data_lines.join("\n");
+    match event_name.as_str() {
+        "transcript.text.delta" => {
+            let payload: StreamingDeltaResponse = serde_json::from_str(&data)
+                .map_err(|e| format!("Failed to parse streaming delta: {}", e))?;
+            Ok(Some(StreamingTranscriptionEvent::Delta(payload.delta)))
+        }
+        "transcript.text.done" => {
+            let payload: StreamingCompletedResponse = serde_json::from_str(&data)
+                .map_err(|e| format!("Failed to parse streaming completion: {}", e))?;
+            Ok(Some(StreamingTranscriptionEvent::Completed(payload.text)))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -281,5 +508,29 @@ mod tests {
 
         // We expect an error since the file doesn't exist
         assert!(result.is_err());
+    }
+
+    /// ストリーミングレスポンスのdeltaを受信順に連結できる
+    #[test]
+    fn streaming_deltas_can_be_concatenated_in_received_order() {
+        let body = concat!(
+            "event: transcript.text.delta\n",
+            "data: {\"delta\":\"こん\"}\n\n",
+            "event: transcript.text.delta\n",
+            "data: {\"delta\":\"にちは\"}\n\n",
+            "event: transcript.text.done\n",
+            "data: {\"text\":\"こんにちは\"}\n\n"
+        );
+
+        let events = parse_streaming_events(body).expect("stream should parse");
+
+        assert_eq!(
+            events,
+            vec![
+                StreamingTranscriptionEvent::Delta("こん".to_string()),
+                StreamingTranscriptionEvent::Delta("にちは".to_string()),
+                StreamingTranscriptionEvent::Completed("こんにちは".to_string()),
+            ]
+        );
     }
 }

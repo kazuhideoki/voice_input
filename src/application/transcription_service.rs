@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 use tokio::sync::Semaphore;
+use tokio::sync::mpsc;
 
 use crate::domain::dict::{DictRepository, apply_replacements};
 use crate::error::{Result, VoiceInputError};
@@ -20,6 +21,25 @@ use async_trait::async_trait;
 pub trait TranscriptionClient: Send + Sync {
     /// 音声データを文字起こし
     async fn transcribe(&self, audio: AudioData, language: &str) -> Result<String>;
+
+    /// 音声データをストリーミングで文字起こしする
+    async fn transcribe_streaming(
+        &self,
+        audio: AudioData,
+        language: &str,
+        _event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
+    ) -> Result<String> {
+        self.transcribe(audio, language).await
+    }
+}
+
+/// ストリーミング転写イベント
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TranscriptionEvent {
+    /// 増分テキスト
+    Delta(String),
+    /// 最終確定テキスト
+    Completed(String),
 }
 
 /// 転写オプション
@@ -109,6 +129,49 @@ impl TranscriptionService {
         } else {
             overall_timer.log();
         }
+        Ok(processed)
+    }
+
+    /// 音声データをストリーミングで文字起こし
+    pub async fn transcribe_streaming(
+        &self,
+        audio: AudioData,
+        options: TranscriptionOptions,
+        event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
+    ) -> Result<String> {
+        let overall_timer = profiling::Timer::start("transcription.streaming_total");
+
+        let _permit = self.semaphore.acquire().await.map_err(|e| {
+            VoiceInputError::SystemError(format!("Semaphore acquire failed: {}", e))
+        })?;
+
+        let api_timer = profiling::Timer::start("transcription.streaming_api");
+        let text = self
+            .client
+            .transcribe_streaming(audio, &options.language, event_tx.clone())
+            .await?;
+        api_timer.log();
+
+        let dict_timer = profiling::Timer::start("transcription.streaming_dict");
+        let processed = self.apply_dictionary(&text)?;
+        if profiling::enabled() {
+            dict_timer.log_with(&format!(
+                "text_len={} processed_len={}",
+                text.len(),
+                processed.len()
+            ));
+        } else {
+            dict_timer.log();
+        }
+
+        let _ = event_tx.send(TranscriptionEvent::Completed(processed.clone()));
+
+        if profiling::enabled() {
+            overall_timer.log_with(&format!("processed_len={}", processed.len()));
+        } else {
+            overall_timer.log();
+        }
+
         Ok(processed)
     }
 
@@ -279,5 +342,83 @@ mod tests {
 
         assert!(result1.is_ok());
         assert!(result2.is_ok());
+    }
+
+    /// ストリーミング未実装クライアントでも最終確定イベントを通知できる
+    #[tokio::test]
+    async fn completed_event_is_emitted_when_streaming_uses_default_trait_path() {
+        let client = MockTranscriptionClient::new("これはテストです");
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+
+        let audio = AudioData {
+            bytes: vec![0u8; 100],
+            mime_type: "audio/wav",
+            file_name: "audio.wav".to_string(),
+        };
+
+        let result = client
+            .transcribe_streaming(audio, "ja", event_tx)
+            .await
+            .unwrap();
+        assert!(event_rx.try_recv().is_err());
+
+        assert_eq!(result, "これはテストです");
+    }
+
+    /// ストリーミング転写ではdeltaを受け取りながら最終結果に到達できる
+    #[tokio::test]
+    async fn transcription_service_emits_delta_events_before_completion() {
+        struct MockStreamingClient;
+
+        #[async_trait]
+        impl TranscriptionClient for MockStreamingClient {
+            async fn transcribe(&self, _audio: AudioData, _language: &str) -> Result<String> {
+                Ok("これはテストです".to_string())
+            }
+
+            async fn transcribe_streaming(
+                &self,
+                _audio: AudioData,
+                _language: &str,
+                event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
+            ) -> Result<String> {
+                let _ = event_tx.send(TranscriptionEvent::Delta("これは".to_string()));
+                let _ = event_tx.send(TranscriptionEvent::Delta("テストです".to_string()));
+                Ok("これはテストです".to_string())
+            }
+        }
+
+        let service = TranscriptionService::new(
+            Box::new(MockStreamingClient),
+            Box::new(MockDictRepo::new()),
+            1,
+        );
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let audio = AudioData {
+            bytes: vec![0u8; 100],
+            mime_type: "audio/wav",
+            file_name: "audio.wav".to_string(),
+        };
+        let options = TranscriptionOptions::default();
+
+        let result = service
+            .transcribe_streaming(audio, options, event_tx)
+            .await
+            .unwrap();
+
+        let mut events = Vec::new();
+        while let Ok(event) = event_rx.try_recv() {
+            events.push(event);
+        }
+
+        assert_eq!(result, "これはtestです");
+        assert_eq!(
+            events,
+            vec![
+                TranscriptionEvent::Delta("これは".to_string()),
+                TranscriptionEvent::Delta("テストです".to_string()),
+                TranscriptionEvent::Completed("これはtestです".to_string()),
+            ]
+        );
     }
 }

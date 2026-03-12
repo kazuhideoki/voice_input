@@ -12,10 +12,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-use crate::application::{TranscriptionMessage, TranscriptionOptions, TranscriptionService};
+use crate::application::{
+    TranscriptionEvent, TranscriptionMessage, TranscriptionOptions, TranscriptionService,
+};
 use crate::error::Result;
 use crate::infrastructure::external::{sound::resume_apple_music, text_input};
 use crate::ipc::RecordingResult;
+use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 
 /// 転写結果を処理
@@ -42,16 +45,57 @@ pub async fn handle_transcription(
         prompt: None, // メモリモードではプロンプトファイルを使用しない
     };
 
-    // 転写実行
-    let text = transcription_service
-        .borrow()
-        .transcribe(result.audio_data.into(), options)
-        .await?;
+    let text = if EnvConfig::get().openai_transcribe_streaming {
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let input_task = tokio::task::spawn_local(async move {
+            let mut delta_emitted = false;
+            while let Some(event) = event_rx.recv().await {
+                match event {
+                    TranscriptionEvent::Delta(delta) => {
+                        delta_emitted = true;
+                        type_text_with_profile(&delta).await;
+                    }
+                    TranscriptionEvent::Completed(text) if !delta_emitted => {
+                        type_text_with_profile(&text).await;
+                    }
+                    TranscriptionEvent::Completed(_) => break,
+                }
+            }
+        });
 
-    // 直接入力で即貼り付け
+        let text = transcription_service
+            .borrow()
+            .transcribe_streaming(result.audio_data.into(), options, event_tx)
+            .await?;
+
+        match input_task.await {
+            Ok(()) => {}
+            Err(e) => eprintln!("Streaming input task failed: {}", e),
+        }
+
+        text
+    } else {
+        let text = transcription_service
+            .borrow()
+            .transcribe(result.audio_data.into(), options)
+            .await?;
+        type_text_with_profile(&text).await;
+        text
+    };
+
+    if profiling::enabled() {
+        overall_timer.log_with(&format!("text_len={}", text.len()));
+    } else {
+        overall_timer.log();
+    }
+
+    Ok(())
+}
+
+async fn type_text_with_profile(text: &str) {
     tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
     let input_timer = profiling::Timer::start("text_input");
-    match text_input::type_text(&text).await {
+    match text_input::type_text(text).await {
         Ok(_) => {
             if profiling::enabled() {
                 input_timer.log_with(&format!("ok=true text_len={}", text.len()));
@@ -66,17 +110,8 @@ pub async fn handle_transcription(
                 input_timer.log();
             }
             eprintln!("Direct input failed: {}", e);
-            // フォールバック処理は削除（クリップボードを汚染しないため）
         }
     }
-
-    if profiling::enabled() {
-        overall_timer.log_with(&format!("text_len={}", text.len()));
-    } else {
-        overall_timer.log();
-    }
-
-    Ok(())
 }
 
 /// 転写ワーカーを起動

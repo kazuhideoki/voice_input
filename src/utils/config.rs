@@ -15,6 +15,35 @@ use std::sync::Mutex;
 #[cfg(test)]
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
+/// OpenAI の文字起こしモデル
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiTranscriptionModel(String);
+
+impl OpenAiTranscriptionModel {
+    const DEFAULT: &'static str = "gpt-4o-mini-transcribe";
+    const STREAMING_SUPPORTED: [&'static str; 2] = ["gpt-4o-mini-transcribe", "gpt-4o-transcribe"];
+
+    /// 環境変数からモデル設定を生成
+    pub fn from_env() -> Self {
+        Self(std::env::var("OPENAI_TRANSCRIBE_MODEL").unwrap_or_else(|_| Self::DEFAULT.to_string()))
+    }
+
+    /// 文字列からモデル設定を生成
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// モデル名を文字列で取得
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// ストリーミング転写に対応しているか
+    pub fn supports_streaming(&self) -> bool {
+        Self::STREAMING_SUPPORTED.contains(&self.0.as_str())
+    }
+}
+
 /// 環境変数設定
 #[derive(Debug, Clone)]
 pub struct EnvConfig {
@@ -24,6 +53,10 @@ pub struct EnvConfig {
     pub xdg_data_home: Option<String>,
     /// 環境変数ファイルのパス
     pub env_path: Option<String>,
+    /// OpenAI 文字起こしモデル
+    pub openai_transcribe_model: OpenAiTranscriptionModel,
+    /// ストリーミング直接入力を有効にする
+    pub openai_transcribe_streaming: bool,
 }
 
 impl EnvConfig {
@@ -40,6 +73,10 @@ impl EnvConfig {
             openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
             xdg_data_home: std::env::var("XDG_DATA_HOME").ok(),
             env_path: std::env::var("VOICE_INPUT_ENV_PATH").ok(),
+            openai_transcribe_model: OpenAiTranscriptionModel::from_env(),
+            openai_transcribe_streaming: std::env::var("OPENAI_TRANSCRIBE_STREAMING")
+                .ok()
+                .is_some_and(|value| value == "true"),
         };
 
         // 並列実行時の競合を考慮：既に他のスレッドが初期化していても成功とする
@@ -84,8 +121,39 @@ impl EnvConfig {
                 openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
                 xdg_data_home: std::env::var("XDG_DATA_HOME").ok(),
                 env_path: std::env::var("VOICE_INPUT_ENV_PATH").ok(),
+                openai_transcribe_model: OpenAiTranscriptionModel::from_env(),
+                openai_transcribe_streaming: std::env::var("OPENAI_TRANSCRIBE_STREAMING")
+                    .ok()
+                    .is_some_and(|value| value == "true"),
             };
             ENV_CONFIG.set(Arc::new(config)).ok();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EnvConfig, OpenAiTranscriptionModel};
+
+    /// ストリーミング有効化時は対応モデルのみ許可対象として判定できる
+    #[test]
+    fn streaming_support_is_determined_by_model_whitelist() {
+        assert!(OpenAiTranscriptionModel::new("gpt-4o-mini-transcribe").supports_streaming());
+        assert!(OpenAiTranscriptionModel::new("gpt-4o-transcribe").supports_streaming());
+        assert!(!OpenAiTranscriptionModel::new("whisper-1").supports_streaming());
+    }
+
+    /// ストリーミング設定は環境変数から有効化状態を読み取れる
+    #[test]
+    fn streaming_flag_is_loaded_from_environment() {
+        let config = EnvConfig {
+            openai_api_key: None,
+            xdg_data_home: None,
+            env_path: None,
+            openai_transcribe_model: OpenAiTranscriptionModel::new("gpt-4o-mini-transcribe"),
+            openai_transcribe_streaming: true,
+        };
+
+        assert!(config.openai_transcribe_streaming);
     }
 }

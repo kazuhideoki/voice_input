@@ -11,5 +11,7 @@ pub use recording_service::{
     RecordingConfig, RecordingContext, RecordingOptions, RecordingService, RecordingState,
 };
 pub use service_container::{AppConfig, ServiceContainer};
-pub use transcription_service::{TranscriptionClient, TranscriptionOptions, TranscriptionService};
+pub use transcription_service::{
+    TranscriptionClient, TranscriptionEvent, TranscriptionOptions, TranscriptionService,
+};
 pub use transcription_worker::{handle_transcription, spawn_transcription_worker};
