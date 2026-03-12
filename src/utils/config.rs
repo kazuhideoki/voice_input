@@ -60,6 +60,28 @@ pub struct EnvConfig {
 }
 
 impl EnvConfig {
+    /// 環境変数から設定を構築
+    pub fn from_env() -> Self {
+        Self {
+            openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
+            xdg_data_home: std::env::var("XDG_DATA_HOME").ok(),
+            env_path: std::env::var("VOICE_INPUT_ENV_PATH").ok(),
+            openai_transcribe_model: OpenAiTranscriptionModel::from_env(),
+            openai_transcribe_streaming: std::env::var("OPENAI_TRANSCRIBE_STREAMING")
+                .ok()
+                .is_some_and(|value| value == "true"),
+        }
+    }
+
+    /// 転写の推奨同時実行数を返す
+    pub fn recommended_transcription_parallelism(&self) -> usize {
+        if self.openai_transcribe_streaming {
+            1
+        } else {
+            2
+        }
+    }
+
     /// 環境変数から設定を初期化
     ///
     /// アプリケーション起動時に呼び出す。
@@ -69,15 +91,7 @@ impl EnvConfig {
             return Ok(());
         }
 
-        let config = EnvConfig {
-            openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
-            xdg_data_home: std::env::var("XDG_DATA_HOME").ok(),
-            env_path: std::env::var("VOICE_INPUT_ENV_PATH").ok(),
-            openai_transcribe_model: OpenAiTranscriptionModel::from_env(),
-            openai_transcribe_streaming: std::env::var("OPENAI_TRANSCRIBE_STREAMING")
-                .ok()
-                .is_some_and(|value| value == "true"),
-        };
+        let config = EnvConfig::from_env();
 
         // 並列実行時の競合を考慮：既に他のスレッドが初期化していても成功とする
         let _ = ENV_CONFIG.set(Arc::new(config));
@@ -117,15 +131,7 @@ impl EnvConfig {
 
         if ENV_CONFIG.get().is_none() {
             // テスト用のデフォルト設定
-            let config = EnvConfig {
-                openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
-                xdg_data_home: std::env::var("XDG_DATA_HOME").ok(),
-                env_path: std::env::var("VOICE_INPUT_ENV_PATH").ok(),
-                openai_transcribe_model: OpenAiTranscriptionModel::from_env(),
-                openai_transcribe_streaming: std::env::var("OPENAI_TRANSCRIBE_STREAMING")
-                    .ok()
-                    .is_some_and(|value| value == "true"),
-            };
+            let config = EnvConfig::from_env();
             ENV_CONFIG.set(Arc::new(config)).ok();
         }
     }
@@ -155,5 +161,33 @@ mod tests {
         };
 
         assert!(config.openai_transcribe_streaming);
+    }
+
+    /// ストリーミング有効時は転写を直列化する
+    #[test]
+    fn streaming_uses_single_transcription_parallelism() {
+        let config = EnvConfig {
+            openai_api_key: None,
+            xdg_data_home: None,
+            env_path: None,
+            openai_transcribe_model: OpenAiTranscriptionModel::new("gpt-4o-mini-transcribe"),
+            openai_transcribe_streaming: true,
+        };
+
+        assert_eq!(config.recommended_transcription_parallelism(), 1);
+    }
+
+    /// ストリーミング無効時は従来の並列度を維持する
+    #[test]
+    fn non_streaming_keeps_existing_transcription_parallelism() {
+        let config = EnvConfig {
+            openai_api_key: None,
+            xdg_data_home: None,
+            env_path: None,
+            openai_transcribe_model: OpenAiTranscriptionModel::new("whisper-1"),
+            openai_transcribe_streaming: false,
+        };
+
+        assert_eq!(config.recommended_transcription_parallelism(), 2);
     }
 }

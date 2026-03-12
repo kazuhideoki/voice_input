@@ -13,6 +13,7 @@ use crate::domain::dict::{DictRepository, apply_replacements};
 use crate::error::{Result, VoiceInputError};
 use crate::infrastructure::audio::cpal_backend::AudioData;
 use crate::infrastructure::dict::JsonFileDictRepo;
+use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use async_trait::async_trait;
 
@@ -89,7 +90,7 @@ impl TranscriptionService {
         Self::new(
             client,
             Box::new(JsonFileDictRepo::new()),
-            2, // デフォルトの同時実行数
+            EnvConfig::from_env().recommended_transcription_parallelism(),
         )
     }
 

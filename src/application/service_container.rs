@@ -20,6 +20,7 @@ use crate::infrastructure::{
     dict::JsonFileDictRepo,
     external::openai_adapter::OpenAiTranscriptionAdapter,
 };
+use crate::utils::config::EnvConfig;
 
 /// アプリケーション設定
 #[derive(Clone, Debug)]
@@ -39,7 +40,8 @@ impl Default for AppConfig {
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(30),
             },
-            max_concurrent_transcriptions: 2,
+            max_concurrent_transcriptions: EnvConfig::from_env()
+                .recommended_transcription_parallelism(),
         }
     }
 }

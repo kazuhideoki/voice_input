@@ -67,7 +67,8 @@ async fn async_main() -> Result<()> {
         .expect("Transcription receiver should be available");
 
     // 転写ワーカーの起動
-    let semaphore = std::sync::Arc::new(Semaphore::new(2));
+    let max_concurrent_transcriptions = EnvConfig::get().recommended_transcription_parallelism();
+    let semaphore = std::sync::Arc::new(Semaphore::new(max_concurrent_transcriptions));
     let transcription_service = {
         // TranscriptionServiceを取得（CommandHandlerから）
         // 注: 実際のアプリケーションではServiceContainerから直接取得する方が良い
