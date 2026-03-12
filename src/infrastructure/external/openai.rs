@@ -260,9 +260,7 @@ impl OpenAiClient {
             .await
             .map_err(|e| format!("Failed to read response chunk: {}", e))?
         {
-            let chunk = std::str::from_utf8(&chunk)
-                .map_err(|e| format!("Failed to decode response chunk: {}", e))?;
-            for event in parser.push_chunk(chunk)? {
+            for event in parser.push_chunk(&chunk)? {
                 match event {
                     StreamingTranscriptionEvent::Delta(delta) => {
                         let _ = event_tx.send(TranscriptionEvent::Delta(delta));
@@ -299,17 +297,17 @@ impl OpenAiClient {
 
 #[derive(Default)]
 struct StreamingEventParser {
-    buffer: String,
+    buffer: Vec<u8>,
 }
 
 impl StreamingEventParser {
-    fn push_chunk(&mut self, chunk: &str) -> Result<Vec<StreamingTranscriptionEvent>, String> {
-        self.buffer.push_str(chunk);
+    fn push_chunk(&mut self, chunk: &[u8]) -> Result<Vec<StreamingTranscriptionEvent>, String> {
+        self.buffer.extend_from_slice(chunk);
         self.drain_complete_events()
     }
 
     fn finish(&mut self) -> Result<Vec<StreamingTranscriptionEvent>, String> {
-        if self.buffer.trim().is_empty() {
+        if self.buffer.iter().all(|byte| byte.is_ascii_whitespace()) {
             return Ok(Vec::new());
         }
 
@@ -320,9 +318,9 @@ impl StreamingEventParser {
     fn drain_complete_events(&mut self) -> Result<Vec<StreamingTranscriptionEvent>, String> {
         let mut events = Vec::new();
 
-        while let Some(separator) = self.buffer.find("\n\n") {
-            let frame = self.buffer[..separator].to_string();
-            self.buffer.drain(..separator + 2);
+        while let Some((separator, separator_len)) = find_frame_separator(&self.buffer) {
+            let frame = self.buffer[..separator].to_vec();
+            self.buffer.drain(..separator + separator_len);
             if let Some(event) = parse_streaming_frame(&frame)? {
                 events.push(event);
             }
@@ -335,13 +333,15 @@ impl StreamingEventParser {
 #[cfg(test)]
 fn parse_streaming_events(body: &str) -> Result<Vec<StreamingTranscriptionEvent>, String> {
     let mut parser = StreamingEventParser::default();
-    let mut events = parser.push_chunk(body)?;
+    let mut events = parser.push_chunk(body.as_bytes())?;
     events.extend(parser.finish()?);
     Ok(events)
 }
 
-fn parse_streaming_frame(frame: &str) -> Result<Option<StreamingTranscriptionEvent>, String> {
-    let normalized = frame.replace("\r\n", "\n");
+fn parse_streaming_frame(frame: &[u8]) -> Result<Option<StreamingTranscriptionEvent>, String> {
+    let normalized = std::str::from_utf8(frame)
+        .map_err(|e| format!("Failed to decode streaming frame: {}", e))?
+        .replace("\r\n", "\n");
     let mut event_name = None;
     let mut data_lines = Vec::new();
 
@@ -375,6 +375,22 @@ fn parse_streaming_frame(frame: &str) -> Result<Option<StreamingTranscriptionEve
         }
         _ => Ok(None),
     }
+}
+
+fn find_frame_separator(buffer: &[u8]) -> Option<(usize, usize)> {
+    for (index, window) in buffer.windows(2).enumerate() {
+        if window == b"\n\n" {
+            return Some((index, 2));
+        }
+    }
+
+    for (index, window) in buffer.windows(4).enumerate() {
+        if window == b"\r\n\r\n" {
+            return Some((index, 4));
+        }
+    }
+
+    None
 }
 
 fn build_http_client() -> Result<Client, reqwest::Error> {
@@ -529,6 +545,27 @@ mod tests {
             vec![
                 StreamingTranscriptionEvent::Delta("こん".to_string()),
                 StreamingTranscriptionEvent::Delta("にちは".to_string()),
+                StreamingTranscriptionEvent::Completed("こんにちは".to_string()),
+            ]
+        );
+    }
+
+    /// CRLF 区切りのストリーミングレスポンスも逐次パースできる
+    #[test]
+    fn streaming_events_support_crlf_delimiters() {
+        let body = concat!(
+            "event: transcript.text.delta\r\n",
+            "data: {\"delta\":\"こん\"}\r\n\r\n",
+            "event: transcript.text.done\r\n",
+            "data: {\"text\":\"こんにちは\"}\r\n\r\n"
+        );
+
+        let events = parse_streaming_events(body).expect("stream should parse");
+
+        assert_eq!(
+            events,
+            vec![
+                StreamingTranscriptionEvent::Delta("こん".to_string()),
                 StreamingTranscriptionEvent::Completed("こんにちは".to_string()),
             ]
         );

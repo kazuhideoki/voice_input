@@ -3,7 +3,10 @@
 //! enigo を同一プロセスの別スレッドで常駐させる前提の型を提供する。
 
 use async_trait::async_trait;
-use enigo::{Direction::Release, Enigo, Key, Keyboard, Settings};
+use enigo::{
+    Direction::{Click, Release},
+    Enigo, Key, Keyboard, Settings,
+};
 use std::fmt;
 use tokio::sync::{mpsc, oneshot};
 
@@ -43,11 +46,33 @@ impl std::error::Error for TextInputWorkerError {}
 
 /// ワーカーへ送る入力リクエスト
 #[derive(Debug)]
-pub struct TextInputRequest {
-    /// 入力するテキスト
-    pub text: String,
+pub enum TextInputRequest {
+    /// テキストをそのまま入力
+    TypeText {
+        /// 入力するテキスト
+        text: String,
+        /// 完了通知用のチャネル
+        completion: oneshot::Sender<Result<(), TextInputWorkerError>>,
+    },
+    /// 入力済みテキストの末尾を削って差分を入力
+    ReplaceSuffix {
+        /// 削除する文字数
+        delete_count: usize,
+        /// 追加するテキスト
+        text: String,
+        /// 完了通知用のチャネル
+        completion: oneshot::Sender<Result<(), TextInputWorkerError>>,
+    },
+}
+
+impl TextInputRequest {
     /// 完了通知用のチャネル
-    pub completion: oneshot::Sender<Result<(), TextInputWorkerError>>,
+    fn completion(self) -> oneshot::Sender<Result<(), TextInputWorkerError>> {
+        match self {
+            TextInputRequest::TypeText { completion, .. }
+            | TextInputRequest::ReplaceSuffix { completion, .. } => completion,
+        }
+    }
 }
 
 /// テキスト入力エンジンのインターフェース
@@ -55,6 +80,13 @@ pub struct TextInputRequest {
 pub trait TextInputEngine: Send + Sync {
     /// テキストを入力する
     async fn type_text(&self, text: &str) -> Result<(), TextInputWorkerError>;
+
+    /// 入力済みテキストの末尾差分を置き換える
+    async fn replace_suffix(
+        &self,
+        delete_count: usize,
+        text: &str,
+    ) -> Result<(), TextInputWorkerError>;
 }
 
 /// ワーカーへの送信ハンドル
@@ -76,7 +108,24 @@ impl TextInputWorkerHandle {
     ) -> Result<oneshot::Receiver<Result<(), TextInputWorkerError>>, TextInputWorkerError> {
         let (tx, rx) = oneshot::channel();
         self.sender
-            .send(TextInputRequest {
+            .send(TextInputRequest::TypeText {
+                text,
+                completion: tx,
+            })
+            .map_err(|e| TextInputWorkerError::ChannelClosed(format!("send failed: {}", e)))?;
+        Ok(rx)
+    }
+
+    /// 差分置き換えをリクエストし、完了通知の受信側を返す
+    pub fn send_replace_suffix(
+        &self,
+        delete_count: usize,
+        text: String,
+    ) -> Result<oneshot::Receiver<Result<(), TextInputWorkerError>>, TextInputWorkerError> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(TextInputRequest::ReplaceSuffix {
+                delete_count,
                 text,
                 completion: tx,
             })
@@ -89,6 +138,17 @@ impl TextInputWorkerHandle {
 impl TextInputEngine for TextInputWorkerHandle {
     async fn type_text(&self, text: &str) -> Result<(), TextInputWorkerError> {
         let receiver = self.send(text.to_string())?;
+        receiver.await.map_err(|_| {
+            TextInputWorkerError::ChannelClosed("completion channel dropped".to_string())
+        })?
+    }
+
+    async fn replace_suffix(
+        &self,
+        delete_count: usize,
+        text: &str,
+    ) -> Result<(), TextInputWorkerError> {
+        let receiver = self.send_replace_suffix(delete_count, text.to_string())?;
         receiver.await.map_err(|_| {
             TextInputWorkerError::ChannelClosed("completion channel dropped".to_string())
         })?
@@ -119,7 +179,7 @@ fn run_worker(mut rx: mpsc::UnboundedReceiver<TextInputRequest>) {
             let msg = e.to_string();
             while let Some(req) = rx.blocking_recv() {
                 let _ = req
-                    .completion
+                    .completion()
                     .send(Err(TextInputWorkerError::EnigoInitFailed(msg.clone())));
             }
             return;
@@ -127,29 +187,59 @@ fn run_worker(mut rx: mpsc::UnboundedReceiver<TextInputRequest>) {
     };
 
     while let Some(req) = rx.blocking_recv() {
-        let result = type_text_with_enigo(&mut enigo, &req.text);
-        let _ = req.completion.send(result);
+        match req {
+            TextInputRequest::TypeText { text, completion } => {
+                let result = type_text_with_enigo(&mut enigo, &text);
+                let _ = completion.send(result);
+            }
+            TextInputRequest::ReplaceSuffix {
+                delete_count,
+                text,
+                completion,
+            } => {
+                let result = replace_suffix_with_enigo(&mut enigo, delete_count, &text);
+                let _ = completion.send(result);
+            }
+        }
     }
 }
 
 fn type_text_with_enigo(enigo: &mut Enigo, text: &str) -> Result<(), TextInputWorkerError> {
-    // 少し待機
+    prepare_input(enigo)?;
+    input_text(enigo, text)
+}
+
+fn replace_suffix_with_enigo(
+    enigo: &mut Enigo,
+    delete_count: usize,
+    text: &str,
+) -> Result<(), TextInputWorkerError> {
+    prepare_input(enigo)?;
+
+    for _ in 0..delete_count {
+        enigo
+            .key(Key::Backspace, Click)
+            .map_err(|e| TextInputWorkerError::InputFailed(e.to_string()))?;
+    }
+
+    input_text(enigo, text)
+}
+
+fn prepare_input(enigo: &mut Enigo) -> Result<(), TextInputWorkerError> {
     std::thread::sleep(std::time::Duration::from_millis(50));
-
-    // Metaキーのリリース（念のため）
-    let _ = enigo.key(Key::Meta, Release);
-
-    // さらに待機
+    enigo
+        .key(Key::Meta, Release)
+        .map_err(|e| TextInputWorkerError::InputFailed(e.to_string()))?;
     std::thread::sleep(std::time::Duration::from_millis(30));
+    Ok(())
+}
 
-    // テキスト入力
+fn input_text(enigo: &mut Enigo, text: &str) -> Result<(), TextInputWorkerError> {
     if let Err(e) = enigo.text(text) {
         return Err(TextInputWorkerError::InputFailed(e.to_string()));
     }
 
-    // 完了待機
     std::thread::sleep(std::time::Duration::from_millis(30));
-
     Ok(())
 }
 
@@ -167,7 +257,10 @@ mod tests {
 
         assert!(receiver.is_ok());
         let request = rx.try_recv().expect("request should be sent");
-        assert_eq!(request.text, "hello");
+        match request {
+            TextInputRequest::TypeText { text, .. } => assert_eq!(text, "hello"),
+            TextInputRequest::ReplaceSuffix { .. } => panic!("unexpected replace request"),
+        }
     }
 
     /// 送信先が切断されている場合はチャネル切断エラーになる
@@ -183,5 +276,26 @@ mod tests {
             result,
             Err(TextInputWorkerError::ChannelClosed(_))
         ));
+    }
+
+    /// 差分置き換えリクエストを送ると削除数とテキストを保持できる
+    #[test]
+    fn replace_suffix_request_holds_delete_count_and_text() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<TextInputRequest>();
+        let handle = TextInputWorkerHandle::new(tx);
+
+        let receiver = handle.send_replace_suffix(2, "world".to_string());
+
+        assert!(receiver.is_ok());
+        let request = rx.try_recv().expect("request should be sent");
+        match request {
+            TextInputRequest::ReplaceSuffix {
+                delete_count, text, ..
+            } => {
+                assert_eq!(delete_count, 2);
+                assert_eq!(text, "world");
+            }
+            TextInputRequest::TypeText { .. } => panic!("unexpected type request"),
+        }
     }
 }

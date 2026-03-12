@@ -48,17 +48,21 @@ pub async fn handle_transcription(
     let text = if EnvConfig::get().openai_transcribe_streaming {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
         let input_task = tokio::task::spawn_local(async move {
-            let mut delta_emitted = false;
+            let mut rendered_text = String::new();
             while let Some(event) = event_rx.recv().await {
                 match event {
                     TranscriptionEvent::Delta(delta) => {
-                        delta_emitted = true;
                         type_text_with_profile(&delta).await;
+                        rendered_text.push_str(&delta);
                     }
-                    TranscriptionEvent::Completed(text) if !delta_emitted => {
+                    TranscriptionEvent::Completed(text) if rendered_text.is_empty() => {
                         type_text_with_profile(&text).await;
+                        break;
                     }
-                    TranscriptionEvent::Completed(_) => break,
+                    TranscriptionEvent::Completed(text) => {
+                        apply_text_patch_with_profile(&rendered_text, &text).await;
+                        break;
+                    }
                 }
             }
         });
@@ -114,6 +118,55 @@ async fn type_text_with_profile(text: &str) {
     }
 }
 
+async fn apply_text_patch_with_profile(current: &str, next: &str) {
+    let (delete_count, append_text) = diff_text_for_patch(current, next);
+    if delete_count == 0 && append_text.is_empty() {
+        return;
+    }
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+    let input_timer = profiling::Timer::start("text_input.patch");
+    match text_input::replace_suffix(delete_count, &append_text).await {
+        Ok(_) => {
+            if profiling::enabled() {
+                input_timer.log_with(&format!(
+                    "ok=true delete_count={} text_len={}",
+                    delete_count,
+                    append_text.len()
+                ));
+            } else {
+                input_timer.log();
+            }
+        }
+        Err(e) => {
+            if profiling::enabled() {
+                input_timer.log_with(&format!(
+                    "ok=false delete_count={} text_len={}",
+                    delete_count,
+                    append_text.len()
+                ));
+            } else {
+                input_timer.log();
+            }
+            eprintln!("Direct input patch failed: {}", e);
+        }
+    }
+}
+
+fn diff_text_for_patch(current: &str, next: &str) -> (usize, String) {
+    let prefix_bytes = current
+        .chars()
+        .zip(next.chars())
+        .take_while(|(lhs, rhs)| lhs == rhs)
+        .map(|(ch, _)| ch.len_utf8())
+        .sum::<usize>();
+
+    let delete_count = current[prefix_bytes..].chars().count();
+    let append_text = next[prefix_bytes..].to_string();
+
+    (delete_count, append_text)
+}
+
 /// 転写ワーカーを起動
 pub async fn spawn_transcription_worker(
     semaphore: Arc<Semaphore>,
@@ -136,5 +189,28 @@ pub async fn spawn_transcription_worker(
             let _ = handle_transcription(result, resume_music, transcription_service).await;
             drop(permit);
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::diff_text_for_patch;
+
+    /// 末尾追記だけなら削除せず差分だけ追加する
+    #[test]
+    fn diff_text_for_patch_appends_suffix_without_deleting() {
+        let (delete_count, append_text) = diff_text_for_patch("こん", "こんにちは");
+
+        assert_eq!(delete_count, 0);
+        assert_eq!(append_text, "にちは");
+    }
+
+    /// 中間が変わる場合は共通接頭辞以降を削除して再入力する
+    #[test]
+    fn diff_text_for_patch_replaces_suffix_after_common_prefix() {
+        let (delete_count, append_text) = diff_text_for_patch("これはテストです", "これはtestです");
+
+        assert_eq!(delete_count, 5);
+        assert_eq!(append_text, "testです");
     }
 }

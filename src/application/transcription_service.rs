@@ -347,7 +347,9 @@ mod tests {
     /// ストリーミング未実装クライアントでも最終確定イベントを通知できる
     #[tokio::test]
     async fn completed_event_is_emitted_when_streaming_uses_default_trait_path() {
-        let client = MockTranscriptionClient::new("これはテストです");
+        let client = Box::new(MockTranscriptionClient::new("これはテストです"));
+        let dict_repo = Box::new(MockDictRepo::new());
+        let service = TranscriptionService::new(client, dict_repo, 1);
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
 
         let audio = AudioData {
@@ -355,14 +357,19 @@ mod tests {
             mime_type: "audio/wav",
             file_name: "audio.wav".to_string(),
         };
+        let options = TranscriptionOptions::default();
 
-        let result = client
-            .transcribe_streaming(audio, "ja", event_tx)
+        let result = service
+            .transcribe_streaming(audio, options, event_tx)
             .await
             .unwrap();
-        assert!(event_rx.try_recv().is_err());
+        let event = event_rx.recv().await.expect("event should be emitted");
 
-        assert_eq!(result, "これはテストです");
+        assert_eq!(result, "これはtestです");
+        assert_eq!(
+            event,
+            TranscriptionEvent::Completed("これはtestです".to_string())
+        );
     }
 
     /// ストリーミング転写ではdeltaを受け取りながら最終結果に到達できる
