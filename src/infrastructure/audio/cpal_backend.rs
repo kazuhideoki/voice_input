@@ -4,7 +4,7 @@ use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use audioadapter_buffers::SizeError;
 use cpal::{
-    Device, SampleFormat, Stream, StreamConfig,
+    Device, DeviceDescription, SampleFormat, Stream, StreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use rubato::{
@@ -167,7 +167,7 @@ fn select_input_device(host: &cpal::Host) -> Option<Device> {
     for want in &priorities {
         if let Some(dev) = available.iter().find(|d| {
             d.description()
-                .map(|description| description.name() == want)
+                .map(|description| description_matches_priority(&description, want))
                 .unwrap_or(false)
         }) {
             println!("🎙️  Using preferred device: {}", want);
@@ -178,6 +178,14 @@ fn select_input_device(host: &cpal::Host) -> Option<Device> {
     // 4) 見つからなければデフォルト
     println!("⚠️  No preferred device found, falling back to default input device");
     host.default_input_device()
+}
+
+fn description_matches_priority(description: &DeviceDescription, wanted: &str) -> bool {
+    description.name() == wanted || description.to_string() == wanted
+}
+
+fn device_list_label(description: &DeviceDescription) -> String {
+    description.name().to_string()
 }
 
 // =============== WAVヘッダー生成機能 ================================
@@ -570,7 +578,7 @@ impl CpalAudioBackend {
                 iter.filter_map(|d| {
                     d.description()
                         .ok()
-                        .map(|description| description.to_string())
+                        .map(|description| device_list_label(&description))
                 })
                 .collect::<Vec<String>>()
             })
@@ -832,6 +840,7 @@ impl AudioBackend for CpalAudioBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cpal::{DeviceDescriptionBuilder, DeviceType, InterfaceType};
 
     /// `INPUT_DEVICE_PRIORITY` に存在しないデバイスを設定し、バックエンドが
     /// (1) フォールバックを介して開始する **または** (2) 入力デバイスの欠落に
@@ -840,6 +849,36 @@ mod tests {
     use std::sync::Mutex;
 
     static INPUT_DEVICE_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// 列挙したデバイス名を優先順位設定へそのまま利用できる
+    #[test]
+    fn listed_device_name_matches_priority_key() {
+        let description = DeviceDescriptionBuilder::new("Built-in Microphone")
+            .manufacturer("Apple")
+            .device_type(DeviceType::Microphone)
+            .interface_type(InterfaceType::BuiltIn)
+            .build();
+
+        assert_eq!(device_list_label(&description), "Built-in Microphone");
+        assert!(description_matches_priority(
+            &description,
+            "Built-in Microphone"
+        ));
+    }
+
+    /// 詳細表示文字列も優先順位設定で受け入れられる
+    #[test]
+    fn detailed_device_description_also_matches_priority_key() {
+        let description = DeviceDescriptionBuilder::new("USB Mic")
+            .manufacturer("Acme")
+            .device_type(DeviceType::Microphone)
+            .interface_type(InterfaceType::Usb)
+            .build();
+
+        let detailed = description.to_string();
+        assert_ne!(detailed, description.name());
+        assert!(description_matches_priority(&description, &detailed));
+    }
 
     /// 入力デバイス優先順位の環境変数が考慮される
     #[test]
