@@ -21,20 +21,20 @@ path = "src/bin/voice_inputd.rs"
 # 依存クレート ― ご指定をそのまま使用
 # ─────────────────────────────────────────
 [dependencies]
-tokio = { version = "1.49.0", features = ["full"] }
-futures = "0.3.31"
+tokio = { version = "1.50.0", features = ["full"] }
+futures = "0.3.32"
 cpal = "0.15.3"
-reqwest = { version = "0.13.1", features = ["multipart", "json"] }
+reqwest = { version = "0.13.2", features = ["multipart", "json"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 dotenvy = "0.15.7"
-clap = { version = "4.5.56", features = ["derive"] }
+clap = { version = "4.6.0", features = ["derive"] }
 tokio-util = { version = "0.7.18", features = ["codec"] }
 directories = "6.0.0"
 scopeguard = "1.2.0"
 enigo = "0.6.1"
-chrono = "0.4.43"
-once_cell = "1.21.3"
+chrono = "0.4.44"
+once_cell = "1.21.4"
 thiserror = "2.0.18"
 async-trait = "0.1.89"
 flacenc = "0.5.1"
@@ -47,8 +47,8 @@ default = []
 ci-test = []  # CI環境で安全に実行できるテストのみを有効化
 
 [dev-dependencies]
-tempfile = "3.24.0"
-criterion = { version = "0.8.1", features = ["html_reports"] }
+tempfile = "3.27.0"
+criterion = { version = "0.8.2", features = ["html_reports"] }
 
 [[bench]]
 name = "recording"
