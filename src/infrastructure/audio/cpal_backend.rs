@@ -165,10 +165,11 @@ fn select_input_device(host: &cpal::Host) -> Option<Device> {
 
     // 3) 優先度順に一致デバイスを探す
     for want in &priorities {
-        if let Some(dev) = available
-            .iter()
-            .find(|d| d.name().map(|n| n == *want).unwrap_or(false))
-        {
+        if let Some(dev) = available.iter().find(|d| {
+            d.description()
+                .map(|description| description.name() == want)
+                .unwrap_or(false)
+        }) {
             println!("🎙️  Using preferred device: {}", want);
             return Some(dev.clone());
         }
@@ -565,7 +566,14 @@ impl CpalAudioBackend {
     pub fn list_devices() -> Vec<String> {
         let host = cpal::default_host();
         host.input_devices()
-            .map(|iter| iter.filter_map(|d| d.name().ok()).collect::<Vec<String>>())
+            .map(|iter| {
+                iter.filter_map(|d| {
+                    d.description()
+                        .ok()
+                        .map(|description| description.to_string())
+                })
+                .collect::<Vec<String>>()
+            })
             .unwrap_or_default()
     }
 
@@ -626,7 +634,7 @@ impl AudioBackend for CpalAudioBackend {
         let config: StreamConfig = supported.into();
 
         // メモリモード: バッファベース
-        let sample_rate = config.sample_rate.0;
+        let sample_rate = config.sample_rate;
         let channels = config.channels;
 
         // 30秒分のバッファを事前確保

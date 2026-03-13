@@ -23,7 +23,7 @@ path = "src/bin/voice_inputd.rs"
 [dependencies]
 tokio = { version = "1.50.0", features = ["full"] }
 futures = "0.3.32"
-cpal = "0.15.3"
+cpal = "0.17.3"
 reqwest = { version = "0.13.2", features = ["multipart", "json"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
