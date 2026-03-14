@@ -1,20 +1,37 @@
 //! 効果音および Apple Music 制御ユーティリティ。
 use std::process::{Command, Output};
 #[cfg(test)]
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use tokio::task::spawn_blocking;
 
 #[cfg(test)]
 type OsaScriptRunner = Box<dyn Fn(String) -> std::io::Result<Output> + Send + Sync>;
+#[cfg(test)]
+type SoundRunner = Box<dyn Fn(&'static str) + Send + Sync>;
 
 #[cfg(test)]
 static TEST_OSASCRIPT_RUNNER: OnceLock<OsaScriptRunner> = OnceLock::new();
+#[cfg(test)]
+static TEST_SOUND_RUNNER: OnceLock<Mutex<Option<SoundRunner>>> = OnceLock::new();
 
 #[cfg(test)]
 fn set_test_osascript_runner(
     runner: impl Fn(String) -> std::io::Result<Output> + Send + Sync + 'static,
 ) {
     let _ = TEST_OSASCRIPT_RUNNER.set(Box::new(runner));
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_sound_runner(runner: impl Fn(&'static str) + Send + Sync + 'static) {
+    let slot = TEST_SOUND_RUNNER.get_or_init(|| Mutex::new(None));
+    *slot.lock().unwrap() = Some(Box::new(runner));
+}
+
+#[cfg(test)]
+pub(crate) fn clear_test_sound_runner() {
+    if let Some(slot) = TEST_SOUND_RUNNER.get() {
+        *slot.lock().unwrap() = None;
+    }
 }
 
 fn run_osascript(script: String) -> std::io::Result<Output> {
@@ -27,8 +44,23 @@ fn run_osascript(script: String) -> std::io::Result<Output> {
     Command::new("osascript").arg("-e").arg(script).output()
 }
 
+#[cfg(test)]
+fn run_sound(path: &'static str) -> bool {
+    if let Some(slot) = TEST_SOUND_RUNNER.get() {
+        if let Some(runner) = slot.lock().unwrap().as_ref() {
+            runner(path);
+            return true;
+        }
+    }
+    false
+}
+
 /// 録音開始を示すサウンドを再生します。
 pub fn play_start_sound() {
+    #[cfg(test)]
+    if run_sound("/System/Library/Sounds/Ping.aiff") {
+        return;
+    }
     let _ = Command::new("afplay")
         .arg("/System/Library/Sounds/Ping.aiff")
         .spawn();
@@ -36,6 +68,10 @@ pub fn play_start_sound() {
 
 /// 録音停止を示すサウンドを再生します。
 pub fn play_stop_sound() {
+    #[cfg(test)]
+    if run_sound("/System/Library/Sounds/Purr.aiff") {
+        return;
+    }
     let _ = Command::new("afplay")
         .arg("/System/Library/Sounds/Purr.aiff")
         .spawn();
@@ -43,6 +79,10 @@ pub fn play_stop_sound() {
 
 /// 転写完了を示すサウンドを再生します。
 pub fn play_transcription_complete_sound() {
+    #[cfg(test)]
+    if run_sound("/System/Library/Sounds/Glass.aiff") {
+        return;
+    }
     let _ = Command::new("afplay")
         .arg("/System/Library/Sounds/Glass.aiff")
         .spawn();

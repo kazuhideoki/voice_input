@@ -186,6 +186,15 @@ impl<T: AudioBackend> RecordingService<T> {
         }
     }
 
+    /// 指定したセッションが現在も録音中かを確認
+    pub fn is_active_session(&self, session_id: u64) -> Result<bool> {
+        let ctx = self
+            .context
+            .lock()
+            .map_err(|e| VoiceInputError::SystemError(format!("Context lock error: {}", e)))?;
+        Ok(matches!(ctx.state, RecordingState::Recording(current) if current == session_id))
+    }
+
     /// 自動停止キャンセルチャネルを取得（タイマー処理用）
     pub fn take_cancel_receiver(&self) -> Option<oneshot::Receiver<()>> {
         if let Ok(mut ctx) = self.context.lock() {
@@ -379,5 +388,34 @@ mod tests {
         let (prompt, music_was_playing) = service.get_context_info().unwrap();
         assert!(prompt.is_none());
         assert!(music_was_playing);
+    }
+
+    /// 現在のセッション一致判定が取得できる
+    #[tokio::test]
+    async fn active_session_matches_only_current_recording() {
+        let backend = MockAudioBackend::new();
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
+        let config = RecordingConfig {
+            max_duration_secs: 30,
+        };
+        let service = RecordingService::new(recorder, config);
+
+        let first_session = service
+            .start_recording(RecordingOptions { prompt: None })
+            .await
+            .unwrap();
+        assert!(service.is_active_session(first_session).unwrap());
+        assert!(!service.is_active_session(first_session + 1).unwrap());
+
+        service.stop_recording().await.unwrap();
+        assert!(!service.is_active_session(first_session).unwrap());
+
+        let second_session = service
+            .start_recording(RecordingOptions { prompt: None })
+            .await
+            .unwrap();
+        assert_ne!(first_session, second_session);
+        assert!(service.is_active_session(second_session).unwrap());
+        assert!(!service.is_active_session(first_session).unwrap());
     }
 }

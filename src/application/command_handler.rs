@@ -75,20 +75,20 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
     /// 録音開始処理
     async fn handle_start(&self, prompt: Option<String>) -> Result<IpcResp> {
-        // Apple Musicを一時停止
-        let media_control = self.media_control.clone();
-        let was_playing = media_control.borrow().pause_if_playing().await?;
-        self.recording.borrow().set_music_was_playing(was_playing)?;
-
-        // 開始音を再生
-        play_start_sound();
-
         // 録音オプションを構築
         let options = RecordingOptions { prompt };
 
+        self.recording.borrow().set_music_was_playing(false)?;
+
         // 録音を開始
         let recording = self.recording.clone();
-        let _session_id = recording.borrow().start_recording(options).await?;
+        let session_id = recording.borrow().start_recording(options).await?;
+
+        // 録音開始後に開始音を鳴らす
+        play_start_sound();
+
+        // Apple Music の pause は録音開始後に非同期で行う
+        self.spawn_pause_if_needed(session_id);
 
         // 自動停止タイマーを設定
         self.setup_auto_stop_timer();
@@ -98,6 +98,51 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             ok: true,
             msg: format!("recording started (auto-stop in {}s)", max_secs),
         })
+    }
+
+    fn spawn_pause_if_needed(&self, session_id: u64) {
+        let media_control = self.media_control.clone();
+        let recording = self.recording.clone();
+
+        spawn_local(async move {
+            let was_playing = match media_control
+                .borrow()
+                .pause_if_playing_for_session(session_id)
+                .await
+            {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!(
+                        "Apple Music control failed after recording start (session {}): {}",
+                        session_id, err
+                    );
+                    return;
+                }
+            };
+
+            if !was_playing {
+                return;
+            }
+
+            if matches!(recording.borrow().is_active_session(session_id), Ok(true)) {
+                if let Err(err) = recording.borrow().set_music_was_playing(true) {
+                    eprintln!(
+                        "Failed to persist music playback state for session {}: {}",
+                        session_id, err
+                    );
+                    let _ = media_control
+                        .borrow()
+                        .resume_if_paused_for_session(session_id)
+                        .await;
+                }
+                return;
+            }
+
+            let _ = media_control
+                .borrow()
+                .resume_if_paused_for_session(session_id)
+                .await;
+        });
     }
 
     /// 録音停止処理
@@ -247,5 +292,410 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 println!("Warning: Could not set up auto-stop timer - no cancel receiver");
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::RecordingConfig;
+    use crate::application::TranscriptionClient;
+    use crate::application::media_control_service::MediaController;
+    use crate::domain::dict::{DictRepository, WordEntry};
+    use crate::domain::recorder::Recorder;
+    use crate::infrastructure::audio::cpal_backend::AudioData;
+    use crate::infrastructure::external::sound::{clear_test_sound_runner, set_test_sound_runner};
+    use async_trait::async_trait;
+    use scopeguard::guard;
+    use std::collections::VecDeque;
+    use std::sync::Arc;
+    use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static SOUND_TEST_LOCK: StdMutex<()> = StdMutex::new(());
+
+    struct NoopDictRepository;
+
+    impl DictRepository for NoopDictRepository {
+        fn load(&self) -> std::io::Result<Vec<WordEntry>> {
+            Ok(vec![])
+        }
+
+        fn save(&self, _all: &[WordEntry]) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct NoopTranscriptionClient;
+
+    #[async_trait]
+    impl TranscriptionClient for NoopTranscriptionClient {
+        async fn transcribe(
+            &self,
+            _audio: AudioData,
+            _language: &str,
+        ) -> crate::error::Result<String> {
+            Ok(String::new())
+        }
+    }
+
+    struct RecordingOrderBackend {
+        started: Arc<AtomicBool>,
+        events: Arc<StdMutex<Vec<&'static str>>>,
+    }
+
+    impl RecordingOrderBackend {
+        fn new(events: Arc<StdMutex<Vec<&'static str>>>) -> Self {
+            Self {
+                started: Arc::new(AtomicBool::new(false)),
+                events,
+            }
+        }
+    }
+
+    impl AudioBackend for RecordingOrderBackend {
+        fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+            self.started.store(true, Ordering::SeqCst);
+            self.events.lock().unwrap().push("recording_started");
+            Ok(())
+        }
+
+        fn stop_recording(&self) -> std::result::Result<AudioData, Box<dyn std::error::Error>> {
+            self.started.store(false, Ordering::SeqCst);
+            Ok(AudioData {
+                bytes: vec![0u8; 16],
+                mime_type: "audio/wav",
+                file_name: "audio.wav".to_string(),
+            })
+        }
+
+        fn is_recording(&self) -> bool {
+            self.started.load(Ordering::SeqCst)
+        }
+    }
+
+    struct DelayedMediaController {
+        playing: Arc<AtomicBool>,
+        pause_delay: Duration,
+    }
+
+    impl DelayedMediaController {
+        fn new(initial_playing: bool, pause_delay: Duration) -> Self {
+            Self {
+                playing: Arc::new(AtomicBool::new(initial_playing)),
+                pause_delay,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl MediaController for DelayedMediaController {
+        async fn is_playing(&self) -> Result<bool> {
+            Ok(self.playing.load(Ordering::SeqCst))
+        }
+
+        async fn pause(&self) -> Result<()> {
+            tokio::time::sleep(self.pause_delay).await;
+            self.playing.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn resume(&self) -> Result<()> {
+            self.playing.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct SequencedMediaController {
+        playing: Arc<AtomicBool>,
+        pause_delays: Arc<StdMutex<VecDeque<Duration>>>,
+        is_playing_results: Arc<StdMutex<VecDeque<bool>>>,
+    }
+
+    impl SequencedMediaController {
+        fn new(
+            initial_playing: bool,
+            pause_delays: Vec<Duration>,
+            is_playing_results: Vec<bool>,
+        ) -> Self {
+            Self {
+                playing: Arc::new(AtomicBool::new(initial_playing)),
+                pause_delays: Arc::new(StdMutex::new(pause_delays.into())),
+                is_playing_results: Arc::new(StdMutex::new(is_playing_results.into())),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl MediaController for SequencedMediaController {
+        async fn is_playing(&self) -> Result<bool> {
+            Ok(self
+                .is_playing_results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| self.playing.load(Ordering::SeqCst)))
+        }
+
+        async fn pause(&self) -> Result<()> {
+            let delay = self
+                .pause_delays
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_default();
+            tokio::time::sleep(delay).await;
+            self.playing.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn resume(&self) -> Result<()> {
+            self.playing.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct FailingPauseMediaController;
+
+    #[async_trait]
+    impl MediaController for FailingPauseMediaController {
+        async fn is_playing(&self) -> Result<bool> {
+            Ok(true)
+        }
+
+        async fn pause(&self) -> Result<()> {
+            Err(VoiceInputError::SystemError("pause failed".to_string()))
+        }
+
+        async fn resume(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn build_handler<T: AudioBackend + 'static>(
+        backend: T,
+        media_control: MediaControlService,
+    ) -> (
+        CommandHandler<T>,
+        Rc<RefCell<RecordingService<T>>>,
+        Rc<RefCell<MediaControlService>>,
+        mpsc::UnboundedReceiver<TranscriptionMessage>,
+    ) {
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
+        let recording = Rc::new(RefCell::new(RecordingService::new(
+            recorder,
+            RecordingConfig {
+                max_duration_secs: 30,
+            },
+        )));
+        let transcription = Rc::new(RefCell::new(TranscriptionService::new(
+            Box::new(NoopTranscriptionClient),
+            Box::new(NoopDictRepository),
+            1,
+        )));
+        let media_control = Rc::new(RefCell::new(media_control));
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        (
+            CommandHandler::new(recording.clone(), transcription, media_control.clone(), tx),
+            recording,
+            media_control,
+            rx,
+        )
+    }
+
+    /// 遅いApple Music確認があっても録音開始レスポンスは待たない
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_returns_without_waiting_for_music_pause() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+                let media_control = MediaControlService::with_controller(Box::new(
+                    DelayedMediaController::new(true, Duration::from_millis(200)),
+                ));
+                let (handler, _recording, _media_control, _rx) =
+                    build_handler(backend, media_control);
+
+                let response = tokio::time::timeout(
+                    Duration::from_millis(50),
+                    handler.handle(IpcCmd::Start { prompt: None }),
+                )
+                .await;
+
+                assert!(response.is_ok(), "start should not wait for pause");
+            })
+            .await;
+    }
+
+    /// 録音開始後に開始音が鳴る
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_sound_plays_after_recording_begins() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        clear_test_sound_runner();
+        let _cleanup = guard((), |_| clear_test_sound_runner());
+
+        let events = Arc::new(StdMutex::new(Vec::new()));
+        let sound_events = events.clone();
+        set_test_sound_runner(move |path| {
+            if path == "/System/Library/Sounds/Ping.aiff" {
+                sound_events.lock().unwrap().push("start_sound");
+            }
+        });
+
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let backend = RecordingOrderBackend::new(events.clone());
+                let media_control = MediaControlService::with_controller(Box::new(
+                    DelayedMediaController::new(false, Duration::from_millis(0)),
+                ));
+                let (handler, _recording, _media_control, _rx) =
+                    build_handler(backend, media_control);
+
+                handler
+                    .handle(IpcCmd::Start { prompt: None })
+                    .await
+                    .unwrap();
+            })
+            .await;
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["recording_started", "start_sound"]
+        );
+    }
+
+    /// 停止後にpauseが遅れて完了しても再開状態へ戻る
+    #[tokio::test(flavor = "current_thread")]
+    async fn delayed_pause_after_stop_does_not_leave_music_paused() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+                let controller = DelayedMediaController::new(true, Duration::from_millis(80));
+                let playing_ref = controller.playing.clone();
+                let media_control = MediaControlService::with_controller(Box::new(controller));
+                let (handler, recording, media_control, _rx) =
+                    build_handler(backend, media_control);
+
+                handler
+                    .handle(IpcCmd::Start { prompt: None })
+                    .await
+                    .unwrap();
+                handler.handle(IpcCmd::Stop).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(120)).await;
+
+                let (_, music_was_playing) = recording.borrow().get_context_info().unwrap();
+                assert!(!music_was_playing);
+                assert!(playing_ref.load(Ordering::SeqCst));
+                assert!(!media_control.borrow().is_paused_by_recording().unwrap());
+            })
+            .await;
+    }
+
+    /// 前セッションの遅いpause結果は次セッションへ混入しない
+    #[tokio::test(flavor = "current_thread")]
+    async fn late_pause_from_previous_session_is_ignored_for_next_session() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+                let controller = SequencedMediaController::new(
+                    true,
+                    vec![Duration::from_millis(80), Duration::from_millis(80)],
+                    vec![true, false],
+                );
+                let playing_ref = controller.playing.clone();
+                let media_control = MediaControlService::with_controller(Box::new(controller));
+                let (handler, recording, media_control, _rx) =
+                    build_handler(backend, media_control);
+
+                handler
+                    .handle(IpcCmd::Start { prompt: None })
+                    .await
+                    .unwrap();
+                handler.handle(IpcCmd::Stop).await.unwrap();
+                handler
+                    .handle(IpcCmd::Start { prompt: None })
+                    .await
+                    .unwrap();
+                tokio::time::sleep(Duration::from_millis(120)).await;
+
+                let (_, music_was_playing) = recording.borrow().get_context_info().unwrap();
+                assert!(!music_was_playing);
+                assert!(playing_ref.load(Ordering::SeqCst));
+                assert!(!media_control.borrow().is_paused_by_recording().unwrap());
+            })
+            .await;
+    }
+
+    /// 古いpause完了が新しいpause所有権を打ち消さない
+    #[tokio::test(flavor = "current_thread")]
+    async fn previous_session_pause_does_not_resume_newer_session_music_pause() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+                let controller = SequencedMediaController::new(
+                    true,
+                    vec![Duration::from_millis(120), Duration::from_millis(10)],
+                    vec![true, true],
+                );
+                let playing_ref = controller.playing.clone();
+                let media_control = MediaControlService::with_controller(Box::new(controller));
+                let (handler, recording, media_control, _rx) =
+                    build_handler(backend, media_control);
+
+                handler
+                    .handle(IpcCmd::Start { prompt: None })
+                    .await
+                    .unwrap();
+                handler.handle(IpcCmd::Stop).await.unwrap();
+                handler
+                    .handle(IpcCmd::Start { prompt: None })
+                    .await
+                    .unwrap();
+                tokio::time::sleep(Duration::from_millis(160)).await;
+
+                let (_, music_was_playing) = recording.borrow().get_context_info().unwrap();
+                assert!(recording.borrow().is_recording());
+                assert!(music_was_playing);
+                assert!(!playing_ref.load(Ordering::SeqCst));
+                assert!(media_control.borrow().is_paused_by_recording().unwrap());
+            })
+            .await;
+    }
+
+    /// Apple Music制御失敗でも録音開始自体は成功し状態が汚れない
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_succeeds_when_music_control_fails_after_recording_begins() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+                let media_control =
+                    MediaControlService::with_controller(Box::new(FailingPauseMediaController));
+                let (handler, recording, media_control, _rx) =
+                    build_handler(backend, media_control);
+
+                let response = handler
+                    .handle(IpcCmd::Start { prompt: None })
+                    .await
+                    .unwrap();
+                tokio::time::sleep(Duration::from_millis(10)).await;
+
+                let (_, music_was_playing) = recording.borrow().get_context_info().unwrap();
+                assert!(response.ok);
+                assert!(recording.borrow().is_recording());
+                assert!(!music_was_playing);
+                assert!(!media_control.borrow().is_paused_by_recording().unwrap());
+            })
+            .await;
     }
 }
