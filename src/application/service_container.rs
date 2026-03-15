@@ -60,7 +60,11 @@ impl ServiceContainer<CpalAudioBackend> {
     /// デフォルト設定で新しいServiceContainerを作成
     pub fn new() -> Result<Self> {
         let config = AppConfig::default();
-        let recorder = Rc::new(RefCell::new(Recorder::new(CpalAudioBackend::default())));
+        let backend = CpalAudioBackend::default();
+        if let Err(err) = backend.warm_up() {
+            eprintln!("Input stream warm-up skipped: {}", err);
+        }
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
         let client = Box::new(OpenAiTranscriptionAdapter::new()?);
 
         Self::with_dependencies(config, recorder, client)

@@ -48,6 +48,19 @@ struct ResampleOutcome {
     sample_rate: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StreamIdentity {
+    selected_device_key: String,
+    sample_format: SampleFormat,
+    sample_rate: u32,
+    channels: u16,
+}
+
+struct ReadyInputStream {
+    _stream: Stream,
+    identity: StreamIdentity,
+}
+
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 const MIN_RESAMPLE_FRAMES: usize = 256;
 const INPUT_SETUP_REVALIDATION_INTERVAL: Duration = Duration::from_secs(2);
@@ -133,11 +146,11 @@ impl Sample for f32 {
 /// CPAL によるローカルマイク入力実装（メモリモード専用）
 pub struct CpalAudioBackend {
     /// ランタイム中の入力ストリーム
-    stream: Mutex<Option<Stream>>,
+    stream: Mutex<Option<ReadyInputStream>>,
     /// 録音フラグ
     recording: Arc<AtomicBool>,
     /// 録音状態（メモリモード専用）
-    recording_state: Mutex<Option<MemoryRecordingState>>,
+    recording_state: Arc<Mutex<Option<MemoryRecordingState>>>,
     /// 入力デバイスと設定のキャッシュ
     input_setup_cache: InputSetupCache<CachedInputSetup>,
 }
@@ -147,7 +160,7 @@ impl Default for CpalAudioBackend {
         Self {
             stream: Mutex::new(None),
             recording: Arc::new(AtomicBool::new(false)),
-            recording_state: Mutex::new(None),
+            recording_state: Arc::new(Mutex::new(None)),
             input_setup_cache: InputSetupCache::new(),
         }
     }
@@ -160,6 +173,7 @@ struct CachedInputSetup {
     input_device_priority: Vec<String>,
     selected_device_key: String,
     last_validated_at: Arc<Mutex<Instant>>,
+    stream_identity: StreamIdentity,
 }
 
 struct InputSetupCache<T> {
@@ -173,6 +187,7 @@ impl<T> InputSetupCache<T> {
         }
     }
 
+    #[cfg(test)]
     fn clear(&self) {
         *self.value.lock().unwrap() = None;
     }
@@ -301,6 +316,14 @@ fn should_revalidate_input_setup(
     now.duration_since(last_validated_at) > INPUT_SETUP_REVALIDATION_INTERVAL
 }
 
+fn should_rebuild_input_stream(
+    existing_identity: Option<&StreamIdentity>,
+    desired_identity: &StreamIdentity,
+) -> bool {
+    !matches!(existing_identity, Some(identity) if identity == desired_identity)
+}
+
+#[cfg(test)]
 fn clear_input_setup_on_error<T, U, F>(
     cache: &InputSetupCache<U>,
     cleanup: F,
@@ -316,6 +339,7 @@ where
     result
 }
 
+#[cfg(test)]
 fn run_start_recording<S, T, Resolve, Build, Play, Cleanup>(
     cache: &InputSetupCache<S>,
     validate_cached: impl FnOnce(&S) -> bool,
@@ -360,14 +384,66 @@ impl CpalAudioBackend {
                     select_input_device_with_priorities(&host, &input_device_priority, true)
                         .ok_or(CpalBackendError::NoInputDevice)?;
                 let supported_config = device.default_input_config()?;
-                Ok(CachedInputSetup {
+                let stream_identity = StreamIdentity {
                     selected_device_key: device_cache_key(&device),
+                    sample_format: supported_config.sample_format(),
+                    sample_rate: supported_config.sample_rate(),
+                    channels: supported_config.channels(),
+                };
+                Ok(CachedInputSetup {
+                    selected_device_key: stream_identity.selected_device_key.clone(),
                     device,
                     supported_config,
                     input_device_priority,
                     last_validated_at: Arc::new(Mutex::new(Instant::now())),
+                    stream_identity,
                 })
             })
+    }
+
+    fn ensure_input_stream(&self) -> Result<CachedInputSetup, Box<dyn Error>> {
+        let input_setup = self.resolve_cached_input_setup()?;
+        let should_rebuild = {
+            let stream = self.stream.lock().unwrap();
+            should_rebuild_input_stream(
+                stream.as_ref().map(|ready| &ready.identity),
+                &input_setup.stream_identity,
+            )
+        };
+
+        if should_rebuild {
+            let sample_format = input_setup.supported_config.sample_format();
+            let config: StreamConfig = input_setup.supported_config.clone().into();
+            let stream_result = Self::build_memory_stream(
+                self.recording.clone(),
+                self.recording_state.clone(),
+                &input_setup.device,
+                &config,
+                sample_format,
+            )
+            .and_then(|stream| {
+                stream.play()?;
+                Ok(stream)
+            });
+            let stream = match stream_result {
+                Ok(stream) => stream,
+                Err(err) => {
+                    self.input_setup_cache.value.lock().unwrap().take();
+                    *self.stream.lock().unwrap() = None;
+                    return Err(err);
+                }
+            };
+            *self.stream.lock().unwrap() = Some(ReadyInputStream {
+                _stream: stream,
+                identity: input_setup.stream_identity.clone(),
+            });
+        }
+
+        Ok(input_setup)
+    }
+
+    pub fn warm_up(&self) -> Result<(), Box<dyn Error>> {
+        self.ensure_input_stream().map(|_| ())
     }
 
     fn preferred_format() -> AudioFormat {
@@ -768,18 +844,25 @@ impl CpalAudioBackend {
     /// メモリモード用のストリーム構築
     fn build_memory_stream(
         recording: Arc<AtomicBool>,
+        recording_state: Arc<Mutex<Option<MemoryRecordingState>>>,
         device: &Device,
         config: &StreamConfig,
         sample_format: SampleFormat,
-        buffer: Arc<Mutex<Vec<i16>>>,
     ) -> Result<Stream, Box<dyn Error>> {
         let stream = match sample_format {
             SampleFormat::I16 => device.build_input_stream(
                 config,
                 move |data: &[i16], _| {
                     if recording.load(Ordering::SeqCst) {
-                        let mut buf = buffer.lock().unwrap();
-                        buf.extend_from_slice(data);
+                        let target_buffer = recording_state
+                            .lock()
+                            .unwrap()
+                            .as_ref()
+                            .map(|state| state.buffer.clone());
+                        if let Some(buffer) = target_buffer {
+                            let mut buf = buffer.lock().unwrap();
+                            buf.extend_from_slice(data);
+                        }
                     }
                 },
                 |e| eprintln!("stream error: {e}"),
@@ -789,11 +872,18 @@ impl CpalAudioBackend {
                 config,
                 move |data: &[f32], _| {
                     if recording.load(Ordering::SeqCst) {
-                        let mut buf = buffer.lock().unwrap();
-                        buf.extend(
-                            data.iter()
-                                .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16),
-                        );
+                        let target_buffer = recording_state
+                            .lock()
+                            .unwrap()
+                            .as_ref()
+                            .map(|state| state.buffer.clone());
+                        if let Some(buffer) = target_buffer {
+                            let mut buf = buffer.lock().unwrap();
+                            buf.extend(
+                                data.iter()
+                                    .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16),
+                            );
+                        }
                     }
                 },
                 |e| eprintln!("stream error: {e}"),
@@ -813,46 +903,18 @@ impl AudioBackend for CpalAudioBackend {
             return Err(CpalBackendError::AlreadyRecording.into());
         }
 
-        let stream = run_start_recording(
-            &self.input_setup_cache,
-            input_setup_matches_current_selection,
-            || self.resolve_cached_input_setup(),
-            |cached_input| {
-                let sample_format = cached_input.supported_config.sample_format();
-                let config: StreamConfig = cached_input.supported_config.clone().into();
-
-                // メモリモード: バッファベース
-                let sample_rate = config.sample_rate;
-                let channels = config.channels;
-
-                // 30秒分のバッファを事前確保
-                let capacity = Self::estimate_buffer_size(30, sample_rate, channels);
-                let buffer = Arc::new(Mutex::new(Vec::with_capacity(capacity)));
-
-                // RecordingStateをMemモリモードに設定
-                *self.recording_state.lock().unwrap() = Some(MemoryRecordingState {
-                    buffer: buffer.clone(),
-                    sample_rate,
-                    channels,
-                });
-
-                let stream = Self::build_memory_stream(
-                    self.recording.clone(),
-                    &cached_input.device,
-                    &config,
-                    sample_format,
-                    buffer,
-                )?;
-                Ok(stream)
-            },
-            |stream| stream.play().map_err(Into::into),
-            || {
-                *self.recording_state.lock().unwrap() = None;
-            },
-        )?;
-
+        let input_setup = self.ensure_input_stream()?;
+        let config: StreamConfig = input_setup.supported_config.clone().into();
+        let sample_rate = config.sample_rate;
+        let channels = config.channels;
+        let capacity = Self::estimate_buffer_size(30, sample_rate, channels);
+        let buffer = Arc::new(Mutex::new(Vec::with_capacity(capacity)));
+        *self.recording_state.lock().unwrap() = Some(MemoryRecordingState {
+            buffer,
+            sample_rate,
+            channels,
+        });
         self.recording.store(true, Ordering::SeqCst);
-        *self.stream.lock().unwrap() = Some(stream);
         Ok(())
     }
 
@@ -863,8 +925,6 @@ impl AudioBackend for CpalAudioBackend {
             return Err(CpalBackendError::NotRecording.into());
         }
 
-        // ストリームを解放して終了
-        *self.stream.lock().unwrap() = None;
         self.recording.store(false, Ordering::SeqCst);
 
         // RecordingStateを取得
@@ -1319,6 +1379,42 @@ mod tests {
         );
 
         assert!(should_revalidate);
+    }
+
+    /// 同じデバイス設定なら既存ストリームを再利用する
+    #[test]
+    fn matching_stream_identity_skips_rebuild() {
+        let identity = StreamIdentity {
+            selected_device_key: "AT2040USB".to_string(),
+            sample_format: SampleFormat::F32,
+            sample_rate: 48_000,
+            channels: 1,
+        };
+
+        let should_rebuild = should_rebuild_input_stream(Some(&identity), &identity);
+
+        assert!(!should_rebuild);
+    }
+
+    /// デバイス設定が変わったらストリームを張り直す
+    #[test]
+    fn changed_stream_identity_triggers_rebuild() {
+        let existing = StreamIdentity {
+            selected_device_key: "AT2040USB".to_string(),
+            sample_format: SampleFormat::F32,
+            sample_rate: 48_000,
+            channels: 1,
+        };
+        let desired = StreamIdentity {
+            selected_device_key: "MacBook Pro Microphone".to_string(),
+            sample_format: SampleFormat::F32,
+            sample_rate: 48_000,
+            channels: 1,
+        };
+
+        let should_rebuild = should_rebuild_input_stream(Some(&existing), &desired);
+
+        assert!(should_rebuild);
     }
 
     /// stream 構築失敗時はキャッシュを破棄して cleanup を実行する
