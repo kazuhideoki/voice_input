@@ -19,6 +19,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 /// 録音データの返却形式（メモリモード専用）
@@ -49,6 +50,7 @@ struct ResampleOutcome {
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 const MIN_RESAMPLE_FRAMES: usize = 256;
+const INPUT_SETUP_REVALIDATION_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Audio processing errors
 #[derive(Debug)]
@@ -157,6 +159,7 @@ struct CachedInputSetup {
     supported_config: cpal::SupportedStreamConfig,
     input_device_priority: Vec<String>,
     selected_device_key: String,
+    last_validated_at: Arc<Mutex<Instant>>,
 }
 
 struct InputSetupCache<T> {
@@ -265,16 +268,37 @@ fn select_input_device_key(host: &cpal::Host, priorities: &[String]) -> Option<S
 
 fn input_setup_matches_current_selection(cached: &CachedInputSetup) -> bool {
     let current_priorities = input_device_priorities();
-    if current_priorities != cached.input_device_priority {
-        return false;
+    if should_revalidate_input_setup(
+        &cached.input_device_priority,
+        &current_priorities,
+        *cached.last_validated_at.lock().unwrap(),
+        Instant::now(),
+    ) {
+        let host = cpal::default_host();
+        let Some(current_device_key) = select_input_device_key(&host, &current_priorities) else {
+            return false;
+        };
+
+        let matches = current_device_key == cached.selected_device_key;
+        if matches {
+            *cached.last_validated_at.lock().unwrap() = Instant::now();
+        }
+        return matches;
     }
 
-    let host = cpal::default_host();
-    let Some(current_device_key) = select_input_device_key(&host, &current_priorities) else {
-        return false;
-    };
+    true
+}
 
-    current_device_key == cached.selected_device_key
+fn should_revalidate_input_setup(
+    cached_priorities: &[String],
+    current_priorities: &[String],
+    last_validated_at: Instant,
+    now: Instant,
+) -> bool {
+    if current_priorities != cached_priorities {
+        return true;
+    }
+    now.duration_since(last_validated_at) > INPUT_SETUP_REVALIDATION_INTERVAL
 }
 
 fn clear_input_setup_on_error<T, U, F>(
@@ -341,6 +365,7 @@ impl CpalAudioBackend {
                     device,
                     supported_config,
                     input_device_priority,
+                    last_validated_at: Arc::new(Mutex::new(Instant::now())),
                 })
             })
     }
@@ -1249,6 +1274,51 @@ mod tests {
         assert_eq!(first, 31);
         assert_eq!(second, 32);
         assert_eq!(*resolve_count.lock().unwrap(), 2);
+    }
+
+    /// 同じ優先順位で直近に検証済みなら入力設定の再検証を省略する
+    #[test]
+    fn recent_input_setup_validation_skips_revalidation() {
+        let priorities = vec!["AT2040USB".to_string()];
+        let now = Instant::now();
+
+        let should_revalidate = should_revalidate_input_setup(
+            &priorities,
+            &priorities,
+            now,
+            now + Duration::from_millis(500),
+        );
+
+        assert!(!should_revalidate);
+    }
+
+    /// 優先順位が変わったら直近の検証時刻に関係なく再検証する
+    #[test]
+    fn changed_priorities_force_input_setup_revalidation() {
+        let cached = vec!["AT2040USB".to_string()];
+        let current = vec!["MacBook Pro Microphone".to_string()];
+        let now = Instant::now();
+
+        let should_revalidate =
+            should_revalidate_input_setup(&cached, &current, now, now + Duration::from_millis(500));
+
+        assert!(should_revalidate);
+    }
+
+    /// 同じ優先順位でも一定時間を過ぎたら入力設定を再検証する
+    #[test]
+    fn stale_input_setup_validation_revalidates() {
+        let priorities = vec!["AT2040USB".to_string()];
+        let now = Instant::now();
+
+        let should_revalidate = should_revalidate_input_setup(
+            &priorities,
+            &priorities,
+            now,
+            now + INPUT_SETUP_REVALIDATION_INTERVAL + Duration::from_millis(1),
+        );
+
+        assert!(should_revalidate);
     }
 
     /// stream 構築失敗時はキャッシュを破棄して cleanup を実行する
