@@ -65,6 +65,23 @@ CPAL stream 初期化のコストを下げる。
 
 - 約 `275ms` から `366ms` の主要部分を削減できる可能性がある
 
+進捗:
+
+- 一部実装済み
+- `CpalAudioBackend` に入力デバイスと `default_input_config()` のキャッシュを追加した
+- これにより、2回目以降の録音開始では `default_input_config()` の再取得を避ける
+- 入力デバイス選択自体は毎回再評価し、現在の `INPUT_DEVICE_PRIORITY` と選択デバイスを照合して、優先マイクや利用可能デバイスの変化があれば再解決する
+- `build_input_stream()` はまだ毎回行うため、Phase 2 の削減余地は残っている
+- `build_input_stream()` または `stream.play()` に失敗した場合は stale な設定を握り続けないよう、入力設定キャッシュと録音状態を巻き戻す
+
+追加した確認:
+
+- 入力設定キャッシュは明示的に破棄されるまで再利用される
+- キャッシュ破棄後は入力設定を再解決する
+- キャッシュ済み設定が現在の選択条件と不一致なら再解決する
+- 入力設定利用処理が失敗したらキャッシュと録音状態を巻き戻す
+- backend の start ワークフローで cache hit / cache miss / build failure / play failure を直接検証する
+
 ### Phase 3
 
 開始音のタイミングを再調整する。
@@ -90,6 +107,6 @@ CPAL stream 初期化のコストを下げる。
 
 ## 次にやること
 
-1. Phase 2 の設計を詰める
-2. CPAL のデバイス選択と stream 構築の再利用方針を決める
+1. Phase 2 の残件として `build_input_stream()` 再利用の可否を設計する
+2. `Stream` 再利用が安全にできるなら、callback の書き込み先切り替えを導入する
 3. 実装前後で start latency を再計測して短縮幅を確認する

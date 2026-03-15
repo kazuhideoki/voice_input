@@ -136,6 +136,8 @@ pub struct CpalAudioBackend {
     recording: Arc<AtomicBool>,
     /// 録音状態（メモリモード専用）
     recording_state: Mutex<Option<MemoryRecordingState>>,
+    /// 入力デバイスと設定のキャッシュ
+    input_setup_cache: InputSetupCache<CachedInputSetup>,
 }
 
 impl Default for CpalAudioBackend {
@@ -144,40 +146,175 @@ impl Default for CpalAudioBackend {
             stream: Mutex::new(None),
             recording: Arc::new(AtomicBool::new(false)),
             recording_state: Mutex::new(None),
+            input_setup_cache: InputSetupCache::new(),
         }
     }
 }
 
-/// `INPUT_DEVICE_PRIORITY` 環境変数を解釈し、優先順位の高い入力デバイスを選択します。
-fn select_input_device(host: &cpal::Host) -> Option<Device> {
+#[derive(Clone)]
+struct CachedInputSetup {
+    device: Device,
+    supported_config: cpal::SupportedStreamConfig,
+    input_device_priority: Vec<String>,
+    selected_device_key: String,
+}
+
+struct InputSetupCache<T> {
+    value: Mutex<Option<T>>,
+}
+
+impl<T> InputSetupCache<T> {
+    fn new() -> Self {
+        Self {
+            value: Mutex::new(None),
+        }
+    }
+
+    fn clear(&self) {
+        *self.value.lock().unwrap() = None;
+    }
+}
+
+#[cfg(test)]
+impl<T: Clone> InputSetupCache<T> {
+    fn get_or_try_init<E, F>(&self, init: F) -> Result<T, E>
+    where
+        F: FnOnce() -> Result<T, E>,
+    {
+        if let Some(value) = self.value.lock().unwrap().clone() {
+            return Ok(value);
+        }
+
+        let value = init()?;
+        *self.value.lock().unwrap() = Some(value.clone());
+        Ok(value)
+    }
+}
+
+impl<T: Clone> InputSetupCache<T> {
+    fn get_or_try_init_if<E, V, F>(&self, is_valid: V, init: F) -> Result<T, E>
+    where
+        V: FnOnce(&T) -> bool,
+        F: FnOnce() -> Result<T, E>,
+    {
+        if let Some(value) = self.value.lock().unwrap().clone() {
+            if is_valid(&value) {
+                return Ok(value);
+            }
+        }
+
+        let value = init()?;
+        *self.value.lock().unwrap() = Some(value.clone());
+        Ok(value)
+    }
+}
+
+fn input_device_priorities() -> Vec<String> {
     use std::env;
 
-    // 1) 優先リスト取得 (カンマ区切り)
-    let priorities: Vec<String> = env::var("INPUT_DEVICE_PRIORITY")
-        .ok()?
+    env::var("INPUT_DEVICE_PRIORITY")
+        .unwrap_or_default()
         .split(',')
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
-        .collect();
+        .collect()
+}
 
-    // 2) 利用可能なデバイスを列挙
+fn select_input_device_with_priorities(
+    host: &cpal::Host,
+    priorities: &[String],
+    should_log: bool,
+) -> Option<Device> {
+    // 1) 利用可能なデバイスを列挙
     let available: Vec<Device> = host.input_devices().ok()?.collect();
 
-    // 3) 優先度順に一致デバイスを探す
-    for want in &priorities {
-        if let Some(dev) = available.iter().find(|d| {
-            d.description()
-                .map(|description| description_matches_priority(&description, want))
-                .unwrap_or(false)
-        }) {
-            println!("🎙️  Using preferred device: {}", want);
-            return Some(dev.clone());
+    if !priorities.is_empty() {
+        for want in priorities {
+            if let Some(dev) = available.iter().find(|d| {
+                d.description()
+                    .map(|description| description_matches_priority(&description, want))
+                    .unwrap_or(false)
+            }) {
+                if should_log {
+                    println!("🎙️  Using preferred device: {}", want);
+                }
+                return Some(dev.clone());
+            }
         }
     }
 
     // 4) 見つからなければデフォルト
-    println!("⚠️  No preferred device found, falling back to default input device");
+    if should_log {
+        println!("⚠️  No preferred device found, falling back to default input device");
+    }
     host.default_input_device()
+}
+
+fn device_cache_key(device: &Device) -> String {
+    device
+        .description()
+        .map(|description| description.to_string())
+        .or_else(|_| device.id().map(|id| id.to_string()))
+        .unwrap_or_else(|_| "<unknown-device>".to_string())
+}
+
+fn select_input_device_key(host: &cpal::Host, priorities: &[String]) -> Option<String> {
+    let device = select_input_device_with_priorities(host, priorities, false)?;
+    Some(device_cache_key(&device))
+}
+
+fn input_setup_matches_current_selection(cached: &CachedInputSetup) -> bool {
+    let current_priorities = input_device_priorities();
+    if current_priorities != cached.input_device_priority {
+        return false;
+    }
+
+    let host = cpal::default_host();
+    let Some(current_device_key) = select_input_device_key(&host, &current_priorities) else {
+        return false;
+    };
+
+    current_device_key == cached.selected_device_key
+}
+
+fn clear_input_setup_on_error<T, U, F>(
+    cache: &InputSetupCache<U>,
+    cleanup: F,
+    result: Result<T, Box<dyn Error>>,
+) -> Result<T, Box<dyn Error>>
+where
+    F: FnOnce(),
+{
+    if result.is_err() {
+        cache.clear();
+        cleanup();
+    }
+    result
+}
+
+fn run_start_recording<S, T, Resolve, Build, Play, Cleanup>(
+    cache: &InputSetupCache<S>,
+    validate_cached: impl FnOnce(&S) -> bool,
+    resolve_input_setup: Resolve,
+    build_stream: Build,
+    play_stream: Play,
+    cleanup_on_error: Cleanup,
+) -> Result<T, Box<dyn Error>>
+where
+    S: Clone,
+    Resolve: FnOnce() -> Result<S, Box<dyn Error>>,
+    Build: FnOnce(&S) -> Result<T, Box<dyn Error>>,
+    Play: FnOnce(&T) -> Result<(), Box<dyn Error>>,
+    Cleanup: FnOnce(),
+{
+    let result = (|| {
+        let input_setup = cache.get_or_try_init_if(validate_cached, resolve_input_setup)?;
+        let stream = build_stream(&input_setup)?;
+        play_stream(&stream)?;
+        Ok(stream)
+    })();
+
+    clear_input_setup_on_error(cache, cleanup_on_error, result)
 }
 
 fn description_matches_priority(description: &DeviceDescription, wanted: &str) -> bool {
@@ -190,6 +327,24 @@ fn device_list_label(description: &DeviceDescription) -> String {
 
 // =============== WAVヘッダー生成機能 ================================
 impl CpalAudioBackend {
+    fn resolve_cached_input_setup(&self) -> Result<CachedInputSetup, Box<dyn Error>> {
+        self.input_setup_cache
+            .get_or_try_init_if(input_setup_matches_current_selection, || {
+                let host = cpal::default_host();
+                let input_device_priority = input_device_priorities();
+                let device =
+                    select_input_device_with_priorities(&host, &input_device_priority, true)
+                        .ok_or(CpalBackendError::NoInputDevice)?;
+                let supported_config = device.default_input_config()?;
+                Ok(CachedInputSetup {
+                    selected_device_key: device_cache_key(&device),
+                    device,
+                    supported_config,
+                    input_device_priority,
+                })
+            })
+    }
+
     fn preferred_format() -> AudioFormat {
         let cfg = EnvConfig::get();
         match std::env::var("VOICE_INPUT_AUDIO_FORMAT")
@@ -633,38 +788,44 @@ impl AudioBackend for CpalAudioBackend {
             return Err(CpalBackendError::AlreadyRecording.into());
         }
 
-        // ホスト・デバイス取得
-        let host = cpal::default_host();
-        let device = select_input_device(&host).ok_or(CpalBackendError::NoInputDevice)?;
+        let stream = run_start_recording(
+            &self.input_setup_cache,
+            input_setup_matches_current_selection,
+            || self.resolve_cached_input_setup(),
+            |cached_input| {
+                let sample_format = cached_input.supported_config.sample_format();
+                let config: StreamConfig = cached_input.supported_config.clone().into();
 
-        let supported = device.default_input_config()?;
-        let sample_format = supported.sample_format();
-        let config: StreamConfig = supported.into();
+                // メモリモード: バッファベース
+                let sample_rate = config.sample_rate;
+                let channels = config.channels;
 
-        // メモリモード: バッファベース
-        let sample_rate = config.sample_rate;
-        let channels = config.channels;
+                // 30秒分のバッファを事前確保
+                let capacity = Self::estimate_buffer_size(30, sample_rate, channels);
+                let buffer = Arc::new(Mutex::new(Vec::with_capacity(capacity)));
 
-        // 30秒分のバッファを事前確保
-        let capacity = Self::estimate_buffer_size(30, sample_rate, channels);
-        let buffer = Arc::new(Mutex::new(Vec::with_capacity(capacity)));
+                // RecordingStateをMemモリモードに設定
+                *self.recording_state.lock().unwrap() = Some(MemoryRecordingState {
+                    buffer: buffer.clone(),
+                    sample_rate,
+                    channels,
+                });
 
-        // RecordingStateをMemモリモードに設定
-        *self.recording_state.lock().unwrap() = Some(MemoryRecordingState {
-            buffer: buffer.clone(),
-            sample_rate,
-            channels,
-        });
-
-        let stream = Self::build_memory_stream(
-            self.recording.clone(),
-            &device,
-            &config,
-            sample_format,
-            buffer,
+                let stream = Self::build_memory_stream(
+                    self.recording.clone(),
+                    &cached_input.device,
+                    &config,
+                    sample_format,
+                    buffer,
+                )?;
+                Ok(stream)
+            },
+            |stream| stream.play().map_err(Into::into),
+            || {
+                *self.recording_state.lock().unwrap() = None;
+            },
         )?;
 
-        stream.play()?;
         self.recording.store(true, Ordering::SeqCst);
         *self.stream.lock().unwrap() = Some(stream);
         Ok(())
@@ -849,6 +1010,328 @@ mod tests {
     use std::sync::Mutex;
 
     static INPUT_DEVICE_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// キャッシュされた入力設定は明示的に破棄されるまで再利用される
+    #[test]
+    fn input_setup_cache_reuses_resolved_value_until_cleared() {
+        let cache = InputSetupCache::new();
+        let resolve_count = Arc::new(Mutex::new(0usize));
+
+        let first = cache
+            .get_or_try_init({
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, ()>(41usize)
+                }
+            })
+            .unwrap();
+        let second = cache
+            .get_or_try_init({
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, ()>(99usize)
+                }
+            })
+            .unwrap();
+
+        assert_eq!(first, 41);
+        assert_eq!(second, 41);
+        assert_eq!(*resolve_count.lock().unwrap(), 1);
+    }
+
+    /// キャッシュを破棄すると次回は設定を再解決する
+    #[test]
+    fn input_setup_cache_reloads_after_clear() {
+        let cache = InputSetupCache::new();
+        let resolve_count = Arc::new(Mutex::new(0usize));
+
+        let first = cache
+            .get_or_try_init({
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, ()>(7usize)
+                }
+            })
+            .unwrap();
+        cache.clear();
+        let second = cache
+            .get_or_try_init({
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, ()>(8usize)
+                }
+            })
+            .unwrap();
+
+        assert_eq!(first, 7);
+        assert_eq!(second, 8);
+        assert_eq!(*resolve_count.lock().unwrap(), 2);
+    }
+
+    /// キャッシュ済み設定が無効化された場合は再解決される
+    #[test]
+    fn input_setup_cache_reloads_when_cached_value_is_invalid() {
+        let cache = InputSetupCache::new();
+        let resolve_count = Arc::new(Mutex::new(0usize));
+
+        let first = cache
+            .get_or_try_init_if(|_| true, {
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, ()>(11usize)
+                }
+            })
+            .unwrap();
+        let second = cache
+            .get_or_try_init_if(|_| false, {
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, ()>(12usize)
+                }
+            })
+            .unwrap();
+
+        assert_eq!(first, 11);
+        assert_eq!(second, 12);
+        assert_eq!(*resolve_count.lock().unwrap(), 2);
+    }
+
+    /// 利用処理が失敗したらキャッシュと録音状態の巻き戻しが行われる
+    #[test]
+    fn clear_input_setup_on_error_rolls_back_cache_and_cleanup() {
+        let cache = InputSetupCache::new();
+        cache.get_or_try_init(|| Ok::<_, ()>(3usize)).unwrap();
+        let cleanup_called = Arc::new(AtomicBool::new(false));
+        let resolve_count = Arc::new(Mutex::new(0usize));
+
+        let result = clear_input_setup_on_error(
+            &cache,
+            {
+                let cleanup_called = cleanup_called.clone();
+                move || cleanup_called.store(true, Ordering::SeqCst)
+            },
+            Err::<(), Box<dyn Error>>(CpalBackendError::NoInputDevice.into()),
+        );
+
+        assert!(result.is_err());
+        assert!(cleanup_called.load(Ordering::SeqCst));
+        let reloaded = cache
+            .get_or_try_init({
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, ()>(8usize)
+                }
+            })
+            .unwrap();
+        assert_eq!(reloaded, 8);
+        assert_eq!(*resolve_count.lock().unwrap(), 1);
+    }
+
+    /// 利用処理が成功したらキャッシュも録音状態も維持される
+    #[test]
+    fn clear_input_setup_on_success_keeps_cache_and_skips_cleanup() {
+        let cache = InputSetupCache::new();
+        cache.get_or_try_init(|| Ok::<_, ()>(5usize)).unwrap();
+        let cleanup_called = Arc::new(AtomicBool::new(false));
+        let resolve_count = Arc::new(Mutex::new(0usize));
+
+        let result = clear_input_setup_on_error(
+            &cache,
+            {
+                let cleanup_called = cleanup_called.clone();
+                move || cleanup_called.store(true, Ordering::SeqCst)
+            },
+            Ok::<usize, Box<dyn Error>>(9usize),
+        )
+        .unwrap();
+
+        assert_eq!(result, 9);
+        assert!(!cleanup_called.load(Ordering::SeqCst));
+        let cached = cache
+            .get_or_try_init({
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, ()>(6usize)
+                }
+            })
+            .unwrap();
+        assert_eq!(cached, 5);
+        assert_eq!(*resolve_count.lock().unwrap(), 0);
+    }
+
+    /// start ワークフローはキャッシュ有効時に入力設定の再解決を避ける
+    #[test]
+    fn run_start_recording_skips_resolve_when_cached_value_is_valid() {
+        let cache = InputSetupCache::new();
+        let resolve_count = Arc::new(Mutex::new(0usize));
+
+        let first = run_start_recording(
+            &cache,
+            |_| true,
+            {
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, Box<dyn Error>>(21usize)
+                }
+            },
+            |setup| Ok::<_, Box<dyn Error>>(*setup + 1),
+            |_| Ok::<_, Box<dyn Error>>(()),
+            || {},
+        )
+        .unwrap();
+        let second = run_start_recording(
+            &cache,
+            |_| true,
+            {
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, Box<dyn Error>>(99usize)
+                }
+            },
+            |setup| Ok::<_, Box<dyn Error>>(*setup + 1),
+            |_| Ok::<_, Box<dyn Error>>(()),
+            || {},
+        )
+        .unwrap();
+
+        assert_eq!(first, 22);
+        assert_eq!(second, 22);
+        assert_eq!(*resolve_count.lock().unwrap(), 1);
+    }
+
+    /// start ワークフローはキャッシュ無効時に入力設定を再解決する
+    #[test]
+    fn run_start_recording_reloads_when_cached_value_is_invalid() {
+        let cache = InputSetupCache::new();
+        let resolve_count = Arc::new(Mutex::new(0usize));
+
+        let first = run_start_recording(
+            &cache,
+            |_| true,
+            {
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, Box<dyn Error>>(31usize)
+                }
+            },
+            |setup| Ok::<_, Box<dyn Error>>(*setup),
+            |_| Ok::<_, Box<dyn Error>>(()),
+            || {},
+        )
+        .unwrap();
+        let second = run_start_recording(
+            &cache,
+            |_| false,
+            {
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, Box<dyn Error>>(32usize)
+                }
+            },
+            |setup| Ok::<_, Box<dyn Error>>(*setup),
+            |_| Ok::<_, Box<dyn Error>>(()),
+            || {},
+        )
+        .unwrap();
+
+        assert_eq!(first, 31);
+        assert_eq!(second, 32);
+        assert_eq!(*resolve_count.lock().unwrap(), 2);
+    }
+
+    /// stream 構築失敗時はキャッシュを破棄して cleanup を実行する
+    #[test]
+    fn run_start_recording_clears_cache_when_build_fails() {
+        let cache = InputSetupCache::new();
+        let cleanup_called = Arc::new(AtomicBool::new(false));
+        let resolve_count = Arc::new(Mutex::new(0usize));
+
+        let result = run_start_recording(
+            &cache,
+            |_| true,
+            {
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, Box<dyn Error>>(41usize)
+                }
+            },
+            |_| Err::<usize, Box<dyn Error>>(CpalBackendError::NoInputDevice.into()),
+            |_| Ok::<_, Box<dyn Error>>(()),
+            {
+                let cleanup_called = cleanup_called.clone();
+                move || cleanup_called.store(true, Ordering::SeqCst)
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(cleanup_called.load(Ordering::SeqCst));
+
+        let reloaded = cache
+            .get_or_try_init({
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, ()>(42usize)
+                }
+            })
+            .unwrap();
+        assert_eq!(reloaded, 42);
+        assert_eq!(*resolve_count.lock().unwrap(), 2);
+    }
+
+    /// stream 再生失敗時はキャッシュを破棄して cleanup を実行する
+    #[test]
+    fn run_start_recording_clears_cache_when_play_fails() {
+        let cache = InputSetupCache::new();
+        let cleanup_called = Arc::new(AtomicBool::new(false));
+        let resolve_count = Arc::new(Mutex::new(0usize));
+
+        let result = run_start_recording(
+            &cache,
+            |_| true,
+            {
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, Box<dyn Error>>(51usize)
+                }
+            },
+            |setup| Ok::<_, Box<dyn Error>>(*setup + 1),
+            |_| Err::<(), Box<dyn Error>>(CpalBackendError::NoInputDevice.into()),
+            {
+                let cleanup_called = cleanup_called.clone();
+                move || cleanup_called.store(true, Ordering::SeqCst)
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(cleanup_called.load(Ordering::SeqCst));
+
+        let reloaded = cache
+            .get_or_try_init({
+                let resolve_count = resolve_count.clone();
+                move || {
+                    *resolve_count.lock().unwrap() += 1;
+                    Ok::<_, ()>(52usize)
+                }
+            })
+            .unwrap();
+        assert_eq!(reloaded, 52);
+        assert_eq!(*resolve_count.lock().unwrap(), 2);
+    }
 
     /// 列挙したデバイス名を優先順位設定へそのまま利用できる
     #[test]
