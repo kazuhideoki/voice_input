@@ -16,12 +16,112 @@ use crate::infrastructure::audio::AudioBackend;
 use crate::ipc::RecordingResult;
 
 /// 録音状態
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum RecordingState {
     /// 待機中
     Idle,
-    /// 録音中（セッションID付き）
-    Recording(u64),
+    /// 録音中
+    Recording(ActiveRecordingSession),
+}
+
+/// 録音中セッション
+#[derive(Debug)]
+pub struct ActiveRecordingSession {
+    /// セッションID
+    pub session_id: u64,
+    /// 自動停止タイマーのキャンセル用
+    pub cancel: Option<oneshot::Sender<()>>,
+    /// 録音開始時にApple Musicが再生中だったか
+    pub music_was_playing: bool,
+    /// 録音開始時点で取得した選択テキストまたはCLIプロンプト
+    pub start_prompt: Option<String>,
+}
+
+impl ActiveRecordingSession {
+    fn new(session_id: u64, options: RecordingOptions) -> Self {
+        let (cancel, _cancel_rx) = oneshot::channel::<()>();
+        Self {
+            session_id,
+            cancel: Some(cancel),
+            music_was_playing: false,
+            start_prompt: options.prompt,
+        }
+    }
+}
+
+impl PartialEq for RecordingState {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Idle, Self::Idle) => true,
+            (Self::Recording(lhs), Self::Recording(rhs)) => lhs.session_id == rhs.session_id,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for RecordingState {}
+
+impl RecordingState {
+    fn is_recording(&self) -> bool {
+        matches!(self, Self::Recording(_))
+    }
+
+    fn active_session_id(&self) -> Option<u64> {
+        match self {
+            Self::Idle => None,
+            Self::Recording(session) => Some(session.session_id),
+        }
+    }
+
+    fn context_info(&self) -> (Option<String>, bool) {
+        match self {
+            Self::Idle => (None, false),
+            Self::Recording(session) => (session.start_prompt.clone(), session.music_was_playing),
+        }
+    }
+
+    fn set_music_was_playing(&mut self, was_playing: bool) {
+        if let Self::Recording(session) = self {
+            session.music_was_playing = was_playing;
+        }
+    }
+
+    fn take_cancel_receiver(&mut self) -> Option<oneshot::Receiver<()>> {
+        match self {
+            Self::Idle => None,
+            Self::Recording(session) => {
+                let tx = session.cancel.take()?;
+                let (new_tx, rx) = oneshot::channel();
+                session.cancel = Some(new_tx);
+                drop(tx);
+                Some(rx)
+            }
+        }
+    }
+
+    fn stopped_context(&self) -> Result<StoppedSessionContext> {
+        match self {
+            Self::Idle => Err(VoiceInputError::RecordingNotStarted),
+            Self::Recording(session) => Ok(StoppedSessionContext {
+                start_prompt: session.start_prompt.clone(),
+                music_was_playing: session.music_was_playing,
+            }),
+        }
+    }
+}
+
+/// 停止済み録音セッションの文脈
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoppedSessionContext {
+    pub start_prompt: Option<String>,
+    pub music_was_playing: bool,
+}
+
+/// 録音停止結果
+#[derive(Clone, Debug)]
+pub struct StopRecordingOutcome {
+    pub result: RecordingResult,
+    pub context: StoppedSessionContext,
 }
 
 /// 録音設定
@@ -51,21 +151,12 @@ pub struct RecordingOptions {
 pub struct RecordingContext {
     /// 現在の状態
     pub state: RecordingState,
-    /// 自動停止タイマーのキャンセル用
-    pub cancel: Option<oneshot::Sender<()>>,
-    /// 録音開始時にApple Musicが再生中だったか
-    pub music_was_playing: bool,
-    /// 録音開始時点で取得した選択テキストまたはCLIプロンプト
-    pub start_prompt: Option<String>,
 }
 
 impl RecordingContext {
     pub fn new() -> Self {
         Self {
             state: RecordingState::Idle,
-            cancel: None,
-            music_was_playing: false,
-            start_prompt: None,
         }
     }
 }
@@ -125,20 +216,13 @@ impl<T: AudioBackend> RecordingService<T> {
             *counter
         };
 
-        // オプションを保存
-        ctx.start_prompt = options.prompt;
-
         // レコーダーを開始
         self.recorder
             .borrow_mut()
             .start()
             .map_err(|e| VoiceInputError::AudioBackendError(e.to_string()))?;
 
-        ctx.state = RecordingState::Recording(session_id);
-
-        // 自動停止タイマーをセットアップ
-        let (cancel_tx, _cancel_rx) = oneshot::channel::<()>();
-        ctx.cancel = Some(cancel_tx);
+        ctx.state = RecordingState::Recording(ActiveRecordingSession::new(session_id, options));
 
         // タイマー処理は呼び出し元で実装（spawn_localの制約のため）
 
@@ -146,20 +230,17 @@ impl<T: AudioBackend> RecordingService<T> {
     }
 
     /// 録音を停止
-    pub async fn stop_recording(&self) -> Result<RecordingResult> {
+    pub async fn stop_recording(&self) -> Result<StopRecordingOutcome> {
         let mut ctx = self
             .context
             .lock()
             .map_err(|e| VoiceInputError::SystemError(format!("Context lock error: {}", e)))?;
 
-        match ctx.state {
-            RecordingState::Idle => return Err(VoiceInputError::RecordingNotStarted),
-            RecordingState::Recording(_) => {}
-        }
-
-        // 自動停止タイマーをキャンセル
-        if let Some(cancel) = ctx.cancel.take() {
-            let _ = cancel.send(());
+        let stopped_context = ctx.state.stopped_context()?;
+        if let RecordingState::Recording(session) = &mut ctx.state {
+            if let Some(cancel) = session.cancel.take() {
+                let _ = cancel.send(());
+            }
         }
 
         // レコーダーを停止
@@ -171,16 +252,19 @@ impl<T: AudioBackend> RecordingService<T> {
 
         ctx.state = RecordingState::Idle;
 
-        Ok(RecordingResult {
-            audio_data: audio_data.into(),
-            duration_ms: 0, // TODO: 実際の録音時間を計算
+        Ok(StopRecordingOutcome {
+            result: RecordingResult {
+                audio_data: audio_data.into(),
+                duration_ms: 0, // TODO: 実際の録音時間を計算
+            },
+            context: stopped_context,
         })
     }
 
     /// 録音中かどうかを確認
     pub fn is_recording(&self) -> bool {
         if let Ok(ctx) = self.context.lock() {
-            matches!(ctx.state, RecordingState::Recording(_))
+            ctx.state.is_recording()
         } else {
             false
         }
@@ -192,22 +276,13 @@ impl<T: AudioBackend> RecordingService<T> {
             .context
             .lock()
             .map_err(|e| VoiceInputError::SystemError(format!("Context lock error: {}", e)))?;
-        Ok(matches!(ctx.state, RecordingState::Recording(current) if current == session_id))
+        Ok(ctx.state.active_session_id() == Some(session_id))
     }
 
     /// 自動停止キャンセルチャネルを取得（タイマー処理用）
     pub fn take_cancel_receiver(&self) -> Option<oneshot::Receiver<()>> {
         if let Ok(mut ctx) = self.context.lock() {
-            if let Some(tx) = ctx.cancel.take() {
-                let (new_tx, rx) = oneshot::channel();
-                ctx.cancel = Some(new_tx);
-                // 古いtxは破棄するだけで、send()は呼ばない
-                // txが破棄されることで、対応するReceiverは自然にキャンセルされる
-                drop(tx);
-                Some(rx)
-            } else {
-                None
-            }
+            ctx.state.take_cancel_receiver()
         } else {
             None
         }
@@ -224,7 +299,7 @@ impl<T: AudioBackend> RecordingService<T> {
             .context
             .lock()
             .map_err(|e| VoiceInputError::SystemError(format!("Context lock error: {}", e)))?;
-        Ok((ctx.start_prompt.clone(), ctx.music_was_playing))
+        Ok(ctx.state.context_info())
     }
 
     /// Apple Music再生状態を設定
@@ -233,7 +308,7 @@ impl<T: AudioBackend> RecordingService<T> {
             .context
             .lock()
             .map_err(|e| VoiceInputError::SystemError(format!("Context lock error: {}", e)))?;
-        ctx.music_was_playing = was_playing;
+        ctx.state.set_music_was_playing(was_playing);
         Ok(())
     }
 }
@@ -260,6 +335,18 @@ mod tests {
         }
     }
 
+    struct FailingStopAudioBackend {
+        is_recording: Arc<AtomicBool>,
+    }
+
+    impl FailingStopAudioBackend {
+        fn new() -> Self {
+            Self {
+                is_recording: Arc::new(AtomicBool::new(false)),
+            }
+        }
+    }
+
     impl crate::infrastructure::audio::AudioBackend for MockAudioBackend {
         fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
             self.is_recording.store(true, Ordering::SeqCst);
@@ -273,6 +360,21 @@ mod tests {
                 mime_type: "audio/wav",
                 file_name: "audio.wav".to_string(),
             })
+        }
+
+        fn is_recording(&self) -> bool {
+            self.is_recording.load(Ordering::SeqCst)
+        }
+    }
+
+    impl crate::infrastructure::audio::AudioBackend for FailingStopAudioBackend {
+        fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+            self.is_recording.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn stop_recording(&self) -> std::result::Result<AudioData, Box<dyn std::error::Error>> {
+            Err("stop failed".into())
         }
 
         fn is_recording(&self) -> bool {
@@ -351,7 +453,10 @@ mod tests {
 
             // 録音停止
             let result = service.stop_recording().await.unwrap();
-            assert!(!result.audio_data.0.is_empty(), "Should have audio data");
+            assert!(
+                !result.result.audio_data.0.is_empty(),
+                "Should have audio data"
+            );
             assert!(
                 !service.is_recording(),
                 "Should not be recording after stop"
@@ -373,20 +478,26 @@ mod tests {
         {
             let ctx = service.context.lock().unwrap();
             assert_eq!(ctx.state, RecordingState::Idle);
-            assert!(ctx.cancel.is_none());
-            assert!(!ctx.music_was_playing);
+            assert_eq!(ctx.state.context_info(), (None, false));
         }
 
-        // 音楽再生状態を設定
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        runtime.block_on(async {
+            service
+                .start_recording(RecordingOptions {
+                    prompt: Some("prompt".to_string()),
+                })
+                .await
+                .unwrap();
+        });
+
         service.set_music_was_playing(true).unwrap();
-        {
-            let ctx = service.context.lock().unwrap();
-            assert!(ctx.music_was_playing);
-        }
-
-        // コンテキスト情報を取得
         let (prompt, music_was_playing) = service.get_context_info().unwrap();
-        assert!(prompt.is_none());
+        assert_eq!(prompt, Some("prompt".to_string()));
         assert!(music_was_playing);
     }
 
@@ -417,5 +528,34 @@ mod tests {
         assert_ne!(first_session, second_session);
         assert!(service.is_active_session(second_session).unwrap());
         assert!(!service.is_active_session(first_session).unwrap());
+    }
+
+    /// 録音停止失敗時も録音状態と文脈が維持される
+    #[tokio::test]
+    async fn stop_failure_keeps_active_session_state() {
+        let backend = FailingStopAudioBackend::new();
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
+        let config = RecordingConfig {
+            max_duration_secs: 30,
+        };
+        let service = RecordingService::new(recorder, config);
+
+        let session_id = service
+            .start_recording(RecordingOptions {
+                prompt: Some("prompt".to_string()),
+            })
+            .await
+            .unwrap();
+        service.set_music_was_playing(true).unwrap();
+
+        let error = service.stop_recording().await.unwrap_err();
+
+        assert!(matches!(error, VoiceInputError::AudioBackendError(_)));
+        assert!(service.is_recording());
+        assert!(service.is_active_session(session_id).unwrap());
+        assert_eq!(
+            service.get_context_info().unwrap(),
+            (Some("prompt".to_string()), true)
+        );
     }
 }

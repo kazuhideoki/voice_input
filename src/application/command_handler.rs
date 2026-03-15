@@ -78,8 +78,6 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         // 録音オプションを構築
         let options = RecordingOptions { prompt };
 
-        self.recording.borrow().set_music_was_playing(false)?;
-
         // 録音を開始
         let recording = self.recording.clone();
         let session_id = recording.borrow().start_recording(options).await?;
@@ -152,16 +150,12 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
         // 録音を停止
         let recording = self.recording.clone();
-        let result = recording.borrow().stop_recording().await?;
-
-        // コンテキスト情報を取得
-        let (_start_prompt, music_was_playing) = self.recording.borrow().get_context_info()?;
-
-        let audio_bytes = result.audio_data.0.len();
+        let outcome = recording.borrow().stop_recording().await?;
+        let audio_bytes = outcome.result.audio_data.0.len();
 
         // 転写キューに送信
         self.transcription_tx
-            .send((result, music_was_playing))
+            .send((outcome.result, outcome.context.music_was_playing))
             .map_err(|e| {
                 VoiceInputError::SystemError(format!(
                     "Failed to send to transcription queue: {}",
@@ -273,12 +267,10 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                             println!("Auto-stop timer triggered after {}s", max_secs);
                             play_stop_sound();
 
-                            if let Ok(result) = recording.borrow().stop_recording().await {
-                                let (_, music_was_playing) =
-                                    recording.borrow().get_context_info().unwrap_or((None, false));
+                            if let Ok(outcome) = recording.borrow().stop_recording().await {
                                 let _ = tx.send((
-                                    result,
-                                    music_was_playing,
+                                    outcome.result,
+                                    outcome.context.music_was_playing,
                                 ));
                             }
                         }

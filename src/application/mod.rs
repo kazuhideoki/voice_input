@@ -8,7 +8,8 @@ pub mod transcription_worker;
 pub use command_handler::{CommandHandler, TranscriptionMessage};
 pub use media_control_service::MediaControlService;
 pub use recording_service::{
-    RecordingConfig, RecordingContext, RecordingOptions, RecordingService, RecordingState,
+    ActiveRecordingSession, RecordingConfig, RecordingContext, RecordingOptions, RecordingService,
+    RecordingState, StopRecordingOutcome, StoppedSessionContext,
 };
 pub use service_container::{AppConfig, ServiceContainer};
 pub use transcription_service::{
