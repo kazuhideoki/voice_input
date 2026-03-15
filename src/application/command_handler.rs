@@ -75,15 +75,15 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
     /// 録音開始処理
     async fn handle_start(&self, prompt: Option<String>) -> Result<IpcResp> {
+        // 体感開始時間を縮めるため、開始音は録音開始前に鳴らす
+        play_start_sound();
+
         // 録音オプションを構築
         let options = RecordingOptions { prompt };
 
         // 録音を開始
         let recording = self.recording.clone();
         let session_id = recording.borrow().start_recording(options).await?;
-
-        // 録音開始後に開始音を鳴らす
-        play_start_sound();
 
         // Apple Music の pause は録音開始後に非同期で行う
         self.spawn_pause_if_needed(session_id);
@@ -303,6 +303,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
 
     static SOUND_TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
@@ -363,6 +364,71 @@ mod tests {
 
         fn is_recording(&self) -> bool {
             self.started.load(Ordering::SeqCst)
+        }
+    }
+
+    struct DelayedRecordingOrderBackend {
+        started: Arc<AtomicBool>,
+        events: Arc<StdMutex<Vec<&'static str>>>,
+        delay: Duration,
+    }
+
+    impl DelayedRecordingOrderBackend {
+        fn new(events: Arc<StdMutex<Vec<&'static str>>>, delay: Duration) -> Self {
+            Self {
+                started: Arc::new(AtomicBool::new(false)),
+                events,
+                delay,
+            }
+        }
+    }
+
+    impl AudioBackend for DelayedRecordingOrderBackend {
+        fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+            std::thread::sleep(self.delay);
+            self.started.store(true, Ordering::SeqCst);
+            self.events.lock().unwrap().push("recording_started");
+            Ok(())
+        }
+
+        fn stop_recording(&self) -> std::result::Result<AudioData, Box<dyn std::error::Error>> {
+            self.started.store(false, Ordering::SeqCst);
+            Ok(AudioData {
+                bytes: vec![0u8; 16],
+                mime_type: "audio/wav",
+                file_name: "audio.wav".to_string(),
+            })
+        }
+
+        fn is_recording(&self) -> bool {
+            self.started.load(Ordering::SeqCst)
+        }
+    }
+
+    struct TimingObservedBackend<T: AudioBackend> {
+        inner: T,
+        started_at: Arc<StdMutex<Option<Instant>>>,
+    }
+
+    impl<T: AudioBackend> TimingObservedBackend<T> {
+        fn new(inner: T, started_at: Arc<StdMutex<Option<Instant>>>) -> Self {
+            Self { inner, started_at }
+        }
+    }
+
+    impl<T: AudioBackend> AudioBackend for TimingObservedBackend<T> {
+        fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+            self.inner.start_recording()?;
+            *self.started_at.lock().unwrap() = Some(Instant::now());
+            Ok(())
+        }
+
+        fn stop_recording(&self) -> std::result::Result<AudioData, Box<dyn std::error::Error>> {
+            self.inner.stop_recording()
+        }
+
+        fn is_recording(&self) -> bool {
+            self.inner.is_recording()
         }
     }
 
@@ -521,9 +587,9 @@ mod tests {
             .await;
     }
 
-    /// 録音開始後に開始音が鳴る
+    /// 開始音が録音開始より先に鳴る
     #[tokio::test(flavor = "current_thread")]
-    async fn start_sound_plays_after_recording_begins() {
+    async fn start_sound_plays_before_recording_begins_immediately() {
         let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
         clear_test_sound_runner();
         let _cleanup = guard((), |_| clear_test_sound_runner());
@@ -555,7 +621,96 @@ mod tests {
 
         assert_eq!(
             *events.lock().unwrap(),
-            vec!["recording_started", "start_sound"]
+            vec!["start_sound", "recording_started"]
+        );
+    }
+
+    /// 開始音が録音開始処理より先に鳴る
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_sound_plays_before_recording_begins() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        clear_test_sound_runner();
+        let _cleanup = guard((), |_| clear_test_sound_runner());
+
+        let events = Arc::new(StdMutex::new(Vec::new()));
+        let sound_events = events.clone();
+        set_test_sound_runner(move |path| {
+            if path == "/System/Library/Sounds/Ping.aiff" {
+                sound_events.lock().unwrap().push("start_sound");
+            }
+        });
+
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let backend =
+                    DelayedRecordingOrderBackend::new(events.clone(), Duration::from_millis(20));
+                let media_control = MediaControlService::with_controller(Box::new(
+                    DelayedMediaController::new(false, Duration::from_millis(0)),
+                ));
+                let (handler, _recording, _media_control, _rx) =
+                    build_handler(backend, media_control);
+
+                handler
+                    .handle(IpcCmd::Start { prompt: None })
+                    .await
+                    .unwrap();
+            })
+            .await;
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["start_sound", "recording_started"]
+        );
+    }
+
+    /// 開始音通知の体感待ち時間を観測できる
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_sound_timing_observation_with_delayed_backend() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        clear_test_sound_runner();
+        let _cleanup = guard((), |_| clear_test_sound_runner());
+
+        let recording_started_at = Arc::new(StdMutex::new(None::<Instant>));
+        let sound_played_at = Arc::new(StdMutex::new(None::<Instant>));
+        let sound_played_at_ref = sound_played_at.clone();
+        let request_started_at = Instant::now();
+
+        set_test_sound_runner(move |path| {
+            if path == "/System/Library/Sounds/Ping.aiff" {
+                *sound_played_at_ref.lock().unwrap() = Some(Instant::now());
+            }
+        });
+
+        let started_at_ref = recording_started_at.clone();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let backend = DelayedRecordingOrderBackend::new(
+                    Arc::new(StdMutex::new(Vec::new())),
+                    Duration::from_millis(60),
+                );
+                let backend = TimingObservedBackend::new(backend, started_at_ref);
+                let media_control = MediaControlService::with_controller(Box::new(
+                    DelayedMediaController::new(false, Duration::from_millis(0)),
+                ));
+                let (handler, _recording, _media_control, _rx) =
+                    build_handler(backend, media_control);
+
+                handler
+                    .handle(IpcCmd::Start { prompt: None })
+                    .await
+                    .unwrap();
+            })
+            .await;
+
+        let started_at = recording_started_at.lock().unwrap().unwrap();
+        let sound_at = sound_played_at.lock().unwrap().unwrap();
+        let sound_from_request_ms = sound_at.duration_since(request_started_at).as_millis();
+        let recording_from_request_ms = started_at.duration_since(request_started_at).as_millis();
+        println!(
+            "start_sound_timing_observation_with_delayed_backend: sound_from_request={} ms, recording_from_request={} ms",
+            sound_from_request_ms, recording_from_request_ms
         );
     }
 
