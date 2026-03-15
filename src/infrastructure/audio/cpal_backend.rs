@@ -17,7 +17,7 @@ use std::{
     fmt,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -35,6 +35,8 @@ struct MemoryRecordingState {
     buffer: Arc<Mutex<Vec<i16>>>,
     sample_rate: u32,
     channels: u16,
+    generation: u64,
+    accepting_input: Arc<AtomicBool>,
 }
 
 struct ProcessedAudio<'a> {
@@ -60,6 +62,8 @@ struct ReadyInputStream {
     _stream: Stream,
     identity: StreamIdentity,
 }
+
+type CaptureTarget = (Arc<Mutex<Vec<i16>>>, Arc<AtomicBool>, u64);
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 const MIN_RESAMPLE_FRAMES: usize = 256;
@@ -149,6 +153,10 @@ pub struct CpalAudioBackend {
     stream: Mutex<Option<ReadyInputStream>>,
     /// 録音フラグ
     recording: Arc<AtomicBool>,
+    /// callback が利用中の録音世代
+    capture_generation: Arc<AtomicU64>,
+    /// stream error 後に次回開始で張り直すべきか
+    stream_needs_rebuild: Arc<AtomicBool>,
     /// 録音状態（メモリモード専用）
     recording_state: Arc<Mutex<Option<MemoryRecordingState>>>,
     /// 入力デバイスと設定のキャッシュ
@@ -160,6 +168,8 @@ impl Default for CpalAudioBackend {
         Self {
             stream: Mutex::new(None),
             recording: Arc::new(AtomicBool::new(false)),
+            capture_generation: Arc::new(AtomicU64::new(0)),
+            stream_needs_rebuild: Arc::new(AtomicBool::new(false)),
             recording_state: Arc::new(Mutex::new(None)),
             input_setup_cache: InputSetupCache::new(),
         }
@@ -319,8 +329,80 @@ fn should_revalidate_input_setup(
 fn should_rebuild_input_stream(
     existing_identity: Option<&StreamIdentity>,
     desired_identity: &StreamIdentity,
+    needs_rebuild: bool,
 ) -> bool {
-    !matches!(existing_identity, Some(identity) if identity == desired_identity)
+    needs_rebuild || !matches!(existing_identity, Some(identity) if identity == desired_identity)
+}
+
+fn try_capture_buffer(
+    recording: &AtomicBool,
+    capture_generation: &AtomicU64,
+    recording_state: &Arc<Mutex<Option<MemoryRecordingState>>>,
+) -> Option<CaptureTarget> {
+    if !recording.load(Ordering::SeqCst) {
+        return None;
+    }
+
+    let (buffer, accepting_input, generation) = {
+        let state = recording_state.lock().unwrap();
+        let state = state.as_ref()?;
+        (
+            state.buffer.clone(),
+            state.accepting_input.clone(),
+            state.generation,
+        )
+    };
+
+    if !accepting_input.load(Ordering::SeqCst)
+        || generation != capture_generation.load(Ordering::SeqCst)
+    {
+        return None;
+    }
+
+    Some((buffer, accepting_input, generation))
+}
+
+fn append_input_i16(
+    recording: &AtomicBool,
+    capture_generation: &AtomicU64,
+    recording_state: &Arc<Mutex<Option<MemoryRecordingState>>>,
+    data: &[i16],
+) {
+    let Some((buffer, accepting_input, generation)) =
+        try_capture_buffer(recording, capture_generation, recording_state)
+    else {
+        return;
+    };
+
+    let mut buf = buffer.lock().unwrap();
+    if accepting_input.load(Ordering::SeqCst)
+        && generation == capture_generation.load(Ordering::SeqCst)
+    {
+        buf.extend_from_slice(data);
+    }
+}
+
+fn append_input_f32(
+    recording: &AtomicBool,
+    capture_generation: &AtomicU64,
+    recording_state: &Arc<Mutex<Option<MemoryRecordingState>>>,
+    data: &[f32],
+) {
+    let Some((buffer, accepting_input, generation)) =
+        try_capture_buffer(recording, capture_generation, recording_state)
+    else {
+        return;
+    };
+
+    let mut buf = buffer.lock().unwrap();
+    if accepting_input.load(Ordering::SeqCst)
+        && generation == capture_generation.load(Ordering::SeqCst)
+    {
+        buf.extend(
+            data.iter()
+                .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -408,6 +490,7 @@ impl CpalAudioBackend {
             should_rebuild_input_stream(
                 stream.as_ref().map(|ready| &ready.identity),
                 &input_setup.stream_identity,
+                self.stream_needs_rebuild.load(Ordering::SeqCst),
             )
         };
 
@@ -416,6 +499,8 @@ impl CpalAudioBackend {
             let config: StreamConfig = input_setup.supported_config.clone().into();
             let stream_result = Self::build_memory_stream(
                 self.recording.clone(),
+                self.capture_generation.clone(),
+                self.stream_needs_rebuild.clone(),
                 self.recording_state.clone(),
                 &input_setup.device,
                 &config,
@@ -430,6 +515,7 @@ impl CpalAudioBackend {
                 Err(err) => {
                     self.input_setup_cache.value.lock().unwrap().take();
                     *self.stream.lock().unwrap() = None;
+                    self.stream_needs_rebuild.store(true, Ordering::SeqCst);
                     return Err(err);
                 }
             };
@@ -437,6 +523,7 @@ impl CpalAudioBackend {
                 _stream: stream,
                 identity: input_setup.stream_identity.clone(),
             });
+            self.stream_needs_rebuild.store(false, Ordering::SeqCst);
         }
 
         Ok(input_setup)
@@ -844,6 +931,8 @@ impl CpalAudioBackend {
     /// メモリモード用のストリーム構築
     fn build_memory_stream(
         recording: Arc<AtomicBool>,
+        capture_generation: Arc<AtomicU64>,
+        stream_needs_rebuild: Arc<AtomicBool>,
         recording_state: Arc<Mutex<Option<MemoryRecordingState>>>,
         device: &Device,
         config: &StreamConfig,
@@ -853,40 +942,33 @@ impl CpalAudioBackend {
             SampleFormat::I16 => device.build_input_stream(
                 config,
                 move |data: &[i16], _| {
-                    if recording.load(Ordering::SeqCst) {
-                        let target_buffer = recording_state
-                            .lock()
-                            .unwrap()
-                            .as_ref()
-                            .map(|state| state.buffer.clone());
-                        if let Some(buffer) = target_buffer {
-                            let mut buf = buffer.lock().unwrap();
-                            buf.extend_from_slice(data);
-                        }
-                    }
+                    append_input_i16(
+                        recording.as_ref(),
+                        capture_generation.as_ref(),
+                        &recording_state,
+                        data,
+                    );
                 },
-                |e| eprintln!("stream error: {e}"),
+                move |e| {
+                    stream_needs_rebuild.store(true, Ordering::SeqCst);
+                    eprintln!("stream error: {e}");
+                },
                 None,
             )?,
             SampleFormat::F32 => device.build_input_stream(
                 config,
                 move |data: &[f32], _| {
-                    if recording.load(Ordering::SeqCst) {
-                        let target_buffer = recording_state
-                            .lock()
-                            .unwrap()
-                            .as_ref()
-                            .map(|state| state.buffer.clone());
-                        if let Some(buffer) = target_buffer {
-                            let mut buf = buffer.lock().unwrap();
-                            buf.extend(
-                                data.iter()
-                                    .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16),
-                            );
-                        }
-                    }
+                    append_input_f32(
+                        recording.as_ref(),
+                        capture_generation.as_ref(),
+                        &recording_state,
+                        data,
+                    );
                 },
-                |e| eprintln!("stream error: {e}"),
+                move |e| {
+                    stream_needs_rebuild.store(true, Ordering::SeqCst);
+                    eprintln!("stream error: {e}");
+                },
                 None,
             )?,
             _ => return Err(CpalBackendError::UnsupportedSampleFormat.into()),
@@ -909,10 +991,13 @@ impl AudioBackend for CpalAudioBackend {
         let channels = config.channels;
         let capacity = Self::estimate_buffer_size(30, sample_rate, channels);
         let buffer = Arc::new(Mutex::new(Vec::with_capacity(capacity)));
+        let generation = self.capture_generation.fetch_add(1, Ordering::SeqCst) + 1;
         *self.recording_state.lock().unwrap() = Some(MemoryRecordingState {
             buffer,
             sample_rate,
             channels,
+            generation,
+            accepting_input: Arc::new(AtomicBool::new(true)),
         });
         self.recording.store(true, Ordering::SeqCst);
         Ok(())
@@ -926,6 +1011,7 @@ impl AudioBackend for CpalAudioBackend {
         }
 
         self.recording.store(false, Ordering::SeqCst);
+        let retired_generation = self.capture_generation.fetch_add(1, Ordering::SeqCst);
 
         // RecordingStateを取得
         let state = self
@@ -934,6 +1020,10 @@ impl AudioBackend for CpalAudioBackend {
             .unwrap()
             .take()
             .ok_or(CpalBackendError::RecordingStateNotSet)?;
+        if state.generation != retired_generation {
+            return Err(CpalBackendError::RecordingStateNotSet.into());
+        }
+        state.accepting_input.store(false, Ordering::SeqCst);
 
         // メモリモード: バッファからエンコード（既定: FLAC）
         let samples = state.buffer.lock().unwrap();
@@ -1095,6 +1185,10 @@ mod tests {
     use std::sync::Mutex;
 
     static INPUT_DEVICE_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn init_env_config_for_test() {
+        let _ = crate::utils::config::EnvConfig::init();
+    }
 
     /// キャッシュされた入力設定は明示的に破棄されるまで再利用される
     #[test]
@@ -1391,7 +1485,7 @@ mod tests {
             channels: 1,
         };
 
-        let should_rebuild = should_rebuild_input_stream(Some(&identity), &identity);
+        let should_rebuild = should_rebuild_input_stream(Some(&identity), &identity, false);
 
         assert!(!should_rebuild);
     }
@@ -1412,9 +1506,44 @@ mod tests {
             channels: 1,
         };
 
-        let should_rebuild = should_rebuild_input_stream(Some(&existing), &desired);
+        let should_rebuild = should_rebuild_input_stream(Some(&existing), &desired, false);
 
         assert!(should_rebuild);
+    }
+
+    /// stream error が立っている場合は同じ設定でも張り直す
+    #[test]
+    fn unhealthy_stream_identity_triggers_rebuild() {
+        let identity = StreamIdentity {
+            selected_device_key: "AT2040USB".to_string(),
+            sample_format: SampleFormat::F32,
+            sample_rate: 48_000,
+            channels: 1,
+        };
+
+        let should_rebuild = should_rebuild_input_stream(Some(&identity), &identity, true);
+
+        assert!(should_rebuild);
+    }
+
+    /// 世代が切り替わった callback は停止後の buffer に追記しない
+    #[test]
+    fn stale_generation_does_not_append_after_stop() {
+        let recording = AtomicBool::new(true);
+        let capture_generation = AtomicU64::new(2);
+        let buffer = Arc::new(Mutex::new(vec![10i16]));
+        let accepting_input = Arc::new(AtomicBool::new(false));
+        let recording_state = Arc::new(Mutex::new(Some(MemoryRecordingState {
+            buffer: buffer.clone(),
+            sample_rate: 48_000,
+            channels: 1,
+            generation: 1,
+            accepting_input,
+        })));
+
+        append_input_i16(&recording, &capture_generation, &recording_state, &[20, 30]);
+
+        assert_eq!(*buffer.lock().unwrap(), vec![10i16]);
     }
 
     /// stream 構築失敗時はキャッシュを破棄して cleanup を実行する
@@ -1848,6 +1977,8 @@ mod tests {
             buffer: buffer.clone(),
             sample_rate: 48000,
             channels: 2,
+            generation: 1,
+            accepting_input: Arc::new(AtomicBool::new(true)),
         };
 
         // bufferが適切に初期化されているか確認
@@ -1913,6 +2044,7 @@ mod tests {
     /// メモリモード停止でFLACが返る
     #[test]
     fn stop_recording_returns_flac_in_memory_mode() {
+        init_env_config_for_test();
         // メモリモードでの動作をシミュレート
         let backend = CpalAudioBackend::default();
 
@@ -1922,7 +2054,10 @@ mod tests {
             buffer: buffer.clone(),
             sample_rate: 48000,
             channels: 1,
+            generation: 1,
+            accepting_input: Arc::new(AtomicBool::new(true)),
         });
+        backend.capture_generation.store(1, Ordering::SeqCst);
 
         // 録音フラグを設定
         backend.recording.store(true, Ordering::SeqCst);
@@ -1944,6 +2079,7 @@ mod tests {
     /// 空バッファでも停止時にFLACヘッダーが返る
     #[test]
     fn stop_recording_handles_empty_buffer() {
+        init_env_config_for_test();
         // 空のバッファでの動作をテスト
         let backend = CpalAudioBackend::default();
 
@@ -1953,7 +2089,10 @@ mod tests {
             buffer: buffer.clone(),
             sample_rate: 44100,
             channels: 2,
+            generation: 1,
+            accepting_input: Arc::new(AtomicBool::new(true)),
         });
+        backend.capture_generation.store(1, Ordering::SeqCst);
 
         // 録音フラグを設定
         backend.recording.store(true, Ordering::SeqCst);
