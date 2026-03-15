@@ -26,11 +26,15 @@ cp .env.example .env
 
 - OPENAI_API_KEY=your_openai_api_key_here
 - OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe # デフォルト
+- OPENAI_TRANSCRIBE_STREAMING=false # gpt-4o-mini-transcribe / gpt-4o-transcribe のみ対応
 - INPUT_DEVICE_PRIORITY="device1,device2,device3"
 - VOICE_INPUT_ENV_PATH=/path/to/.env
+- VOICE_INPUT_SOCKET_PATH=/custom/path/voice_input.sock
+- VOICE_INPUT_SOCKET_DIR=/custom/socket/dir # `VOICE_INPUT_SOCKET_PATH` 未設定時のみ有効
 - XDG_DATA_HOME=/custom/xdg/data
 
-環境変数は`src/utils/config.rs`のEnvConfigで型安全に管理され、起動時に一度だけ読み込まれます。
+`.env` はデフォルトでカレントディレクトリから読み込まれ、`VOICE_INPUT_ENV_PATH` が設定されている場合はそのパスが優先されます。
+環境変数は `src/utils/config.rs` の `EnvConfig` で起動時に一度だけ読み込まれます。
 
 ## 音声処理
 
@@ -69,7 +73,8 @@ cargo build --release
    ./scripts/setup-dev-env.sh
    ```
 
-   このスクリプトは以下を自動で行います：
+   このスクリプトは個人用の開発環境を前提に絶対パスを書き込むため、リポジトリ配置先が異なる場合は中身を調整してから実行してください。
+   実行すると以下を自動で行います：
 
    - `/usr/local/bin/voice_inputd_wrapper` にラッパースクリプトを作成
    - LaunchAgentをラッパー経由で起動するよう設定
@@ -124,6 +129,7 @@ nohup /usr/local/bin/voice_inputd_wrapper > /tmp/voice_inputd.out 2> /tmp/voice_
 ```sh
 voice_input start
 voice_input stop
+voice_input toggle --prompt "固有名詞の補助プロンプト"
 ```
 
 利用可能な入力デバイスを一覧表示
@@ -149,6 +155,7 @@ voice_input toggle
 # デフォルト動作（直接入力）
 voice_input start
 voice_input toggle
+voice_input start --prompt "会議メモ。人名は英字優先"
 ```
 
 **直接入力の特徴:**
@@ -163,6 +170,9 @@ voice_input toggle
 ```sh
 voice_input health
 ```
+
+ソケット接続先を切り替えたい場合は、CLI とデーモンの両方に同じ `VOICE_INPUT_SOCKET_PATH` または
+`VOICE_INPUT_SOCKET_DIR` を設定してください。
 
 ## 辞書による結果置換
 
@@ -215,7 +225,7 @@ cargo test --features ci-test
 cargo fmt -- --check
 
 # Lintチェック
-cargo clippy -- -D warnings
+cargo clippy --all-targets -- -D warnings
 ```
 
 ### パフォーマンス
@@ -242,10 +252,9 @@ cargo bench
 GitHub Actionsで自動テストが実行されます。CIでは以下が実行されます：
 
 1. **コードフォーマットチェック** - `cargo fmt`
-2. **Clippy静的解析** - すべての警告をエラーとして扱う
-3. **テスト実行** - 音声デバイスやデーモンが不要なテストのみ
-4. **E2Eテスト** - モック環境での統合テスト
-5. **パフォーマンスベンチマーク** - 性能劣化の自動検出
+2. **Clippy静的解析** - `cargo clippy --all-targets --features ci-test -- -D warnings`
+3. **テスト実行** - `cargo test --features ci-test --jobs 4`
+4. **追加のE2E確認** - モックモードのE2E確認をベストエフォートで実行
 
 #### ローカル品質チェック
 
@@ -257,9 +266,10 @@ CI実行前にローカルで品質チェックを実行できます：
 
 # ベンチマークを含む完全チェック
 ./scripts/quality-check.sh --bench
-
-# メモリに関する測定は performance_test または bench で実行
 ```
+
+`scripts/quality-check.sh` は `cargo fmt -- --check`、`cargo clippy --all-targets -- -D warnings`、
+`cargo test` を順に実行したあと、補助的なE2E確認をベストエフォートで流します。
 
 ### Rustバージョン管理
 
@@ -269,6 +279,8 @@ CI実行前にローカルで品質チェックを実行できます：
 [toolchain]
 channel = "1.86.0"
 components = ["rustfmt", "clippy"]
+profile = "minimal"
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
 ```
 
 これにより、開発者間およびCI環境でのビルド再現性が保証されます。
