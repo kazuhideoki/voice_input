@@ -103,6 +103,7 @@ impl RecordingState {
         match self {
             Self::Idle => Err(VoiceInputError::RecordingNotStarted),
             Self::Recording(session) => Ok(StoppedSessionContext {
+                session_id: session.session_id,
                 start_prompt: session.start_prompt.clone(),
                 music_was_playing: session.music_was_playing,
             }),
@@ -113,6 +114,7 @@ impl RecordingState {
 /// 停止済み録音セッションの文脈
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoppedSessionContext {
+    pub session_id: u64,
     pub start_prompt: Option<String>,
     pub music_was_playing: bool,
 }
@@ -277,6 +279,15 @@ impl<T: AudioBackend> RecordingService<T> {
             .lock()
             .map_err(|e| VoiceInputError::SystemError(format!("Context lock error: {}", e)))?;
         Ok(ctx.state.active_session_id() == Some(session_id))
+    }
+
+    /// 指定したセッションより新しい録音開始が発生したかを確認
+    pub fn has_started_newer_session(&self, session_id: u64) -> Result<bool> {
+        let counter = self
+            .session_counter
+            .lock()
+            .map_err(|e| VoiceInputError::SystemError(format!("Counter lock error: {}", e)))?;
+        Ok(*counter > session_id)
     }
 
     /// 自動停止キャンセルチャネルを取得（タイマー処理用）
@@ -528,6 +539,35 @@ mod tests {
         assert_ne!(first_session, second_session);
         assert!(service.is_active_session(second_session).unwrap());
         assert!(!service.is_active_session(first_session).unwrap());
+    }
+
+    /// 新しい録音開始が発生した事実を保持できる
+    #[tokio::test]
+    async fn newer_session_start_is_detected_after_restart() {
+        let backend = MockAudioBackend::new();
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
+        let config = RecordingConfig {
+            max_duration_secs: 30,
+        };
+        let service = RecordingService::new(recorder, config);
+
+        let first_session = service
+            .start_recording(RecordingOptions { prompt: None })
+            .await
+            .unwrap();
+        assert!(!service.has_started_newer_session(first_session).unwrap());
+
+        service.stop_recording().await.unwrap();
+        assert!(!service.has_started_newer_session(first_session).unwrap());
+
+        let second_session = service
+            .start_recording(RecordingOptions { prompt: None })
+            .await
+            .unwrap();
+
+        assert_ne!(first_session, second_session);
+        assert!(service.has_started_newer_session(first_session).unwrap());
+        assert!(!service.has_started_newer_session(second_session).unwrap());
     }
 
     /// 録音停止失敗時も録音状態と文脈が維持される

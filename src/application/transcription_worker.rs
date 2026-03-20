@@ -13,9 +13,11 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 use crate::application::{
-    TranscriptionEvent, TranscriptionMessage, TranscriptionOptions, TranscriptionService,
+    FinalizedTranscription, LowConfidenceSelection, RecordingService, TranscriptionEvent,
+    TranscriptionMessage, TranscriptionOptions, TranscriptionService,
 };
 use crate::error::Result;
+use crate::infrastructure::audio::AudioBackend;
 use crate::infrastructure::external::{sound::resume_apple_music, text_input};
 use crate::ipc::RecordingResult;
 use crate::utils::config::EnvConfig;
@@ -23,9 +25,11 @@ use crate::utils::profiling;
 use async_trait::async_trait;
 
 /// 転写結果を処理
-pub async fn handle_transcription(
+pub async fn handle_transcription<T: AudioBackend>(
     result: RecordingResult,
     resume_music: bool,
+    session_id: u64,
+    recording_service: Rc<RefCell<RecordingService<T>>>,
     transcription_service: Rc<RefCell<TranscriptionService>>,
 ) -> Result<()> {
     let overall_timer = profiling::Timer::start("transcription.handle");
@@ -46,34 +50,41 @@ pub async fn handle_transcription(
         prompt: None, // メモリモードではプロンプトファイルを使用しない
     };
 
-    let text = if EnvConfig::get().openai_transcribe_streaming {
+    let finalized = if EnvConfig::get().openai_transcribe_streaming {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
         let input_task = tokio::task::spawn_local(async move {
-            process_streaming_events(&mut event_rx, &ProfiledTextApplier).await;
+            process_streaming_events(&mut event_rx, &ProfiledTextApplier).await
         });
 
-        let text = transcription_service
+        let finalized = transcription_service
             .borrow()
             .transcribe_streaming(result.audio_data.into(), options, event_tx)
             .await?;
 
-        match input_task.await {
-            Ok(()) => {}
-            Err(e) => eprintln!("Streaming input task failed: {}", e),
-        }
+        let streamed_finalized = match input_task.await {
+            Ok(value) => value,
+            Err(e) => {
+                eprintln!("Streaming input task failed: {}", e);
+                None
+            }
+        };
 
-        text
+        let finalized_for_selection = streamed_finalized.as_ref().unwrap_or(&finalized);
+        maybe_select_low_confidence(finalized_for_selection, session_id, recording_service).await;
+
+        finalized
     } else {
-        let text = transcription_service
+        let finalized = transcription_service
             .borrow()
             .transcribe(result.audio_data.into(), options)
             .await?;
-        type_text_with_profile(&text).await;
-        text
+        type_text_with_profile(&finalized.text).await;
+        maybe_select_low_confidence(&finalized, session_id, recording_service).await;
+        finalized
     };
 
     if profiling::enabled() {
-        overall_timer.log_with(&format!("text_len={}", text.len()));
+        overall_timer.log_with(&format!("text_len={}", finalized.text.len()));
     } else {
         overall_timer.log();
     }
@@ -198,7 +209,7 @@ impl TextApplier for ProfiledTextApplier {
 async fn process_streaming_events(
     event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<TranscriptionEvent>,
     text_applier: &dyn TextApplier,
-) {
+) -> Option<FinalizedTranscription> {
     let mut rendered_text = String::new();
     while let Some(event) = event_rx.recv().await {
         match event {
@@ -210,29 +221,32 @@ async fn process_streaming_events(
                 }
                 rendered_text.push_str(&delta);
             }
-            TranscriptionEvent::Completed(text) if rendered_text.is_empty() => {
-                text_applier.type_text(&text).await;
-                break;
+            TranscriptionEvent::Completed(finalized) if rendered_text.is_empty() => {
+                text_applier.type_text(&finalized.text).await;
+                return Some(finalized);
             }
-            TranscriptionEvent::Completed(text) => {
+            TranscriptionEvent::Completed(finalized) => {
                 text_applier
-                    .patch_text_continuous(&rendered_text, &text)
+                    .patch_text_continuous(&rendered_text, &finalized.text)
                     .await;
-                break;
+                return Some(finalized);
             }
         }
     }
+
+    None
 }
 
 /// 転写ワーカーを起動
-pub async fn spawn_transcription_worker(
+pub async fn spawn_transcription_worker<T: AudioBackend + 'static>(
     semaphore: Arc<Semaphore>,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<TranscriptionMessage>,
     transcription_service: Rc<RefCell<TranscriptionService>>,
+    recording_service: Rc<RefCell<RecordingService<T>>>,
 ) {
     use tokio::task::spawn_local;
 
-    while let Some((result, resume_music)) = rx.recv().await {
+    while let Some(message) = rx.recv().await {
         let permit = match semaphore.clone().acquire_owned().await {
             Ok(p) => p,
             Err(e) => {
@@ -242,8 +256,16 @@ pub async fn spawn_transcription_worker(
         };
 
         let transcription_service = transcription_service.clone();
+        let recording_service = recording_service.clone();
         spawn_local(async move {
-            if let Err(e) = handle_transcription(result, resume_music, transcription_service).await
+            if let Err(e) = handle_transcription(
+                message.result,
+                message.resume_music,
+                message.session_id,
+                recording_service,
+                transcription_service,
+            )
+            .await
             {
                 eprintln!("Transcription handling failed: {}", e);
             }
@@ -252,10 +274,85 @@ pub async fn spawn_transcription_worker(
     }
 }
 
+async fn select_recent_range_with_profile(trailing_char_count: usize, char_count: usize) {
+    let input_timer = profiling::Timer::start("text_input.select_recent_range");
+    match text_input::select_recent_range(trailing_char_count, char_count).await {
+        Ok(_) => {
+            if profiling::enabled() {
+                input_timer.log_with(&format!(
+                    "ok=true trailing_char_count={} char_count={}",
+                    trailing_char_count, char_count
+                ));
+            } else {
+                input_timer.log();
+            }
+        }
+        Err(e) => {
+            if profiling::enabled() {
+                input_timer.log_with(&format!(
+                    "ok=false trailing_char_count={} char_count={}",
+                    trailing_char_count, char_count
+                ));
+            } else {
+                input_timer.log();
+            }
+            eprintln!("Direct input selection failed: {}", e);
+        }
+    }
+}
+
+async fn maybe_select_low_confidence<T: AudioBackend>(
+    finalized: &FinalizedTranscription,
+    session_id: u64,
+    recording_service: Rc<RefCell<RecordingService<T>>>,
+) {
+    let Some(selection) = finalized.low_confidence_selection.as_ref() else {
+        return;
+    };
+
+    let should_skip = match recording_service
+        .borrow()
+        .has_started_newer_session(session_id)
+    {
+        Ok(value) => value,
+        Err(e) => {
+            eprintln!("Failed to check newer session before selection: {}", e);
+            true
+        }
+    };
+
+    if should_skip {
+        return;
+    }
+
+    let total_char_count = finalized.text.chars().count();
+    if let Some((trailing_char_count, char_count)) =
+        selection_to_recent_range(selection, total_char_count)
+    {
+        select_recent_range_with_profile(trailing_char_count, char_count).await;
+    }
+}
+
+fn selection_to_recent_range(
+    selection: &LowConfidenceSelection,
+    total_char_count: usize,
+) -> Option<(usize, usize)> {
+    let selection_end = selection
+        .start_char_index
+        .checked_add(selection.char_count)?;
+    if selection.char_count == 0 || selection_end > total_char_count {
+        return None;
+    }
+
+    Some((total_char_count - selection_end, selection.char_count))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{TextApplier, diff_text_for_patch, process_streaming_events};
-    use crate::application::TranscriptionEvent;
+    use super::{
+        TextApplier, diff_text_for_patch, process_streaming_events, selection_to_recent_range,
+    };
+    use crate::application::{FinalizedTranscription, LowConfidenceSelection, TranscriptionEvent};
     use async_trait::async_trait;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -321,11 +418,14 @@ mod tests {
             .send(TranscriptionEvent::Delta("テストです".to_string()))
             .unwrap();
         event_tx
-            .send(TranscriptionEvent::Completed("これはtestです".to_string()))
+            .send(TranscriptionEvent::Completed(FinalizedTranscription {
+                text: "これはtestです".to_string(),
+                low_confidence_selection: None,
+            }))
             .unwrap();
         drop(event_tx);
 
-        process_streaming_events(&mut event_rx, &text_applier).await;
+        let finalized = process_streaming_events(&mut event_rx, &text_applier).await;
 
         assert_eq!(
             *calls.borrow(),
@@ -336,5 +436,23 @@ mod tests {
             ]
         );
         assert!(completed.get());
+        assert_eq!(
+            finalized,
+            Some(FinalizedTranscription {
+                text: "これはtestです".to_string(),
+                low_confidence_selection: None,
+            })
+        );
+    }
+
+    /// 選択範囲は末尾基準の相対移動量へ変換できる
+    #[test]
+    fn selection_plan_converts_to_recent_range() {
+        let selection = LowConfidenceSelection {
+            start_char_index: 3,
+            char_count: 4,
+        };
+
+        assert_eq!(selection_to_recent_range(&selection, 9), Some((2, 4)));
     }
 }

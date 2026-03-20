@@ -25,10 +25,12 @@ use crate::ipc::{IpcCmd, IpcResp, RecordingResult};
 use crate::utils::profiling;
 
 /// 転写メッセージ
-pub type TranscriptionMessage = (
-    RecordingResult,
-    bool, // resume_music
-);
+#[derive(Clone, Debug)]
+pub struct TranscriptionMessage {
+    pub result: RecordingResult,
+    pub resume_music: bool,
+    pub session_id: u64,
+}
 
 /// コマンドハンドラー
 pub struct CommandHandler<T: AudioBackend> {
@@ -155,7 +157,11 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
         // 転写キューに送信
         self.transcription_tx
-            .send((outcome.result, outcome.context.music_was_playing))
+            .send(TranscriptionMessage {
+                result: outcome.result,
+                resume_music: outcome.context.music_was_playing,
+                session_id: outcome.context.session_id,
+            })
             .map_err(|e| {
                 VoiceInputError::SystemError(format!(
                     "Failed to send to transcription queue: {}",
@@ -268,10 +274,11 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                             play_stop_sound();
 
                             if let Ok(outcome) = recording.borrow().stop_recording().await {
-                                let _ = tx.send((
-                                    outcome.result,
-                                    outcome.context.music_was_playing,
-                                ));
+                                let _ = tx.send(TranscriptionMessage {
+                                    result: outcome.result,
+                                    resume_music: outcome.context.music_was_playing,
+                                    session_id: outcome.context.session_id,
+                                });
                             }
                         }
                     }
@@ -561,6 +568,33 @@ mod tests {
             media_control,
             rx,
         )
+    }
+
+    /// 停止時に転写キューへsession_id付きで送信される
+    #[tokio::test(flavor = "current_thread")]
+    async fn stop_enqueues_transcription_message_with_session_id() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+                let media_control = MediaControlService::with_controller(Box::new(
+                    DelayedMediaController::new(false, Duration::from_millis(0)),
+                ));
+                let (handler, _recording, _media_control, mut rx) =
+                    build_handler(backend, media_control);
+
+                handler
+                    .handle(IpcCmd::Start { prompt: None })
+                    .await
+                    .unwrap();
+                handler.handle(IpcCmd::Stop).await.unwrap();
+
+                let message = rx.recv().await.expect("transcription should be queued");
+                assert_eq!(message.session_id, 1);
+                assert!(!message.resume_music);
+            })
+            .await;
     }
 
     /// 遅いApple Music確認があっても録音開始レスポンスは待たない

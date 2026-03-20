@@ -59,6 +59,8 @@ pub struct EnvConfig {
     pub openai_transcribe_streaming: bool,
     /// 転写ログ保存先パス
     pub openai_transcription_log_path: Option<String>,
+    /// 低信頼語の自動選択を有効にする
+    pub low_confidence_selection_enabled: bool,
 }
 
 impl EnvConfig {
@@ -73,6 +75,9 @@ impl EnvConfig {
                 .ok()
                 .is_some_and(|value| value == "true"),
             openai_transcription_log_path: non_empty_env("OPENAI_TRANSCRIPTION_LOG_PATH"),
+            low_confidence_selection_enabled: std::env::var("VOICE_INPUT_LOW_CONFIDENCE_SELECTION")
+                .ok()
+                .is_some_and(|value| value == "true"),
         }
     }
 
@@ -169,6 +174,7 @@ mod tests {
             openai_transcribe_model: OpenAiTranscriptionModel::new("gpt-4o-mini-transcribe"),
             openai_transcribe_streaming: true,
             openai_transcription_log_path: None,
+            low_confidence_selection_enabled: false,
         };
 
         assert!(config.openai_transcribe_streaming);
@@ -184,6 +190,7 @@ mod tests {
             openai_transcribe_model: OpenAiTranscriptionModel::new("gpt-4o-mini-transcribe"),
             openai_transcribe_streaming: true,
             openai_transcription_log_path: None,
+            low_confidence_selection_enabled: false,
         };
 
         assert_eq!(config.recommended_transcription_parallelism(), 1);
@@ -199,6 +206,7 @@ mod tests {
             openai_transcribe_model: OpenAiTranscriptionModel::new("whisper-1"),
             openai_transcribe_streaming: false,
             openai_transcription_log_path: None,
+            low_confidence_selection_enabled: false,
         };
 
         assert_eq!(config.recommended_transcription_parallelism(), 2);
@@ -214,6 +222,7 @@ mod tests {
             openai_transcribe_model: OpenAiTranscriptionModel::new("whisper-1"),
             openai_transcribe_streaming: false,
             openai_transcription_log_path: None,
+            low_confidence_selection_enabled: false,
         };
 
         assert_eq!(config.openai_transcription_log_path, None);
@@ -229,6 +238,7 @@ mod tests {
             openai_transcribe_model: OpenAiTranscriptionModel::new("whisper-1"),
             openai_transcribe_streaming: false,
             openai_transcription_log_path: Some("/tmp/transcription-log.ndjson".to_string()),
+            low_confidence_selection_enabled: false,
         };
 
         assert_eq!(
@@ -253,6 +263,39 @@ mod tests {
         // SAFETY: テストロックで環境変数アクセスを直列化している。
         unsafe {
             std::env::remove_var("OPENAI_TRANSCRIPTION_LOG_PATH");
+        }
+    }
+
+    /// 低信頼語の自動選択は既定で無効
+    #[test]
+    fn low_confidence_selection_is_disabled_by_default() {
+        let config = EnvConfig {
+            openai_api_key: None,
+            xdg_data_home: None,
+            env_path: None,
+            openai_transcribe_model: OpenAiTranscriptionModel::new("whisper-1"),
+            openai_transcribe_streaming: false,
+            openai_transcription_log_path: None,
+            low_confidence_selection_enabled: false,
+        };
+
+        assert!(!config.low_confidence_selection_enabled);
+    }
+
+    /// 低信頼語の自動選択は環境変数で有効化できる
+    #[test]
+    fn low_confidence_selection_flag_is_loaded_from_environment() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_LOW_CONFIDENCE_SELECTION", "true");
+        }
+
+        let config = EnvConfig::from_env();
+
+        assert!(config.low_confidence_selection_enabled);
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_LOW_CONFIDENCE_SELECTION");
         }
     }
 }

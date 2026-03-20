@@ -50,6 +50,10 @@ impl Default for AppConfig {
 pub struct ServiceContainer<T: AudioBackend + 'static> {
     /// コマンドハンドラー
     pub command_handler: Rc<RefCell<CommandHandler<T>>>,
+    /// 録音サービス
+    pub recording_service: Rc<RefCell<RecordingService<T>>>,
+    /// 転写サービス
+    pub transcription_service: Rc<RefCell<TranscriptionService>>,
     /// 転写メッセージ送信チャンネル
     pub transcription_tx: mpsc::UnboundedSender<TranscriptionMessage>,
     /// 転写メッセージ受信チャンネル
@@ -121,14 +125,16 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
 
         // コマンドハンドラーを構築
         let command_handler = Rc::new(RefCell::new(CommandHandler::new(
-            recording,
-            transcription,
+            recording.clone(),
+            transcription.clone(),
             media_control,
             tx.clone(),
         )));
 
         Ok(ServiceContainer {
             command_handler,
+            recording_service: recording,
+            transcription_service: transcription,
             transcription_tx: tx,
             transcription_rx: Some(rx),
         })
@@ -273,14 +279,16 @@ pub mod test_helpers {
 
             // CommandHandlerを作成
             let command_handler = Rc::new(RefCell::new(CommandHandler::new(
-                recording_service,
-                transcription_service,
+                recording_service.clone(),
+                transcription_service.clone(),
                 media_control_service,
                 transcription_tx.clone(),
             )));
 
             Ok(ServiceContainer {
                 command_handler,
+                recording_service,
+                transcription_service,
                 transcription_tx,
                 transcription_rx: Some(transcription_rx),
             })

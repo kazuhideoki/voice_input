@@ -62,6 +62,7 @@ async fn async_main() -> Result<()> {
     // サービスコンテナを初期化
     let mut container = ServiceContainer::<CpalAudioBackend>::new()?;
     let command_handler = container.command_handler.clone();
+    let recording_service = container.recording_service.clone();
     let transcription_rx = container
         .take_transcription_rx()
         .expect("Transcription receiver should be available");
@@ -69,15 +70,7 @@ async fn async_main() -> Result<()> {
     // 転写ワーカーの起動
     let max_concurrent_transcriptions = EnvConfig::get().recommended_transcription_parallelism();
     let semaphore = std::sync::Arc::new(Semaphore::new(max_concurrent_transcriptions));
-    let transcription_service = {
-        // TranscriptionServiceを取得（CommandHandlerから）
-        // 注: 実際のアプリケーションではServiceContainerから直接取得する方が良い
-        use voice_input::application::TranscriptionService;
-        use voice_input::infrastructure::external::openai_adapter::OpenAiTranscriptionAdapter;
-        std::rc::Rc::new(std::cell::RefCell::new(
-            TranscriptionService::with_default_repo(Box::new(OpenAiTranscriptionAdapter::new()?)),
-        ))
-    };
+    let transcription_service = container.transcription_service.clone();
 
     text_input::init_worker().map_err(|e| VoiceInputError::SystemError(e.to_string()))?;
 
@@ -85,6 +78,7 @@ async fn async_main() -> Result<()> {
         semaphore.clone(),
         transcription_rx,
         transcription_service,
+        recording_service,
     ));
 
     // クライアント接続ループ

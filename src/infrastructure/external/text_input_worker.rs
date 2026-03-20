@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use enigo::{
-    Direction::{Click, Release},
+    Direction::{Click, Press, Release},
     Enigo, Key, Keyboard, Settings,
 };
 use std::fmt;
@@ -67,6 +67,15 @@ pub enum TextInputRequest {
         /// 完了通知用のチャネル
         completion: oneshot::Sender<Result<(), TextInputWorkerError>>,
     },
+    /// 直近に入力したテキスト範囲を選択する
+    SelectRecentRange {
+        /// カーソル末尾から左へ戻る文字数
+        trailing_char_count: usize,
+        /// 選択する文字数
+        char_count: usize,
+        /// 完了通知用のチャネル
+        completion: oneshot::Sender<Result<(), TextInputWorkerError>>,
+    },
 }
 
 impl TextInputRequest {
@@ -74,7 +83,8 @@ impl TextInputRequest {
     fn completion(self) -> oneshot::Sender<Result<(), TextInputWorkerError>> {
         match self {
             TextInputRequest::TypeText { completion, .. }
-            | TextInputRequest::ReplaceSuffix { completion, .. } => completion,
+            | TextInputRequest::ReplaceSuffix { completion, .. }
+            | TextInputRequest::SelectRecentRange { completion, .. } => completion,
         }
     }
 }
@@ -109,6 +119,13 @@ pub trait TextInputEngine: Send + Sync {
         &self,
         delete_count: usize,
         text: &str,
+    ) -> Result<(), TextInputWorkerError>;
+
+    /// 直近に入力したテキスト範囲を選択する
+    async fn select_recent_range(
+        &self,
+        trailing_char_count: usize,
+        char_count: usize,
     ) -> Result<(), TextInputWorkerError>;
 }
 
@@ -191,6 +208,23 @@ impl TextInputWorkerHandle {
             .map_err(|e| TextInputWorkerError::ChannelClosed(format!("send failed: {}", e)))?;
         Ok(rx)
     }
+
+    /// 直近に入力したテキスト範囲の選択をリクエストする
+    pub fn send_select_recent_range(
+        &self,
+        trailing_char_count: usize,
+        char_count: usize,
+    ) -> Result<oneshot::Receiver<Result<(), TextInputWorkerError>>, TextInputWorkerError> {
+        let (tx, rx) = oneshot::channel();
+        self.sender
+            .send(TextInputRequest::SelectRecentRange {
+                trailing_char_count,
+                char_count,
+                completion: tx,
+            })
+            .map_err(|e| TextInputWorkerError::ChannelClosed(format!("send failed: {}", e)))?;
+        Ok(rx)
+    }
 }
 
 #[async_trait]
@@ -226,6 +260,17 @@ impl TextInputEngine for TextInputWorkerHandle {
         text: &str,
     ) -> Result<(), TextInputWorkerError> {
         let receiver = self.send_replace_suffix_continuous(delete_count, text.to_string())?;
+        receiver.await.map_err(|_| {
+            TextInputWorkerError::ChannelClosed("completion channel dropped".to_string())
+        })?
+    }
+
+    async fn select_recent_range(
+        &self,
+        trailing_char_count: usize,
+        char_count: usize,
+    ) -> Result<(), TextInputWorkerError> {
+        let receiver = self.send_select_recent_range(trailing_char_count, char_count)?;
         receiver.await.map_err(|_| {
             TextInputWorkerError::ChannelClosed("completion channel dropped".to_string())
         })?
@@ -280,6 +325,15 @@ fn run_worker(mut rx: mpsc::UnboundedReceiver<TextInputRequest>) {
                 completion,
             } => {
                 let result = replace_suffix_with_enigo(&mut enigo, delete_count, &text, mode);
+                let _ = completion.send(result);
+            }
+            TextInputRequest::SelectRecentRange {
+                trailing_char_count,
+                char_count,
+                completion,
+            } => {
+                let result =
+                    select_recent_range_with_enigo(&mut enigo, trailing_char_count, char_count);
                 let _ = completion.send(result);
             }
         }
@@ -340,6 +394,38 @@ fn input_text(
     Ok(())
 }
 
+fn select_recent_range_with_enigo(
+    enigo: &mut Enigo,
+    trailing_char_count: usize,
+    char_count: usize,
+) -> Result<(), TextInputWorkerError> {
+    if char_count == 0 {
+        return Ok(());
+    }
+
+    prepare_input(enigo)?;
+
+    for _ in 0..trailing_char_count {
+        enigo
+            .key(Key::LeftArrow, Click)
+            .map_err(|e| TextInputWorkerError::InputFailed(e.to_string()))?;
+    }
+
+    enigo
+        .key(Key::Shift, Press)
+        .map_err(|e| TextInputWorkerError::InputFailed(e.to_string()))?;
+    for _ in 0..char_count {
+        enigo
+            .key(Key::LeftArrow, Click)
+            .map_err(|e| TextInputWorkerError::InputFailed(e.to_string()))?;
+    }
+    enigo
+        .key(Key::Shift, Release)
+        .map_err(|e| TextInputWorkerError::InputFailed(e.to_string()))?;
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,7 +445,9 @@ mod tests {
                 assert_eq!(text, "hello");
                 assert_eq!(mode, TextInputExecutionMode::Standalone);
             }
-            TextInputRequest::ReplaceSuffix { .. } => panic!("unexpected replace request"),
+            TextInputRequest::ReplaceSuffix { .. } | TextInputRequest::SelectRecentRange { .. } => {
+                panic!("unexpected request")
+            }
         }
     }
 
@@ -378,7 +466,9 @@ mod tests {
                 assert_eq!(text, "hello");
                 assert_eq!(mode, TextInputExecutionMode::Continuous);
             }
-            TextInputRequest::ReplaceSuffix { .. } => panic!("unexpected replace request"),
+            TextInputRequest::ReplaceSuffix { .. } | TextInputRequest::SelectRecentRange { .. } => {
+                panic!("unexpected request")
+            }
         }
     }
 
@@ -418,7 +508,9 @@ mod tests {
                 assert_eq!(text, "world");
                 assert_eq!(mode, TextInputExecutionMode::Standalone);
             }
-            TextInputRequest::TypeText { .. } => panic!("unexpected type request"),
+            TextInputRequest::TypeText { .. } | TextInputRequest::SelectRecentRange { .. } => {
+                panic!("unexpected request")
+            }
         }
     }
 
@@ -443,7 +535,34 @@ mod tests {
                 assert_eq!(text, "world");
                 assert_eq!(mode, TextInputExecutionMode::Continuous);
             }
-            TextInputRequest::TypeText { .. } => panic!("unexpected type request"),
+            TextInputRequest::TypeText { .. } | TextInputRequest::SelectRecentRange { .. } => {
+                panic!("unexpected request")
+            }
+        }
+    }
+
+    /// 範囲選択リクエストは移動量と選択長を保持できる
+    #[test]
+    fn select_recent_range_request_holds_relative_selection_parameters() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<TextInputRequest>();
+        let handle = TextInputWorkerHandle::new(tx);
+
+        let receiver = handle.send_select_recent_range(2, 4);
+
+        assert!(receiver.is_ok());
+        let request = rx.try_recv().expect("request should be sent");
+        match request {
+            TextInputRequest::SelectRecentRange {
+                trailing_char_count,
+                char_count,
+                ..
+            } => {
+                assert_eq!(trailing_char_count, 2);
+                assert_eq!(char_count, 4);
+            }
+            TextInputRequest::TypeText { .. } | TextInputRequest::ReplaceSuffix { .. } => {
+                panic!("unexpected request")
+            }
         }
     }
 }

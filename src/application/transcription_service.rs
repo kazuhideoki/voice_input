@@ -9,7 +9,9 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 
-use crate::domain::dict::{DictRepository, apply_replacements};
+use crate::domain::dict::{
+    DictRepository, ReplacementSpanMapping, apply_replacements_with_mappings,
+};
 use crate::error::{Result, VoiceInputError};
 use crate::infrastructure::audio::cpal_backend::AudioData;
 use crate::infrastructure::dict::JsonFileDictRepo;
@@ -60,6 +62,24 @@ impl TranscriptionOutput {
     }
 }
 
+/// 低信頼語を選択する範囲
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LowConfidenceSelection {
+    /// 辞書適用後テキスト上の開始文字位置
+    pub start_char_index: usize,
+    /// 選択する文字数
+    pub char_count: usize,
+}
+
+/// 最終入力する転写結果
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FinalizedTranscription {
+    /// 実際に入力する文字列
+    pub text: String,
+    /// 低信頼語の選択計画
+    pub low_confidence_selection: Option<LowConfidenceSelection>,
+}
+
 /// 調査用の転写ログ
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptionLogEntry {
@@ -102,7 +122,7 @@ pub enum TranscriptionEvent {
     /// 増分テキスト
     Delta(String),
     /// 最終確定テキスト
-    Completed(String),
+    Completed(FinalizedTranscription),
 }
 
 /// 転写オプション
@@ -122,6 +142,8 @@ impl Default for TranscriptionOptions {
         }
     }
 }
+
+const LOW_CONFIDENCE_THRESHOLD: f64 = 0.3;
 
 /// 転写サービス
 pub struct TranscriptionService {
@@ -196,7 +218,7 @@ impl TranscriptionService {
         &self,
         audio: AudioData,
         options: TranscriptionOptions,
-    ) -> Result<String> {
+    ) -> Result<FinalizedTranscription> {
         let overall_timer = profiling::Timer::start("transcription.total");
 
         // セマフォで同時実行数を制限
@@ -216,20 +238,21 @@ impl TranscriptionService {
             dict_timer.log_with(&format!(
                 "text_len={} processed_len={}",
                 output.text.len(),
-                processed.len()
+                processed.text.len()
             ));
         } else {
             dict_timer.log();
         }
 
-        self.enqueue_transcription_log(&output, &processed);
+        let finalized = self.build_finalized_transcription(&output, &processed);
+        self.enqueue_transcription_log(&output, &finalized.text);
 
         if profiling::enabled() {
-            overall_timer.log_with(&format!("processed_len={}", processed.len()));
+            overall_timer.log_with(&format!("processed_len={}", finalized.text.len()));
         } else {
             overall_timer.log();
         }
-        Ok(processed)
+        Ok(finalized)
     }
 
     /// 音声データをストリーミングで文字起こし
@@ -238,7 +261,7 @@ impl TranscriptionService {
         audio: AudioData,
         options: TranscriptionOptions,
         event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
-    ) -> Result<String> {
+    ) -> Result<FinalizedTranscription> {
         let overall_timer = profiling::Timer::start("transcription.streaming_total");
 
         let _permit = self.semaphore.acquire().await.map_err(|e| {
@@ -258,31 +281,53 @@ impl TranscriptionService {
             dict_timer.log_with(&format!(
                 "text_len={} processed_len={}",
                 output.text.len(),
-                processed.len()
+                processed.text.len()
             ));
         } else {
             dict_timer.log();
         }
 
-        self.enqueue_transcription_log(&output, &processed);
-        let _ = event_tx.send(TranscriptionEvent::Completed(processed.clone()));
+        let finalized = self.build_finalized_transcription(&output, &processed);
+        self.enqueue_transcription_log(&output, &finalized.text);
+        let _ = event_tx.send(TranscriptionEvent::Completed(finalized.clone()));
 
         if profiling::enabled() {
-            overall_timer.log_with(&format!("processed_len={}", processed.len()));
+            overall_timer.log_with(&format!("processed_len={}", finalized.text.len()));
         } else {
             overall_timer.log();
         }
 
-        Ok(processed)
+        Ok(finalized)
+    }
+
+    fn build_finalized_transcription(
+        &self,
+        output: &TranscriptionOutput,
+        processed: &crate::domain::dict::ReplacementOutput,
+    ) -> FinalizedTranscription {
+        let low_confidence_selection = if EnvConfig::from_env().low_confidence_selection_enabled {
+            plan_low_confidence_selection(
+                output,
+                &processed.span_mappings,
+                LOW_CONFIDENCE_THRESHOLD,
+            )
+        } else {
+            None
+        };
+
+        FinalizedTranscription {
+            text: processed.text.clone(),
+            low_confidence_selection,
+        }
     }
 
     /// 辞書変換を適用
-    fn apply_dictionary(&self, text: &str) -> Result<String> {
+    fn apply_dictionary(&self, text: &str) -> Result<crate::domain::dict::ReplacementOutput> {
         let mut entries = self.dict_repo.load().map_err(|e| {
             VoiceInputError::SystemError(format!("Failed to load dictionary: {}", e))
         })?;
 
-        let result = apply_replacements(text, &mut entries);
+        let result = apply_replacements_with_mappings(text, &mut entries);
 
         // 変更があった場合は保存
         if entries.iter().any(|e| e.hit > 0) {
@@ -316,6 +361,110 @@ impl TranscriptionService {
     pub fn available_permits(&self) -> usize {
         self.semaphore.available_permits()
     }
+}
+
+fn plan_low_confidence_selection(
+    output: &TranscriptionOutput,
+    span_mappings: &[ReplacementSpanMapping],
+    threshold: f64,
+) -> Option<LowConfidenceSelection> {
+    #[derive(Clone, Copy)]
+    struct CandidateGroup {
+        raw_start: usize,
+        raw_end: usize,
+        min_confidence: f64,
+    }
+
+    let raw_chars: Vec<char> = output.text.chars().collect();
+    let mut raw_index = 0;
+    let mut current_group: Option<CandidateGroup> = None;
+    let mut groups = Vec::new();
+
+    for token in &output.tokens {
+        let token_len = token.token.chars().count();
+        if token_len == 0 {
+            continue;
+        }
+
+        let token_chars: Vec<char> = token.token.chars().collect();
+        let raw_slice = raw_chars.get(raw_index..raw_index + token_len)?;
+        if raw_slice != token_chars.as_slice() {
+            return None;
+        }
+
+        let token_start = raw_index;
+        let token_end = raw_index + token_len;
+        raw_index = token_end;
+
+        if token.confidence < threshold {
+            current_group = Some(match current_group {
+                Some(group) => CandidateGroup {
+                    raw_start: group.raw_start,
+                    raw_end: token_end,
+                    min_confidence: group.min_confidence.min(token.confidence),
+                },
+                None => CandidateGroup {
+                    raw_start: token_start,
+                    raw_end: token_end,
+                    min_confidence: token.confidence,
+                },
+            });
+        } else if let Some(group) = current_group.take() {
+            groups.push(group);
+        }
+    }
+
+    if let Some(group) = current_group {
+        groups.push(group);
+    }
+
+    if raw_index != raw_chars.len() {
+        return None;
+    }
+
+    let selected_group = groups.into_iter().min_by(|lhs, rhs| {
+        lhs.min_confidence
+            .partial_cmp(&rhs.min_confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(lhs.raw_start.cmp(&rhs.raw_start))
+    })?;
+
+    map_raw_range_to_processed(
+        selected_group.raw_start,
+        selected_group.raw_end,
+        span_mappings,
+    )
+    .map(|(start_char_index, char_count)| LowConfidenceSelection {
+        start_char_index,
+        char_count,
+    })
+}
+
+fn map_raw_range_to_processed(
+    raw_start: usize,
+    raw_end: usize,
+    span_mappings: &[ReplacementSpanMapping],
+) -> Option<(usize, usize)> {
+    let mut processed_start = None;
+    let mut processed_end = None;
+
+    for mapping in span_mappings {
+        if mapping.raw_char_range.end <= raw_start {
+            continue;
+        }
+        if mapping.raw_char_range.start >= raw_end {
+            break;
+        }
+
+        if processed_start.is_none() {
+            processed_start = Some(mapping.processed_char_range.start);
+        }
+        processed_end = Some(mapping.processed_char_range.end);
+    }
+
+    let start = processed_start?;
+    let end = processed_end?;
+    (end > start).then_some((start, end - start))
 }
 
 #[cfg(test)]
@@ -420,7 +569,7 @@ mod tests {
         let options = TranscriptionOptions::default();
 
         let result = service.transcribe(audio, options).await.unwrap();
-        assert_eq!(result, "これはtestです");
+        assert_eq!(result.text, "これはtestです");
     }
 
     /// 転写処理でプロファイルログが出力される
@@ -507,10 +656,13 @@ mod tests {
             .unwrap();
         let event = event_rx.recv().await.expect("event should be emitted");
 
-        assert_eq!(result, "これはtestです");
+        assert_eq!(result.text, "これはtestです");
         assert_eq!(
             event,
-            TranscriptionEvent::Completed("これはtestです".to_string())
+            TranscriptionEvent::Completed(FinalizedTranscription {
+                text: "これはtestです".to_string(),
+                low_confidence_selection: None,
+            })
         );
     }
 
@@ -568,13 +720,16 @@ mod tests {
             events.push(event);
         }
 
-        assert_eq!(result, "これはtestです");
+        assert_eq!(result.text, "これはtestです");
         assert_eq!(
             events,
             vec![
                 TranscriptionEvent::Delta("これは".to_string()),
                 TranscriptionEvent::Delta("テストです".to_string()),
-                TranscriptionEvent::Completed("これはtestです".to_string()),
+                TranscriptionEvent::Completed(FinalizedTranscription {
+                    text: "これはtestです".to_string(),
+                    low_confidence_selection: None,
+                }),
             ]
         );
     }
@@ -629,7 +784,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, "これはtestです");
+        assert_eq!(result.text, "これはtestです");
 
         let entries = recorded_entries.lock().unwrap().clone();
         assert_eq!(entries.len(), 1);
@@ -670,6 +825,75 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result, "これはtestです");
+        assert_eq!(result.text, "これはtestです");
+    }
+
+    /// 辞書変換後テキスト上で低信頼語の選択範囲を組み立てられる
+    #[test]
+    fn low_confidence_selection_uses_processed_text_span() {
+        let output = TranscriptionOutput {
+            text: "これはテストです".to_string(),
+            tokens: vec![
+                TranscriptionToken::new("これは", -0.1),
+                TranscriptionToken::new("テスト", -3.0),
+                TranscriptionToken::new("です", -0.1),
+            ],
+        };
+
+        let mapping = crate::domain::dict::apply_replacements_with_mappings(
+            "これはテストです",
+            &mut [crate::domain::dict::WordEntry {
+                surface: "テスト".to_string(),
+                replacement: "test".to_string(),
+                hit: 0,
+                status: crate::domain::dict::EntryStatus::Active,
+            }],
+        );
+
+        let selection = plan_low_confidence_selection(
+            &output,
+            &mapping.span_mappings,
+            LOW_CONFIDENCE_THRESHOLD,
+        );
+
+        assert_eq!(
+            selection,
+            Some(LowConfidenceSelection {
+                start_char_index: 3,
+                char_count: 4,
+            })
+        );
+    }
+
+    /// 分離した低信頼語が複数あるときは最低confidenceを含む塊を優先する
+    #[test]
+    fn lowest_confidence_group_is_selected_when_multiple_groups_exist() {
+        let output = TranscriptionOutput {
+            text: "abcXYZdefUVWghi".to_string(),
+            tokens: vec![
+                TranscriptionToken::new("abc", -0.1),
+                TranscriptionToken::new("XYZ", -1.3),
+                TranscriptionToken::new("def", -0.1),
+                TranscriptionToken::new("UVW", -3.0),
+                TranscriptionToken::new("ghi", -0.1),
+            ],
+        };
+
+        let mapping =
+            crate::domain::dict::apply_replacements_with_mappings("abcXYZdefUVWghi", &mut []);
+
+        let selection = plan_low_confidence_selection(
+            &output,
+            &mapping.span_mappings,
+            LOW_CONFIDENCE_THRESHOLD,
+        );
+
+        assert_eq!(
+            selection,
+            Some(LowConfidenceSelection {
+                start_char_index: 9,
+                char_count: 3,
+            })
+        );
     }
 }

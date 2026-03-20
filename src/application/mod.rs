@@ -13,7 +13,8 @@ pub use recording_service::{
 };
 pub use service_container::{AppConfig, ServiceContainer};
 pub use transcription_service::{
-    TranscriptionClient, TranscriptionEvent, TranscriptionLogEntry, TranscriptionLogWriter,
-    TranscriptionOptions, TranscriptionOutput, TranscriptionService, TranscriptionToken,
+    FinalizedTranscription, LowConfidenceSelection, TranscriptionClient, TranscriptionEvent,
+    TranscriptionLogEntry, TranscriptionLogWriter, TranscriptionOptions, TranscriptionOutput,
+    TranscriptionService, TranscriptionToken,
 };
 pub use transcription_worker::{handle_transcription, spawn_transcription_worker};

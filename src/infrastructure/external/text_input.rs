@@ -118,3 +118,31 @@ pub async fn replace_suffix_continuous(
 
     result.map_err(|e| Box::new(e) as Box<dyn Error>)
 }
+
+/// 直近に入力したテキスト範囲を相対位置で選択する
+pub async fn select_recent_range(
+    trailing_char_count: usize,
+    char_count: usize,
+) -> Result<(), Box<dyn Error>> {
+    let handle = TEXT_INPUT_WORKER.get().ok_or_else(|| {
+        TextInputWorkerError::ChannelClosed("text input worker not initialized".to_string())
+    })?;
+
+    let timer = profiling::Timer::start("text_input.worker_select_recent_range");
+    let result = handle
+        .select_recent_range(trailing_char_count, char_count)
+        .await;
+
+    if profiling::enabled() {
+        timer.log_with(&format!(
+            "ok={} trailing_char_count={} char_count={}",
+            result.is_ok(),
+            trailing_char_count,
+            char_count
+        ));
+    } else {
+        timer.log();
+    }
+
+    result.map_err(|e| Box::new(e) as Box<dyn Error>)
+}
