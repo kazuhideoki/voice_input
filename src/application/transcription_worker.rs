@@ -227,21 +227,30 @@ async fn process_streaming_events(
     while let Some(event) = event_rx.recv().await {
         match event {
             TranscriptionEvent::Delta(delta) => {
-                if rendered_text.is_empty() {
-                    input_succeeded &= text_applier.type_text(&delta).await;
-                } else {
-                    input_succeeded &= text_applier.type_text_continuous(&delta).await;
+                if input_succeeded {
+                    if rendered_text.is_empty() {
+                        input_succeeded = text_applier.type_text(&delta).await;
+                    } else {
+                        input_succeeded = text_applier.type_text_continuous(&delta).await;
+                    }
                 }
                 rendered_text.push_str(&delta);
             }
             TranscriptionEvent::Completed(finalized) if rendered_text.is_empty() => {
-                input_succeeded &= text_applier.type_text(&finalized.text).await;
+                if input_succeeded {
+                    input_succeeded = text_applier.type_text(&finalized.text).await;
+                }
                 return Some((finalized, input_succeeded));
             }
             TranscriptionEvent::Completed(finalized) => {
-                input_succeeded &= text_applier
-                    .patch_text_continuous(&rendered_text, &finalized.text)
-                    .await;
+                // 一度でも direct input に失敗したら、入力先との同期は崩れたとみなす。
+                // その状態で後続 delta や最終 patch を送り続けると、既存テキスト破壊の
+                // 可能性があるため、以後はイベントを受け流すだけにして副作用を止める。
+                if input_succeeded {
+                    input_succeeded = text_applier
+                        .patch_text_continuous(&rendered_text, &finalized.text)
+                        .await;
+                }
                 return Some((finalized, input_succeeded));
             }
         }
@@ -518,6 +527,77 @@ mod tests {
                     low_confidence_selection: Some(LowConfidenceSelection {
                         start_char_index: 0,
                         char_count: 2,
+                    }),
+                },
+                false,
+            ))
+        );
+    }
+
+    /// ストリーミング入力が途中で失敗したら以後の入力副作用を止める
+    #[tokio::test]
+    async fn streaming_events_stop_side_effects_after_first_input_failure() {
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        struct DesyncingTextApplier {
+            calls: Rc<RefCell<Vec<String>>>,
+        }
+
+        #[async_trait(?Send)]
+        impl TextApplier for DesyncingTextApplier {
+            async fn type_text(&self, text: &str) -> bool {
+                self.calls.borrow_mut().push(format!("type:{text}"));
+                false
+            }
+
+            async fn type_text_continuous(&self, text: &str) -> bool {
+                self.calls
+                    .borrow_mut()
+                    .push(format!("type_continuous:{text}"));
+                true
+            }
+
+            async fn patch_text_continuous(&self, current: &str, next: &str) -> bool {
+                self.calls
+                    .borrow_mut()
+                    .push(format!("patch_continuous:{current}->{next}"));
+                true
+            }
+        }
+
+        let calls = Rc::new(RefCell::new(Vec::<String>::new()));
+        let text_applier = DesyncingTextApplier {
+            calls: calls.clone(),
+        };
+
+        event_tx
+            .send(TranscriptionEvent::Delta("これは".to_string()))
+            .unwrap();
+        event_tx
+            .send(TranscriptionEvent::Delta("テストです".to_string()))
+            .unwrap();
+        event_tx
+            .send(TranscriptionEvent::Completed(FinalizedTranscription {
+                text: "これはtestです".to_string(),
+                low_confidence_selection: Some(LowConfidenceSelection {
+                    start_char_index: 3,
+                    char_count: 4,
+                }),
+            }))
+            .unwrap();
+        drop(event_tx);
+
+        let finalized = process_streaming_events(&mut event_rx, &text_applier).await;
+
+        assert_eq!(*calls.borrow(), vec!["type:これは".to_string()]);
+        assert_eq!(
+            finalized,
+            Some((
+                FinalizedTranscription {
+                    text: "これはtestです".to_string(),
+                    low_confidence_selection: Some(LowConfidenceSelection {
+                        start_char_index: 3,
+                        char_count: 4,
                     }),
                 },
                 false,
