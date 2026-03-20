@@ -456,6 +456,14 @@ fn map_raw_range_to_processed(
             break;
         }
 
+        let overlap_start = mapping.raw_char_range.start.max(raw_start);
+        let overlap_end = mapping.raw_char_range.end.min(raw_end);
+        if overlap_start != mapping.raw_char_range.start
+            || overlap_end != mapping.raw_char_range.end
+        {
+            return None;
+        }
+
         if processed_start.is_none() {
             processed_start = Some(mapping.processed_char_range.start);
         }
@@ -895,5 +903,35 @@ mod tests {
                 char_count: 3,
             })
         );
+    }
+
+    /// 辞書置換の一部分だけが低信頼な場合は過剰選択を避けるため選択しない
+    #[test]
+    fn partial_overlap_with_dictionary_replacement_is_not_selected() {
+        let output = TranscriptionOutput {
+            text: "東京都".to_string(),
+            tokens: vec![
+                TranscriptionToken::new("東", -3.0),
+                TranscriptionToken::new("京都", -0.1),
+            ],
+        };
+
+        let mapping = crate::domain::dict::apply_replacements_with_mappings(
+            "東京都",
+            &mut [crate::domain::dict::WordEntry {
+                surface: "東京都".to_string(),
+                replacement: "Tokyo".to_string(),
+                hit: 0,
+                status: crate::domain::dict::EntryStatus::Active,
+            }],
+        );
+
+        let selection = plan_low_confidence_selection(
+            &output,
+            &mapping.span_mappings,
+            LOW_CONFIDENCE_THRESHOLD,
+        );
+
+        assert_eq!(selection, None);
     }
 }

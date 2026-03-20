@@ -69,8 +69,12 @@ pub async fn handle_transcription<T: AudioBackend>(
             }
         };
 
-        let finalized_for_selection = streamed_finalized.as_ref().unwrap_or(&finalized);
-        maybe_select_low_confidence(finalized_for_selection, session_id, recording_service).await;
+        if let Some((finalized_for_selection, input_succeeded)) = streamed_finalized.as_ref() {
+            if *input_succeeded {
+                maybe_select_low_confidence(finalized_for_selection, session_id, recording_service)
+                    .await;
+            }
+        }
 
         finalized
     } else {
@@ -78,8 +82,10 @@ pub async fn handle_transcription<T: AudioBackend>(
             .borrow()
             .transcribe(result.audio_data.into(), options)
             .await?;
-        type_text_with_profile(&finalized.text).await;
-        maybe_select_low_confidence(&finalized, session_id, recording_service).await;
+        let input_succeeded = type_text_with_profile(&finalized.text).await;
+        if input_succeeded {
+            maybe_select_low_confidence(&finalized, session_id, recording_service).await;
+        }
         finalized
     };
 
@@ -92,7 +98,7 @@ pub async fn handle_transcription<T: AudioBackend>(
     Ok(())
 }
 
-async fn type_text_with_profile(text: &str) {
+async fn type_text_with_profile(text: &str) -> bool {
     let input_timer = profiling::Timer::start("text_input");
     match text_input::type_text(text).await {
         Ok(_) => {
@@ -101,6 +107,7 @@ async fn type_text_with_profile(text: &str) {
             } else {
                 input_timer.log();
             }
+            true
         }
         Err(e) => {
             if profiling::enabled() {
@@ -109,11 +116,12 @@ async fn type_text_with_profile(text: &str) {
                 input_timer.log();
             }
             eprintln!("Direct input failed: {}", e);
+            false
         }
     }
 }
 
-async fn type_text_continuous_with_profile(text: &str) {
+async fn type_text_continuous_with_profile(text: &str) -> bool {
     let input_timer = profiling::Timer::start("text_input.continuous");
     match text_input::type_text_continuous(text).await {
         Ok(_) => {
@@ -122,6 +130,7 @@ async fn type_text_continuous_with_profile(text: &str) {
             } else {
                 input_timer.log();
             }
+            true
         }
         Err(e) => {
             if profiling::enabled() {
@@ -130,14 +139,15 @@ async fn type_text_continuous_with_profile(text: &str) {
                 input_timer.log();
             }
             eprintln!("Direct input continuous failed: {}", e);
+            false
         }
     }
 }
 
-async fn apply_text_patch_continuous_with_profile(current: &str, next: &str) {
+async fn apply_text_patch_continuous_with_profile(current: &str, next: &str) -> bool {
     let (delete_count, append_text) = diff_text_for_patch(current, next);
     if delete_count == 0 && append_text.is_empty() {
-        return;
+        return true;
     }
 
     let input_timer = profiling::Timer::start("text_input.patch_continuous");
@@ -152,6 +162,7 @@ async fn apply_text_patch_continuous_with_profile(current: &str, next: &str) {
             } else {
                 input_timer.log();
             }
+            true
         }
         Err(e) => {
             if profiling::enabled() {
@@ -164,6 +175,7 @@ async fn apply_text_patch_continuous_with_profile(current: &str, next: &str) {
                 input_timer.log();
             }
             eprintln!("Direct input continuous patch failed: {}", e);
+            false
         }
     }
 }
@@ -184,52 +196,53 @@ fn diff_text_for_patch(current: &str, next: &str) -> (usize, String) {
 
 #[async_trait(?Send)]
 trait TextApplier {
-    async fn type_text(&self, text: &str);
-    async fn type_text_continuous(&self, text: &str);
-    async fn patch_text_continuous(&self, current: &str, next: &str);
+    async fn type_text(&self, text: &str) -> bool;
+    async fn type_text_continuous(&self, text: &str) -> bool;
+    async fn patch_text_continuous(&self, current: &str, next: &str) -> bool;
 }
 
 struct ProfiledTextApplier;
 
 #[async_trait(?Send)]
 impl TextApplier for ProfiledTextApplier {
-    async fn type_text(&self, text: &str) {
-        type_text_with_profile(text).await;
+    async fn type_text(&self, text: &str) -> bool {
+        type_text_with_profile(text).await
     }
 
-    async fn type_text_continuous(&self, text: &str) {
-        type_text_continuous_with_profile(text).await;
+    async fn type_text_continuous(&self, text: &str) -> bool {
+        type_text_continuous_with_profile(text).await
     }
 
-    async fn patch_text_continuous(&self, current: &str, next: &str) {
-        apply_text_patch_continuous_with_profile(current, next).await;
+    async fn patch_text_continuous(&self, current: &str, next: &str) -> bool {
+        apply_text_patch_continuous_with_profile(current, next).await
     }
 }
 
 async fn process_streaming_events(
     event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<TranscriptionEvent>,
     text_applier: &dyn TextApplier,
-) -> Option<FinalizedTranscription> {
+) -> Option<(FinalizedTranscription, bool)> {
     let mut rendered_text = String::new();
+    let mut input_succeeded = true;
     while let Some(event) = event_rx.recv().await {
         match event {
             TranscriptionEvent::Delta(delta) => {
                 if rendered_text.is_empty() {
-                    text_applier.type_text(&delta).await;
+                    input_succeeded &= text_applier.type_text(&delta).await;
                 } else {
-                    text_applier.type_text_continuous(&delta).await;
+                    input_succeeded &= text_applier.type_text_continuous(&delta).await;
                 }
                 rendered_text.push_str(&delta);
             }
             TranscriptionEvent::Completed(finalized) if rendered_text.is_empty() => {
-                text_applier.type_text(&finalized.text).await;
-                return Some(finalized);
+                input_succeeded &= text_applier.type_text(&finalized.text).await;
+                return Some((finalized, input_succeeded));
             }
             TranscriptionEvent::Completed(finalized) => {
-                text_applier
+                input_succeeded &= text_applier
                     .patch_text_continuous(&rendered_text, &finalized.text)
                     .await;
-                return Some(finalized);
+                return Some((finalized, input_succeeded));
             }
         }
     }
@@ -386,21 +399,24 @@ mod tests {
 
         #[async_trait(?Send)]
         impl TextApplier for MockTextApplier {
-            async fn type_text(&self, text: &str) {
+            async fn type_text(&self, text: &str) -> bool {
                 self.calls.borrow_mut().push(format!("type:{text}"));
+                true
             }
 
-            async fn type_text_continuous(&self, text: &str) {
+            async fn type_text_continuous(&self, text: &str) -> bool {
                 self.calls
                     .borrow_mut()
                     .push(format!("type_continuous:{text}"));
+                true
             }
 
-            async fn patch_text_continuous(&self, current: &str, next: &str) {
+            async fn patch_text_continuous(&self, current: &str, next: &str) -> bool {
                 self.calls
                     .borrow_mut()
                     .push(format!("patch_continuous:{current}->{next}"));
                 self.completed.set(true);
+                true
             }
         }
 
@@ -438,10 +454,13 @@ mod tests {
         assert!(completed.get());
         assert_eq!(
             finalized,
-            Some(FinalizedTranscription {
-                text: "これはtestです".to_string(),
-                low_confidence_selection: None,
-            })
+            Some((
+                FinalizedTranscription {
+                    text: "これはtestです".to_string(),
+                    low_confidence_selection: None,
+                },
+                true,
+            ))
         );
     }
 
@@ -454,5 +473,55 @@ mod tests {
         };
 
         assert_eq!(selection_to_recent_range(&selection, 9), Some((2, 4)));
+    }
+
+    /// ストリーミング入力が失敗した場合は成功フラグを落として返す
+    #[tokio::test]
+    async fn streaming_events_report_failed_input_for_selection_guard() {
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        struct FailingTextApplier;
+
+        #[async_trait(?Send)]
+        impl TextApplier for FailingTextApplier {
+            async fn type_text(&self, _text: &str) -> bool {
+                false
+            }
+
+            async fn type_text_continuous(&self, _text: &str) -> bool {
+                false
+            }
+
+            async fn patch_text_continuous(&self, _current: &str, _next: &str) -> bool {
+                false
+            }
+        }
+
+        event_tx
+            .send(TranscriptionEvent::Completed(FinalizedTranscription {
+                text: "失敗".to_string(),
+                low_confidence_selection: Some(LowConfidenceSelection {
+                    start_char_index: 0,
+                    char_count: 2,
+                }),
+            }))
+            .unwrap();
+        drop(event_tx);
+
+        let finalized = process_streaming_events(&mut event_rx, &FailingTextApplier).await;
+
+        assert_eq!(
+            finalized,
+            Some((
+                FinalizedTranscription {
+                    text: "失敗".to_string(),
+                    low_confidence_selection: Some(LowConfidenceSelection {
+                        start_char_index: 0,
+                        char_count: 2,
+                    }),
+                },
+                false,
+            ))
+        );
     }
 }

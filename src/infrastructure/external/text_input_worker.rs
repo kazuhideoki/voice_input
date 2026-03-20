@@ -414,14 +414,20 @@ fn select_recent_range_with_enigo(
     enigo
         .key(Key::Shift, Press)
         .map_err(|e| TextInputWorkerError::InputFailed(e.to_string()))?;
-    for _ in 0..char_count {
-        enigo
-            .key(Key::LeftArrow, Click)
-            .map_err(|e| TextInputWorkerError::InputFailed(e.to_string()))?;
-    }
-    enigo
+    let selection_result = (|| -> Result<(), TextInputWorkerError> {
+        for _ in 0..char_count {
+            enigo
+                .key(Key::LeftArrow, Click)
+                .map_err(|e| TextInputWorkerError::InputFailed(e.to_string()))?;
+        }
+        Ok(())
+    })();
+
+    let release_result = enigo
         .key(Key::Shift, Release)
-        .map_err(|e| TextInputWorkerError::InputFailed(e.to_string()))?;
+        .map_err(|e| TextInputWorkerError::InputFailed(e.to_string()));
+    selection_result?;
+    release_result?;
     std::thread::sleep(std::time::Duration::from_millis(30));
     Ok(())
 }
