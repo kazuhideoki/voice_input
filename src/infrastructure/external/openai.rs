@@ -1,7 +1,7 @@
 //! OpenAI STT API ラッパ。
 //! AudioData（既定: FLAC、失敗時にWAVへフォールバック）を
 //! multipart/form-data で転写エンドポイントに送信します。
-use crate::application::TranscriptionEvent;
+use crate::application::{TranscriptionEvent, TranscriptionOutput, TranscriptionToken};
 use crate::infrastructure::audio::cpal_backend::AudioData;
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
@@ -13,6 +13,8 @@ use tokio::sync::mpsc;
 #[derive(Debug, Deserialize)]
 struct TranscriptionResponse {
     pub text: String,
+    #[serde(default)]
+    pub logprobs: Vec<TokenLogprobResponse>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -23,6 +25,8 @@ struct StreamingDeltaResponse {
 #[derive(Debug, Deserialize)]
 struct StreamingCompletedResponse {
     pub text: String,
+    #[serde(default)]
+    pub logprobs: Vec<TokenLogprobResponse>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -31,12 +35,19 @@ struct StreamingEventEnvelope {
     pub event_type: Option<String>,
     pub delta: Option<String>,
     pub text: Option<String>,
+    pub logprobs: Option<Vec<TokenLogprobResponse>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize)]
+struct TokenLogprobResponse {
+    pub token: String,
+    pub logprob: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 enum StreamingTranscriptionEvent {
     Delta(String),
-    Completed(String),
+    Completed(TranscriptionOutput),
 }
 
 /// Dictionary suggestion (surface -> replacement)
@@ -83,7 +94,10 @@ impl OpenAiClient {
     }
 
     /// AudioDataから直接転写を実行
-    pub async fn transcribe_audio(&self, audio_data: AudioData) -> Result<String, String> {
+    pub async fn transcribe_audio(
+        &self,
+        audio_data: AudioData,
+    ) -> Result<TranscriptionOutput, String> {
         if profiling::enabled() {
             profiling::log_point(
                 "openai.request",
@@ -110,7 +124,7 @@ impl OpenAiClient {
         &self,
         audio_data: AudioData,
         event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
-    ) -> Result<String, String> {
+    ) -> Result<TranscriptionOutput, String> {
         if profiling::enabled() {
             profiling::log_point(
                 "openai.streaming_request",
@@ -137,7 +151,7 @@ impl OpenAiClient {
         &self,
         file_part: multipart::Part,
         prompt: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<TranscriptionOutput, String> {
         let overall_timer = profiling::Timer::start("openai.transcribe_total");
         let url = "https://api.openai.com/v1/audio/transcriptions";
 
@@ -145,7 +159,8 @@ impl OpenAiClient {
         let mut form = multipart::Form::new()
             .part("file", file_part)
             .text("model", self.model.clone())
-            .text("language", "ja");
+            .text("language", "ja")
+            .text("include[]", "logprobs");
 
         if let Some(prompt_text) = prompt {
             let formatted_prompt = format!(
@@ -206,7 +221,10 @@ impl OpenAiClient {
         } else {
             overall_timer.log();
         }
-        Ok(transcription.text)
+        Ok(TranscriptionOutput {
+            text: transcription.text,
+            tokens: map_logprobs(transcription.logprobs),
+        })
     }
 
     async fn transcribe_streaming_with_part(
@@ -214,7 +232,7 @@ impl OpenAiClient {
         file_part: multipart::Part,
         prompt: Option<&str>,
         event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
-    ) -> Result<String, String> {
+    ) -> Result<TranscriptionOutput, String> {
         let overall_timer = profiling::Timer::start("openai.streaming_transcribe_total");
         let url = "https://api.openai.com/v1/audio/transcriptions";
 
@@ -222,7 +240,8 @@ impl OpenAiClient {
             .part("file", file_part)
             .text("model", self.model.clone())
             .text("language", "ja")
-            .text("stream", "true");
+            .text("stream", "true")
+            .text("include[]", "logprobs");
 
         if let Some(prompt_text) = prompt {
             let formatted_prompt = format!(
@@ -261,7 +280,7 @@ impl OpenAiClient {
         }
 
         let mut parser = StreamingEventParser::default();
-        let mut final_text = None;
+        let mut final_output = None;
 
         while let Some(chunk) = response
             .chunk()
@@ -273,8 +292,8 @@ impl OpenAiClient {
                     StreamingTranscriptionEvent::Delta(delta) => {
                         let _ = event_tx.send(TranscriptionEvent::Delta(delta));
                     }
-                    StreamingTranscriptionEvent::Completed(text) => {
-                        final_text = Some(text);
+                    StreamingTranscriptionEvent::Completed(output) => {
+                        final_output = Some(output);
                     }
                 }
             }
@@ -285,21 +304,21 @@ impl OpenAiClient {
                 StreamingTranscriptionEvent::Delta(delta) => {
                     let _ = event_tx.send(TranscriptionEvent::Delta(delta));
                 }
-                StreamingTranscriptionEvent::Completed(text) => {
-                    final_text = Some(text);
+                StreamingTranscriptionEvent::Completed(output) => {
+                    final_output = Some(output);
                 }
             }
         }
 
-        let text = final_text.ok_or("Streaming response completed without final text")?;
+        let output = final_output.ok_or("Streaming response completed without final text")?;
 
         if profiling::enabled() {
-            overall_timer.log_with(&format!("status={} text_len={}", status, text.len()));
+            overall_timer.log_with(&format!("status={} text_len={}", status, output.text.len()));
         } else {
             overall_timer.log();
         }
 
-        Ok(text)
+        Ok(output)
     }
 }
 
@@ -386,15 +405,32 @@ fn parse_streaming_frame(frame: &[u8]) -> Result<Option<StreamingTranscriptionEv
             }
         },
         "transcript.text.done" => match envelope.text {
-            Some(text) => Ok(Some(StreamingTranscriptionEvent::Completed(text))),
+            Some(text) => Ok(Some(StreamingTranscriptionEvent::Completed(
+                TranscriptionOutput {
+                    text,
+                    tokens: map_logprobs(envelope.logprobs.unwrap_or_default()),
+                },
+            ))),
             None => {
                 let payload: StreamingCompletedResponse = serde_json::from_str(&data)
                     .map_err(|e| format!("Failed to parse streaming completion: {}", e))?;
-                Ok(Some(StreamingTranscriptionEvent::Completed(payload.text)))
+                Ok(Some(StreamingTranscriptionEvent::Completed(
+                    TranscriptionOutput {
+                        text: payload.text,
+                        tokens: map_logprobs(payload.logprobs),
+                    },
+                )))
             }
         },
         _ => Ok(None),
     }
+}
+
+fn map_logprobs(logprobs: Vec<TokenLogprobResponse>) -> Vec<TranscriptionToken> {
+    logprobs
+        .into_iter()
+        .map(|token| TranscriptionToken::new(token.token, token.logprob))
+        .collect()
 }
 
 fn find_frame_separator(buffer: &[u8]) -> Option<(usize, usize)> {
@@ -562,7 +598,9 @@ mod tests {
             vec![
                 StreamingTranscriptionEvent::Delta("こん".to_string()),
                 StreamingTranscriptionEvent::Delta("にちは".to_string()),
-                StreamingTranscriptionEvent::Completed("こんにちは".to_string()),
+                StreamingTranscriptionEvent::Completed(TranscriptionOutput::from_text(
+                    "こんにちは".to_string(),
+                )),
             ]
         );
     }
@@ -581,7 +619,9 @@ mod tests {
             events,
             vec![
                 StreamingTranscriptionEvent::Delta("こん".to_string()),
-                StreamingTranscriptionEvent::Completed("こんにちは".to_string()),
+                StreamingTranscriptionEvent::Completed(TranscriptionOutput::from_text(
+                    "こんにちは".to_string(),
+                )),
             ]
         );
     }
@@ -630,7 +670,9 @@ mod tests {
             second,
             vec![
                 StreamingTranscriptionEvent::Delta("こん".to_string()),
-                StreamingTranscriptionEvent::Completed("こんにちは".to_string()),
+                StreamingTranscriptionEvent::Completed(TranscriptionOutput::from_text(
+                    "こんにちは".to_string(),
+                )),
             ]
         );
     }
@@ -651,8 +693,36 @@ mod tests {
             events,
             vec![
                 StreamingTranscriptionEvent::Delta("こん".to_string()),
-                StreamingTranscriptionEvent::Completed("こんにちは".to_string()),
+                StreamingTranscriptionEvent::Completed(TranscriptionOutput::from_text(
+                    "こんにちは".to_string(),
+                )),
             ]
+        );
+    }
+
+    /// 完了イベントにlogprobsが含まれる場合はトークン情報へ変換できる
+    #[test]
+    fn streaming_completion_maps_logprobs_to_tokens() {
+        let body = concat!(
+            "data: {\"type\":\"transcript.text.done\",\"text\":\"こんにちは\",\"logprobs\":[",
+            "{\"token\":\"こん\",\"logprob\":-0.2},",
+            "{\"token\":\"にちは\",\"logprob\":-0.7}",
+            "]}\n\n"
+        );
+
+        let events = parse_streaming_events(body).expect("stream should parse");
+
+        assert_eq!(
+            events,
+            vec![StreamingTranscriptionEvent::Completed(
+                TranscriptionOutput {
+                    text: "こんにちは".to_string(),
+                    tokens: vec![
+                        TranscriptionToken::new("こん", -0.2),
+                        TranscriptionToken::new("にちは", -0.7),
+                    ],
+                }
+            )]
         );
     }
 }

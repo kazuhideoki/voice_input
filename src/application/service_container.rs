@@ -106,11 +106,13 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
             config.recording.clone(),
         )));
 
-        let transcription = Rc::new(RefCell::new(TranscriptionService::new(
-            transcription_client,
-            Box::new(JsonFileDictRepo::new()),
-            config.max_concurrent_transcriptions,
-        )));
+        let transcription = Rc::new(RefCell::new(
+            TranscriptionService::new_with_optional_env_log(
+                transcription_client,
+                Box::new(JsonFileDictRepo::new()),
+                config.max_concurrent_transcriptions,
+            ),
+        ));
 
         let media_control = Rc::new(RefCell::new(MediaControlService::new()));
 
@@ -146,7 +148,7 @@ pub mod test_helpers {
     use super::*;
     use crate::application::{
         CommandHandler, MediaControlService, RecordingConfig, RecordingService,
-        TranscriptionService,
+        TranscriptionOutput, TranscriptionService,
     };
     use crate::infrastructure::audio::cpal_backend::AudioData;
     use async_trait::async_trait;
@@ -202,8 +204,12 @@ pub mod test_helpers {
 
     #[async_trait]
     impl TranscriptionClient for MockTranscriptionClient {
-        async fn transcribe(&self, _audio: AudioData, _language: &str) -> Result<String> {
-            Ok(self.response.clone())
+        async fn transcribe(
+            &self,
+            _audio: AudioData,
+            _language: &str,
+        ) -> Result<TranscriptionOutput> {
+            Ok(TranscriptionOutput::from_text(self.response.clone()))
         }
     }
 

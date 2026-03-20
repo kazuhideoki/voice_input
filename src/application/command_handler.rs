@@ -292,6 +292,7 @@ mod tests {
     use super::*;
     use crate::application::RecordingConfig;
     use crate::application::TranscriptionClient;
+    use crate::application::TranscriptionOutput;
     use crate::application::media_control_service::MediaController;
     use crate::domain::dict::{DictRepository, WordEntry};
     use crate::domain::recorder::Recorder;
@@ -327,8 +328,8 @@ mod tests {
             &self,
             _audio: AudioData,
             _language: &str,
-        ) -> crate::error::Result<String> {
-            Ok(String::new())
+        ) -> crate::error::Result<TranscriptionOutput> {
+            Ok(TranscriptionOutput::from_text(String::new()))
         }
     }
 

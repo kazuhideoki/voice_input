@@ -57,6 +57,8 @@ pub struct EnvConfig {
     pub openai_transcribe_model: OpenAiTranscriptionModel,
     /// ストリーミング直接入力を有効にする
     pub openai_transcribe_streaming: bool,
+    /// 転写ログ保存先パス
+    pub openai_transcription_log_path: Option<String>,
 }
 
 impl EnvConfig {
@@ -70,6 +72,7 @@ impl EnvConfig {
             openai_transcribe_streaming: std::env::var("OPENAI_TRANSCRIBE_STREAMING")
                 .ok()
                 .is_some_and(|value| value == "true"),
+            openai_transcription_log_path: non_empty_env("OPENAI_TRANSCRIPTION_LOG_PATH"),
         }
     }
 
@@ -137,9 +140,16 @@ impl EnvConfig {
     }
 }
 
+fn non_empty_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{EnvConfig, OpenAiTranscriptionModel};
+    use super::{EnvConfig, OpenAiTranscriptionModel, TEST_LOCK};
 
     /// ストリーミング有効化時は対応モデルのみ許可対象として判定できる
     #[test]
@@ -158,6 +168,7 @@ mod tests {
             env_path: None,
             openai_transcribe_model: OpenAiTranscriptionModel::new("gpt-4o-mini-transcribe"),
             openai_transcribe_streaming: true,
+            openai_transcription_log_path: None,
         };
 
         assert!(config.openai_transcribe_streaming);
@@ -172,6 +183,7 @@ mod tests {
             env_path: None,
             openai_transcribe_model: OpenAiTranscriptionModel::new("gpt-4o-mini-transcribe"),
             openai_transcribe_streaming: true,
+            openai_transcription_log_path: None,
         };
 
         assert_eq!(config.recommended_transcription_parallelism(), 1);
@@ -186,8 +198,61 @@ mod tests {
             env_path: None,
             openai_transcribe_model: OpenAiTranscriptionModel::new("whisper-1"),
             openai_transcribe_streaming: false,
+            openai_transcription_log_path: None,
         };
 
         assert_eq!(config.recommended_transcription_parallelism(), 2);
+    }
+
+    /// 転写ログ保存先は環境変数未指定なら無効のままになる
+    #[test]
+    fn transcription_log_path_is_disabled_by_default() {
+        let config = EnvConfig {
+            openai_api_key: None,
+            xdg_data_home: None,
+            env_path: None,
+            openai_transcribe_model: OpenAiTranscriptionModel::new("whisper-1"),
+            openai_transcribe_streaming: false,
+            openai_transcription_log_path: None,
+        };
+
+        assert_eq!(config.openai_transcription_log_path, None);
+    }
+
+    /// 転写ログ保存先は設定されていればその値を保持する
+    #[test]
+    fn transcription_log_path_keeps_configured_value() {
+        let config = EnvConfig {
+            openai_api_key: None,
+            xdg_data_home: None,
+            env_path: None,
+            openai_transcribe_model: OpenAiTranscriptionModel::new("whisper-1"),
+            openai_transcribe_streaming: false,
+            openai_transcription_log_path: Some("/tmp/transcription-log.ndjson".to_string()),
+        };
+
+        assert_eq!(
+            config.openai_transcription_log_path.as_deref(),
+            Some("/tmp/transcription-log.ndjson")
+        );
+    }
+
+    /// 転写ログ保存先は空文字なら無効扱いになる
+    #[test]
+    fn transcription_log_path_treats_empty_env_as_disabled() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        // SAFETY: テストロックで環境変数アクセスを直列化している。
+        unsafe {
+            std::env::set_var("OPENAI_TRANSCRIPTION_LOG_PATH", "   ");
+        }
+
+        let config = EnvConfig::from_env();
+
+        assert_eq!(config.openai_transcription_log_path, None);
+
+        // SAFETY: テストロックで環境変数アクセスを直列化している。
+        unsafe {
+            std::env::remove_var("OPENAI_TRANSCRIPTION_LOG_PATH");
+        }
     }
 }

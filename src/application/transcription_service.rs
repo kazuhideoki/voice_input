@@ -13,15 +13,77 @@ use crate::domain::dict::{DictRepository, apply_replacements};
 use crate::error::{Result, VoiceInputError};
 use crate::infrastructure::audio::cpal_backend::AudioData;
 use crate::infrastructure::dict::JsonFileDictRepo;
+use crate::infrastructure::external::transcription_log::NonBlockingTranscriptionLogWriter;
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+
+/// 転写トークン単位の信頼度情報
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptionToken {
+    /// トークン文字列
+    pub token: String,
+    /// 対数確率
+    pub logprob: f64,
+    /// 補助指標としての信頼度
+    pub confidence: f64,
+}
+
+impl TranscriptionToken {
+    /// 対数確率からトークン情報を生成
+    pub fn new(token: impl Into<String>, logprob: f64) -> Self {
+        Self {
+            token: token.into(),
+            logprob,
+            confidence: logprob.exp(),
+        }
+    }
+}
+
+/// 辞書適用前の転写結果
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptionOutput {
+    /// 生の全文
+    pub text: String,
+    /// トークン単位の情報
+    pub tokens: Vec<TranscriptionToken>,
+}
+
+impl TranscriptionOutput {
+    /// トークンを持たない転写結果を生成
+    pub fn from_text(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            tokens: Vec::new(),
+        }
+    }
+}
+
+/// 調査用の転写ログ
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptionLogEntry {
+    /// 記録時刻
+    pub recorded_at: String,
+    /// 辞書適用前の全文
+    pub raw_text: String,
+    /// 辞書適用後の全文
+    pub processed_text: String,
+    /// トークン情報
+    pub tokens: Vec<TranscriptionToken>,
+}
+
+/// 転写ログの非同期保存要求
+pub trait TranscriptionLogWriter: Send + Sync {
+    /// 保存要求をキューに積む
+    fn enqueue(&self, entry: TranscriptionLogEntry) -> Result<()>;
+}
 
 /// 音声文字起こし機能の抽象化
 #[async_trait]
 pub trait TranscriptionClient: Send + Sync {
     /// 音声データを文字起こし
-    async fn transcribe(&self, audio: AudioData, language: &str) -> Result<String>;
+    async fn transcribe(&self, audio: AudioData, language: &str) -> Result<TranscriptionOutput>;
 
     /// 音声データをストリーミングで文字起こしする
     async fn transcribe_streaming(
@@ -29,7 +91,7 @@ pub trait TranscriptionClient: Send + Sync {
         audio: AudioData,
         language: &str,
         _event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
-    ) -> Result<String> {
+    ) -> Result<TranscriptionOutput> {
         self.transcribe(audio, language).await
     }
 }
@@ -69,6 +131,8 @@ pub struct TranscriptionService {
     dict_repo: Box<dyn DictRepository>,
     /// 同時実行数制限用セマフォ
     semaphore: Arc<Semaphore>,
+    /// 調査用ログ保存
+    log_writer: Option<Box<dyn TranscriptionLogWriter>>,
 }
 
 impl TranscriptionService {
@@ -82,16 +146,49 @@ impl TranscriptionService {
             client,
             dict_repo,
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
+            log_writer: None,
+        }
+    }
+
+    /// ログ保存を有効にして作成
+    pub fn with_log_writer(
+        client: Box<dyn TranscriptionClient>,
+        dict_repo: Box<dyn DictRepository>,
+        max_concurrent: usize,
+        log_writer: Box<dyn TranscriptionLogWriter>,
+    ) -> Self {
+        Self {
+            client,
+            dict_repo,
+            semaphore: Arc::new(Semaphore::new(max_concurrent)),
+            log_writer: Some(log_writer),
         }
     }
 
     /// デフォルト設定で作成
     pub fn with_default_repo(client: Box<dyn TranscriptionClient>) -> Self {
-        Self::new(
+        Self::new_with_optional_env_log(
             client,
             Box::new(JsonFileDictRepo::new()),
             EnvConfig::from_env().recommended_transcription_parallelism(),
         )
+    }
+
+    /// デフォルト辞書 + 環境変数ベースのログ設定付きで作成
+    pub fn new_with_optional_env_log(
+        client: Box<dyn TranscriptionClient>,
+        dict_repo: Box<dyn DictRepository>,
+        max_concurrent: usize,
+    ) -> Self {
+        match EnvConfig::from_env().openai_transcription_log_path {
+            Some(path) => Self::with_log_writer(
+                client,
+                dict_repo,
+                max_concurrent,
+                Box::new(NonBlockingTranscriptionLogWriter::new(path)),
+            ),
+            None => Self::new(client, dict_repo, max_concurrent),
+        }
     }
 
     /// 音声データを文字起こし
@@ -109,21 +206,23 @@ impl TranscriptionService {
 
         // 転写実行
         let api_timer = profiling::Timer::start("transcription.api");
-        let text = self.client.transcribe(audio, &options.language).await?;
+        let output = self.client.transcribe(audio, &options.language).await?;
         api_timer.log();
 
         // 辞書変換を適用
         let dict_timer = profiling::Timer::start("transcription.dict");
-        let processed = self.apply_dictionary(&text)?;
+        let processed = self.apply_dictionary(&output.text)?;
         if profiling::enabled() {
             dict_timer.log_with(&format!(
                 "text_len={} processed_len={}",
-                text.len(),
+                output.text.len(),
                 processed.len()
             ));
         } else {
             dict_timer.log();
         }
+
+        self.enqueue_transcription_log(&output, &processed);
 
         if profiling::enabled() {
             overall_timer.log_with(&format!("processed_len={}", processed.len()));
@@ -147,24 +246,25 @@ impl TranscriptionService {
         })?;
 
         let api_timer = profiling::Timer::start("transcription.streaming_api");
-        let text = self
+        let output = self
             .client
             .transcribe_streaming(audio, &options.language, event_tx.clone())
             .await?;
         api_timer.log();
 
         let dict_timer = profiling::Timer::start("transcription.streaming_dict");
-        let processed = self.apply_dictionary(&text)?;
+        let processed = self.apply_dictionary(&output.text)?;
         if profiling::enabled() {
             dict_timer.log_with(&format!(
                 "text_len={} processed_len={}",
-                text.len(),
+                output.text.len(),
                 processed.len()
             ));
         } else {
             dict_timer.log();
         }
 
+        self.enqueue_transcription_log(&output, &processed);
         let _ = event_tx.send(TranscriptionEvent::Completed(processed.clone()));
 
         if profiling::enabled() {
@@ -192,6 +292,24 @@ impl TranscriptionService {
         }
 
         Ok(result)
+    }
+
+    /// 調査用の転写ログ保存を非同期キューに積む
+    fn enqueue_transcription_log(&self, output: &TranscriptionOutput, processed_text: &str) {
+        let Some(log_writer) = &self.log_writer else {
+            return;
+        };
+
+        let entry = TranscriptionLogEntry {
+            recorded_at: chrono::Utc::now().to_rfc3339(),
+            raw_text: output.text.clone(),
+            processed_text: processed_text.to_string(),
+            tokens: output.tokens.clone(),
+        };
+
+        if let Err(error) = log_writer.enqueue(entry) {
+            eprintln!("Failed to enqueue transcription log: {}", error);
+        }
     }
 
     /// セマフォの現在の利用可能数を取得（デバッグ用）
@@ -230,9 +348,13 @@ mod tests {
 
     #[async_trait]
     impl TranscriptionClient for MockTranscriptionClient {
-        async fn transcribe(&self, _audio: AudioData, _language: &str) -> Result<String> {
+        async fn transcribe(
+            &self,
+            _audio: AudioData,
+            _language: &str,
+        ) -> Result<TranscriptionOutput> {
             *self.call_count.lock().unwrap() += 1;
-            Ok(self.response.clone())
+            Ok(TranscriptionOutput::from_text(self.response.clone()))
         }
     }
 
@@ -260,6 +382,25 @@ mod tests {
         }
 
         fn save(&self, _entries: &[crate::domain::dict::WordEntry]) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct MockLogWriter {
+        entries: Arc<Mutex<Vec<TranscriptionLogEntry>>>,
+    }
+
+    impl MockLogWriter {
+        fn new() -> Self {
+            Self {
+                entries: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl TranscriptionLogWriter for MockLogWriter {
+        fn enqueue(&self, entry: TranscriptionLogEntry) -> Result<()> {
+            self.entries.lock().unwrap().push(entry);
             Ok(())
         }
     }
@@ -380,8 +521,14 @@ mod tests {
 
         #[async_trait]
         impl TranscriptionClient for MockStreamingClient {
-            async fn transcribe(&self, _audio: AudioData, _language: &str) -> Result<String> {
-                Ok("これはテストです".to_string())
+            async fn transcribe(
+                &self,
+                _audio: AudioData,
+                _language: &str,
+            ) -> Result<TranscriptionOutput> {
+                Ok(TranscriptionOutput::from_text(
+                    "これはテストです".to_string(),
+                ))
             }
 
             async fn transcribe_streaming(
@@ -389,10 +536,12 @@ mod tests {
                 _audio: AudioData,
                 _language: &str,
                 event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
-            ) -> Result<String> {
+            ) -> Result<TranscriptionOutput> {
                 let _ = event_tx.send(TranscriptionEvent::Delta("これは".to_string()));
                 let _ = event_tx.send(TranscriptionEvent::Delta("テストです".to_string()));
-                Ok("これはテストです".to_string())
+                Ok(TranscriptionOutput::from_text(
+                    "これはテストです".to_string(),
+                ))
             }
         }
 
@@ -428,5 +577,99 @@ mod tests {
                 TranscriptionEvent::Completed("これはtestです".to_string()),
             ]
         );
+    }
+
+    /// ログ保存が有効な場合は辞書適用前後とトークン情報を保存要求できる
+    #[tokio::test]
+    async fn transcription_log_is_enqueued_with_raw_and_processed_text() {
+        struct MockClientWithTokens;
+
+        #[async_trait]
+        impl TranscriptionClient for MockClientWithTokens {
+            async fn transcribe(
+                &self,
+                _audio: AudioData,
+                _language: &str,
+            ) -> Result<TranscriptionOutput> {
+                Ok(TranscriptionOutput {
+                    text: "これはテストです".to_string(),
+                    tokens: vec![
+                        TranscriptionToken {
+                            token: "これは".to_string(),
+                            logprob: -0.1,
+                            confidence: 0.9048374180359595,
+                        },
+                        TranscriptionToken {
+                            token: "テスト".to_string(),
+                            logprob: -1.2,
+                            confidence: 0.30119421191220214,
+                        },
+                    ],
+                })
+            }
+        }
+
+        let log_writer = MockLogWriter::new();
+        let recorded_entries = log_writer.entries.clone();
+        let service = TranscriptionService::with_log_writer(
+            Box::new(MockClientWithTokens),
+            Box::new(MockDictRepo::new()),
+            1,
+            Box::new(log_writer),
+        );
+
+        let audio = AudioData {
+            bytes: vec![0u8; 100],
+            mime_type: "audio/wav",
+            file_name: "audio.wav".to_string(),
+        };
+
+        let result = service
+            .transcribe(audio, TranscriptionOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(result, "これはtestです");
+
+        let entries = recorded_entries.lock().unwrap().clone();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].raw_text, "これはテストです");
+        assert_eq!(entries[0].processed_text, "これはtestです");
+        assert_eq!(
+            entries[0].tokens,
+            vec![
+                TranscriptionToken {
+                    token: "これは".to_string(),
+                    logprob: -0.1,
+                    confidence: 0.9048374180359595,
+                },
+                TranscriptionToken {
+                    token: "テスト".to_string(),
+                    logprob: -1.2,
+                    confidence: 0.30119421191220214,
+                },
+            ]
+        );
+    }
+
+    /// ログ保存が無効な場合は保存要求を行わない
+    #[tokio::test]
+    async fn transcription_log_is_not_enqueued_when_writer_is_not_configured() {
+        let client = Box::new(MockTranscriptionClient::new("これはテストです"));
+        let dict_repo = Box::new(MockDictRepo::new());
+        let service = TranscriptionService::new(client, dict_repo, 1);
+
+        let audio = AudioData {
+            bytes: vec![0u8; 100],
+            mime_type: "audio/wav",
+            file_name: "audio.wav".to_string(),
+        };
+
+        let result = service
+            .transcribe(audio, TranscriptionOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(result, "これはtestです");
     }
 }

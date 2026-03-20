@@ -1,7 +1,7 @@
 //! OpenAI クライアントのアダプター実装
 //! Application層のTranscriptionClientトレイトを実装
 
-use crate::application::{TranscriptionClient, TranscriptionEvent};
+use crate::application::{TranscriptionClient, TranscriptionEvent, TranscriptionOutput};
 use crate::error::Result;
 use crate::infrastructure::audio::cpal_backend::AudioData;
 use crate::infrastructure::external::openai::OpenAiClient;
@@ -24,7 +24,7 @@ impl OpenAiTranscriptionAdapter {
 
 #[async_trait]
 impl TranscriptionClient for OpenAiTranscriptionAdapter {
-    async fn transcribe(&self, audio: AudioData, _language: &str) -> Result<String> {
+    async fn transcribe(&self, audio: AudioData, _language: &str) -> Result<TranscriptionOutput> {
         self.client
             .transcribe_audio(audio)
             .await
@@ -36,7 +36,7 @@ impl TranscriptionClient for OpenAiTranscriptionAdapter {
         audio: AudioData,
         _language: &str,
         event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
-    ) -> Result<String> {
+    ) -> Result<TranscriptionOutput> {
         self.client
             .transcribe_audio_streaming(audio, event_tx)
             .await
