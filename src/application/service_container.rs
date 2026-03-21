@@ -31,27 +31,16 @@ pub struct AppConfig {
     pub max_concurrent_transcriptions: usize,
 }
 
-<<<<<<< HEAD
-impl Default for AppConfig {
-    fn default() -> Self {
-        let config = EnvConfig::get();
-        Self {
-=======
 impl AppConfig {
     /// 環境変数からアプリケーション設定を構築する
     pub fn from_env() -> Result<Self> {
-        let env_config =
-            EnvConfig::from_env().map_err(crate::error::VoiceInputError::ConfigInitError)?;
+        let env_config = EnvConfig::from_env()
+            .map_err(|error| crate::error::VoiceInputError::ConfigInitError(error.to_string()))?;
 
         Ok(Self {
->>>>>>> main
             recording: RecordingConfig {
-                max_duration_secs: config.recording.max_duration_secs,
+                max_duration_secs: env_config.recording.max_duration_secs,
             },
-<<<<<<< HEAD
-            max_concurrent_transcriptions: config.recommended_transcription_parallelism(),
-        }
-=======
             max_concurrent_transcriptions: env_config.recommended_transcription_parallelism(),
         })
     }
@@ -60,7 +49,6 @@ impl AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self::from_env().expect("application config requires a supported transcription model")
->>>>>>> main
     }
 }
 
