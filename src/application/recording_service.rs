@@ -10,8 +10,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
-use crate::domain::audio::{AudioBackend, AudioData};
-use crate::domain::recorder::Recorder;
+use crate::domain::audio::{AudioBackend, AudioData, Recorder};
 use crate::error::{Result, VoiceInputError};
 
 /// 録音状態
@@ -333,8 +332,7 @@ impl<T: AudioBackend> RecordingService<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::audio::AudioData;
-    use crate::domain::recorder::Recorder;
+    use crate::domain::audio::{AudioData, Recorder};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
     use tokio::time::timeout;

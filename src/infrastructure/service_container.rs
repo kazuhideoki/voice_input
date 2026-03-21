@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use crate::application::{
     RecordingConfig, RecordingService, TranscriptionClient, TranscriptionService,
 };
-use crate::domain::recorder::Recorder;
+use crate::domain::audio::Recorder;
 use crate::error::Result;
 use crate::infrastructure::{
     audio::{AudioBackend, CpalAudioBackend},
