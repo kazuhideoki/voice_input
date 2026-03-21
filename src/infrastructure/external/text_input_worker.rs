@@ -7,24 +7,28 @@ use enigo::{
     Direction::{Click, Press, Release},
     Enigo, Key, Keyboard, Settings,
 };
-use std::fmt;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::error::VoiceInputError;
 
 /// 常駐ワーカー用のテキスト入力エラー
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TextInputWorkerError {
     /// Enigo 初期化失敗
+    #[error("Enigo initialization failed: {0}")]
     EnigoInitFailed(String),
     /// ワーカー起動失敗
+    #[error("Text input worker spawn failed: {0}")]
     WorkerSpawnFailed(String),
     /// 入力実行失敗
+    #[error("Text input failed: {0}")]
     InputFailed(String),
     /// ワーカーとのチャネルが切断された
+    #[error("Text input channel closed: {0}")]
     ChannelClosed(String),
 }
 
+<<<<<<< HEAD
 impl fmt::Display for TextInputWorkerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -65,6 +69,8 @@ impl From<TextInputWorkerError> for VoiceInputError {
     }
 }
 
+=======
+>>>>>>> main
 /// ワーカーへ送る入力リクエスト
 #[derive(Debug)]
 pub enum TextInputRequest {

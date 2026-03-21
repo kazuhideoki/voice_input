@@ -3,6 +3,12 @@
 //! このモジュールは voice_input アプリケーション全体で使用する統一エラー型を定義します。
 //! 既存の散在したエラー型を統合し、一貫したエラーハンドリングを提供します。
 
+<<<<<<< HEAD
+=======
+use crate::application::TranscriptionClientError;
+use crate::infrastructure::audio::AudioBackendError as InfrastructureAudioBackendError;
+use crate::infrastructure::external::text_input_worker::TextInputWorkerError;
+>>>>>>> main
 use thiserror::Error;
 
 /// voice_input アプリケーション全体で使用する統一エラー型
@@ -18,13 +24,21 @@ pub enum VoiceInputError {
     RecordingAlreadyActive,
 
     #[error("Audio backend error: {0}")]
-    AudioBackendError(String),
+    AudioBackendError(
+        #[from]
+        #[source]
+        InfrastructureAudioBackendError,
+    ),
 
     // ========================================
     // 転写関連エラー
     // ========================================
     #[error("Transcription failed: {0}")]
-    TranscriptionFailed(String),
+    TranscriptionFailed(
+        #[from]
+        #[source]
+        TranscriptionClientError,
+    ),
 
     // ========================================
     // テキスト入力エラー

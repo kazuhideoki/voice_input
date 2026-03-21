@@ -196,13 +196,18 @@ pub mod test_helpers {
     }
 
     impl AudioBackend for MockAudioBackend {
-        fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        fn start_recording(
+            &self,
+        ) -> std::result::Result<(), crate::infrastructure::audio::AudioBackendError> {
             self.is_recording
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         }
 
-        fn stop_recording(&self) -> std::result::Result<AudioData, Box<dyn std::error::Error>> {
+        fn stop_recording(
+            &self,
+        ) -> std::result::Result<AudioData, crate::infrastructure::audio::AudioBackendError>
+        {
             self.is_recording
                 .store(false, std::sync::atomic::Ordering::SeqCst);
             Ok(AudioData {

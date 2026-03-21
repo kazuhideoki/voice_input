@@ -228,7 +228,7 @@ impl<T: AudioBackend> RecordingService<T> {
         self.recorder
             .borrow_mut()
             .start()
-            .map_err(|e| VoiceInputError::AudioBackendError(e.to_string()))?;
+            .map_err(VoiceInputError::from)?;
 
         ctx.state = RecordingState::Recording(ActiveRecordingSession::new(session_id, options));
 
@@ -256,7 +256,7 @@ impl<T: AudioBackend> RecordingService<T> {
             .recorder
             .borrow_mut()
             .stop()
-            .map_err(|e| VoiceInputError::AudioBackendError(e.to_string()))?;
+            .map_err(VoiceInputError::from)?;
 
         ctx.state = RecordingState::Idle;
 
@@ -364,13 +364,23 @@ mod tests {
         }
     }
 
+<<<<<<< HEAD
     impl crate::domain::audio::AudioBackend for MockAudioBackend {
         fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+=======
+    impl crate::infrastructure::audio::AudioBackend for MockAudioBackend {
+        fn start_recording(
+            &self,
+        ) -> std::result::Result<(), crate::infrastructure::audio::AudioBackendError> {
+>>>>>>> main
             self.is_recording.store(true, Ordering::SeqCst);
             Ok(())
         }
 
-        fn stop_recording(&self) -> std::result::Result<AudioData, Box<dyn std::error::Error>> {
+        fn stop_recording(
+            &self,
+        ) -> std::result::Result<AudioData, crate::infrastructure::audio::AudioBackendError>
+        {
             self.is_recording.store(false, Ordering::SeqCst);
             Ok(AudioData {
                 bytes: vec![0u8; 100],
@@ -384,14 +394,28 @@ mod tests {
         }
     }
 
+<<<<<<< HEAD
     impl crate::domain::audio::AudioBackend for FailingStopAudioBackend {
         fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+=======
+    impl crate::infrastructure::audio::AudioBackend for FailingStopAudioBackend {
+        fn start_recording(
+            &self,
+        ) -> std::result::Result<(), crate::infrastructure::audio::AudioBackendError> {
+>>>>>>> main
             self.is_recording.store(true, Ordering::SeqCst);
             Ok(())
         }
 
-        fn stop_recording(&self) -> std::result::Result<AudioData, Box<dyn std::error::Error>> {
-            Err("stop failed".into())
+        fn stop_recording(
+            &self,
+        ) -> std::result::Result<AudioData, crate::infrastructure::audio::AudioBackendError>
+        {
+            Err(
+                crate::infrastructure::audio::AudioBackendError::StreamOperation {
+                    message: "stop failed".to_string(),
+                },
+            )
         }
 
         fn is_recording(&self) -> bool {
@@ -597,6 +621,10 @@ mod tests {
         let error = service.stop_recording().await.unwrap_err();
 
         assert!(matches!(error, VoiceInputError::AudioBackendError(_)));
+        assert!(
+            std::error::Error::source(&error).is_some(),
+            "audio backend failure should preserve the typed source error"
+        );
         assert!(service.is_recording());
         assert!(service.is_active_session(session_id).unwrap());
         assert_eq!(

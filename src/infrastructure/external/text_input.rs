@@ -6,7 +6,6 @@ use crate::infrastructure::external::text_input_worker::{
     TextInputEngine, TextInputWorkerError, TextInputWorkerHandle, start_text_input_worker,
 };
 use crate::utils::profiling;
-use std::error::Error;
 use std::sync::OnceLock;
 
 static TEXT_INPUT_WORKER: OnceLock<TextInputWorkerHandle> = OnceLock::new();
@@ -30,12 +29,12 @@ pub fn init_worker() -> Result<(), TextInputWorkerError> {
 /// ```no_run
 /// # use voice_input::infrastructure::external::text_input::type_text;
 /// # #[tokio::main]
-/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// # async fn main() -> Result<(), voice_input::infrastructure::external::text_input_worker::TextInputWorkerError> {
 /// type_text("Hello, World!").await?;
 /// # Ok(())
 /// # }
 /// ```
-pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
+pub async fn type_text(text: &str) -> Result<(), TextInputWorkerError> {
     let handle = TEXT_INPUT_WORKER.get().ok_or_else(|| {
         TextInputWorkerError::ChannelClosed("text input worker not initialized".to_string())
     })?;
@@ -49,11 +48,11 @@ pub async fn type_text(text: &str) -> Result<(), Box<dyn Error>> {
         timer.log();
     }
 
-    result.map_err(|e| Box::new(e) as Box<dyn Error>)
+    result
 }
 
 /// 連続入力の一部としてテキストを入力する
-pub async fn type_text_continuous(text: &str) -> Result<(), Box<dyn Error>> {
+pub async fn type_text_continuous(text: &str) -> Result<(), TextInputWorkerError> {
     let handle = TEXT_INPUT_WORKER.get().ok_or_else(|| {
         TextInputWorkerError::ChannelClosed("text input worker not initialized".to_string())
     })?;
@@ -67,11 +66,11 @@ pub async fn type_text_continuous(text: &str) -> Result<(), Box<dyn Error>> {
         timer.log();
     }
 
-    result.map_err(|e| Box::new(e) as Box<dyn Error>)
+    result
 }
 
 /// 入力済みテキストの末尾差分を置き換える
-pub async fn replace_suffix(delete_count: usize, text: &str) -> Result<(), Box<dyn Error>> {
+pub async fn replace_suffix(delete_count: usize, text: &str) -> Result<(), TextInputWorkerError> {
     let handle = TEXT_INPUT_WORKER.get().ok_or_else(|| {
         TextInputWorkerError::ChannelClosed("text input worker not initialized".to_string())
     })?;
@@ -90,14 +89,14 @@ pub async fn replace_suffix(delete_count: usize, text: &str) -> Result<(), Box<d
         timer.log();
     }
 
-    result.map_err(|e| Box::new(e) as Box<dyn Error>)
+    result
 }
 
 /// 連続入力の一部として入力済みテキストの末尾差分を置き換える
 pub async fn replace_suffix_continuous(
     delete_count: usize,
     text: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), TextInputWorkerError> {
     let handle = TEXT_INPUT_WORKER.get().ok_or_else(|| {
         TextInputWorkerError::ChannelClosed("text input worker not initialized".to_string())
     })?;
@@ -116,14 +115,14 @@ pub async fn replace_suffix_continuous(
         timer.log();
     }
 
-    result.map_err(|e| Box::new(e) as Box<dyn Error>)
+    result
 }
 
 /// 直近に入力したテキスト範囲を相対位置で選択する
 pub async fn select_recent_range(
     trailing_char_count: usize,
     char_count: usize,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), TextInputWorkerError> {
     let handle = TEXT_INPUT_WORKER.get().ok_or_else(|| {
         TextInputWorkerError::ChannelClosed("text input worker not initialized".to_string())
     })?;
@@ -144,5 +143,5 @@ pub async fn select_recent_range(
         timer.log();
     }
 
-    result.map_err(|e| Box::new(e) as Box<dyn Error>)
+    result
 }

@@ -355,13 +355,18 @@ mod tests {
     }
 
     impl AudioBackend for RecordingOrderBackend {
-        fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        fn start_recording(
+            &self,
+        ) -> std::result::Result<(), crate::infrastructure::audio::AudioBackendError> {
             self.started.store(true, Ordering::SeqCst);
             self.events.lock().unwrap().push("recording_started");
             Ok(())
         }
 
-        fn stop_recording(&self) -> std::result::Result<AudioData, Box<dyn std::error::Error>> {
+        fn stop_recording(
+            &self,
+        ) -> std::result::Result<AudioData, crate::infrastructure::audio::AudioBackendError>
+        {
             self.started.store(false, Ordering::SeqCst);
             Ok(AudioData {
                 bytes: vec![0u8; 16],
@@ -392,14 +397,19 @@ mod tests {
     }
 
     impl AudioBackend for DelayedRecordingOrderBackend {
-        fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        fn start_recording(
+            &self,
+        ) -> std::result::Result<(), crate::infrastructure::audio::AudioBackendError> {
             std::thread::sleep(self.delay);
             self.started.store(true, Ordering::SeqCst);
             self.events.lock().unwrap().push("recording_started");
             Ok(())
         }
 
-        fn stop_recording(&self) -> std::result::Result<AudioData, Box<dyn std::error::Error>> {
+        fn stop_recording(
+            &self,
+        ) -> std::result::Result<AudioData, crate::infrastructure::audio::AudioBackendError>
+        {
             self.started.store(false, Ordering::SeqCst);
             Ok(AudioData {
                 bytes: vec![0u8; 16],
@@ -425,13 +435,18 @@ mod tests {
     }
 
     impl<T: AudioBackend> AudioBackend for TimingObservedBackend<T> {
-        fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        fn start_recording(
+            &self,
+        ) -> std::result::Result<(), crate::infrastructure::audio::AudioBackendError> {
             self.inner.start_recording()?;
             *self.started_at.lock().unwrap() = Some(Instant::now());
             Ok(())
         }
 
-        fn stop_recording(&self) -> std::result::Result<AudioData, Box<dyn std::error::Error>> {
+        fn stop_recording(
+            &self,
+        ) -> std::result::Result<AudioData, crate::infrastructure::audio::AudioBackendError>
+        {
             self.inner.stop_recording()
         }
 

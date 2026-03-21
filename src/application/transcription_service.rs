@@ -18,6 +18,15 @@ use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum TranscriptionClientError {
+    #[error("transcription client initialization failed: {message}")]
+    Initialization { message: String },
+    #[error("transcription request failed: {message}")]
+    Request { message: String },
+}
 
 /// 転写トークン単位の信頼度情報
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
