@@ -31,18 +31,27 @@ pub struct AppConfig {
     pub max_concurrent_transcriptions: usize,
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
+impl AppConfig {
+    /// 環境変数からアプリケーション設定を構築する
+    pub fn from_env() -> Result<Self> {
+        let env_config =
+            EnvConfig::from_env().map_err(crate::error::VoiceInputError::ConfigInitError)?;
+
+        Ok(Self {
             recording: RecordingConfig {
                 max_duration_secs: std::env::var("VOICE_INPUT_MAX_SECS")
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or(30),
             },
-            max_concurrent_transcriptions: EnvConfig::from_env()
-                .recommended_transcription_parallelism(),
-        }
+            max_concurrent_transcriptions: env_config.recommended_transcription_parallelism(),
+        })
+    }
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self::from_env().expect("application config requires a supported transcription model")
     }
 }
 
@@ -63,7 +72,7 @@ pub struct ServiceContainer<T: AudioBackend + 'static> {
 impl ServiceContainer<CpalAudioBackend> {
     /// デフォルト設定で新しいServiceContainerを作成
     pub fn new() -> Result<Self> {
-        let config = AppConfig::default();
+        let config = AppConfig::from_env()?;
         let backend = CpalAudioBackend::default();
         if let Err(err) = backend.warm_up() {
             eprintln!("Input stream warm-up skipped: {}", err);
@@ -78,7 +87,7 @@ impl ServiceContainer<CpalAudioBackend> {
     #[cfg(test)]
     pub fn new_test() -> Result<Self> {
         use crate::application::service_container::test_helpers::MockTranscriptionClient;
-        let config = AppConfig::default();
+        let config = AppConfig::from_env()?;
         let recorder = Rc::new(RefCell::new(Recorder::new(CpalAudioBackend::default())));
         let client = Box::new(MockTranscriptionClient::new("test transcription"));
 
