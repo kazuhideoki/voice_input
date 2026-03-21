@@ -32,8 +32,8 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    /// 環境変数からアプリケーション設定を構築する
-    pub fn from_env() -> Result<Self> {
+    /// 初期化済みの環境変数設定からアプリケーション設定を構築する
+    pub fn from_initialized_env() -> Result<Self> {
         let env_config = EnvConfig::get();
 
         Ok(Self {
@@ -47,7 +47,8 @@ impl AppConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        Self::from_env().expect("application config requires a supported transcription model")
+        Self::from_initialized_env()
+            .expect("application config requires a supported transcription model")
     }
 }
 
@@ -68,7 +69,7 @@ pub struct ServiceContainer<T: AudioBackend + 'static> {
 impl ServiceContainer<CpalAudioBackend> {
     /// デフォルト設定で新しいServiceContainerを作成
     pub fn new() -> Result<Self> {
-        let config = AppConfig::from_env()?;
+        let config = AppConfig::from_initialized_env()?;
         let backend = CpalAudioBackend::default();
         if let Err(err) = backend.warm_up() {
             eprintln!("Input stream warm-up skipped: {}", err);
@@ -83,7 +84,7 @@ impl ServiceContainer<CpalAudioBackend> {
     #[cfg(test)]
     pub fn new_test() -> Result<Self> {
         use crate::application::service_container::test_helpers::MockTranscriptionClient;
-        let config = AppConfig::from_env()?;
+        let config = AppConfig::from_initialized_env()?;
         let recorder = Rc::new(RefCell::new(Recorder::new(CpalAudioBackend::default())));
         let client = Box::new(MockTranscriptionClient::new("test transcription"));
 
