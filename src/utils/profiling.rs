@@ -1,7 +1,6 @@
+use crate::utils::config::EnvConfig;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-
-const PROFILE_ENV: &str = "VOICE_INPUT_PROFILE";
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicI8, AtomicUsize, Ordering};
@@ -21,13 +20,7 @@ pub fn enabled() -> bool {
             return override_value == 1;
         }
     }
-    *ENABLED.get_or_init(|| {
-        std::env::var(PROFILE_ENV)
-            .ok()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
-            .unwrap_or(false)
-    })
+    *ENABLED.get_or_init(|| EnvConfig::get().profiling.enabled)
 }
 
 /// 計測開始用タイマー。

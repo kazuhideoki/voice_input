@@ -1,25 +1,18 @@
 //! Unix Domain Socket (UDS) ベースのシンプルな IPC モジュール。
 //! `voice_input` CLI ↔ `voice_inputd` デーモン間の通信で利用します。
+use crate::utils::config::EnvConfig;
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
     path::{Path, PathBuf},
 };
 
+#[cfg(test)]
 const SOCKET_FILENAME: &str = "voice_input.sock";
-const DEFAULT_SOCKET_PATH: &str = "/tmp/voice_input.sock";
 
 /// デーモンソケットパスを返します。
 pub fn socket_path() -> PathBuf {
-    if let Some(path) = socket_env("VOICE_INPUT_SOCKET_PATH") {
-        return PathBuf::from(path);
-    }
-
-    if let Some(dir) = socket_env("VOICE_INPUT_SOCKET_DIR") {
-        return PathBuf::from(dir).join(SOCKET_FILENAME);
-    }
-
-    PathBuf::from(DEFAULT_SOCKET_PATH)
+    EnvConfig::get().paths.ipc_socket_path()
 }
 
 /// CLI からデーモンへ送るコマンド列挙。
@@ -85,13 +78,6 @@ impl From<AudioDataDto> for AudioData {
     }
 }
 
-fn socket_env(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
 /// コマンドを送信して `IpcResp` を取得する同期ユーティリティ。
 pub fn send_cmd(cmd: &IpcCmd) -> Result<IpcResp, Box<dyn Error>> {
     use futures::{SinkExt, StreamExt};
@@ -124,6 +110,7 @@ pub fn send_cmd(cmd: &IpcCmd) -> Result<IpcResp, Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::config::EnvConfig;
     use std::sync::Mutex;
 
     static SOCKET_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -133,6 +120,7 @@ mod tests {
         f();
     }
 
+    #[allow(clippy::disallowed_methods)]
     fn store_env(key: &str) -> Option<String> {
         std::env::var(key).ok()
     }
@@ -166,7 +154,11 @@ mod tests {
             remove_env("VOICE_INPUT_SOCKET_PATH");
             remove_env("VOICE_INPUT_SOCKET_DIR");
 
-            assert_eq!(socket_path(), PathBuf::from(DEFAULT_SOCKET_PATH));
+            let config = EnvConfig::try_from_env().unwrap();
+            assert_eq!(
+                config.paths.ipc_socket_path(),
+                PathBuf::from("/tmp/voice_input.sock")
+            );
 
             restore_env("VOICE_INPUT_SOCKET_PATH", orig_path);
             restore_env("VOICE_INPUT_SOCKET_DIR", orig_dir);
@@ -182,7 +174,11 @@ mod tests {
             set_env("VOICE_INPUT_SOCKET_PATH", "/tmp/custom.sock");
             remove_env("VOICE_INPUT_SOCKET_DIR");
 
-            assert_eq!(socket_path(), PathBuf::from("/tmp/custom.sock"));
+            let config = EnvConfig::try_from_env().unwrap();
+            assert_eq!(
+                config.paths.ipc_socket_path(),
+                PathBuf::from("/tmp/custom.sock")
+            );
 
             restore_env("VOICE_INPUT_SOCKET_PATH", orig_path);
             restore_env("VOICE_INPUT_SOCKET_DIR", orig_dir);
@@ -199,7 +195,7 @@ mod tests {
             set_env("VOICE_INPUT_SOCKET_DIR", "/var/tmp");
 
             assert_eq!(
-                socket_path(),
+                EnvConfig::try_from_env().unwrap().paths.ipc_socket_path(),
                 PathBuf::from("/var/tmp").join(SOCKET_FILENAME)
             );
 

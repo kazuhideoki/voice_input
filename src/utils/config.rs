@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 //! グローバル環境変数設定
 //!
 //! アプリケーション全体で使用する環境変数を一元管理。
@@ -27,6 +29,8 @@ pub enum ConfigError {
     InvalidMaxDurationSecs { value: String },
     #[error("{name} must be either 'true' or 'false': {value}")]
     InvalidBooleanEnv { name: &'static str, value: String },
+    #[error("VOICE_INPUT_AUDIO_FORMAT must be either 'flac' or 'wav': {value}")]
+    InvalidAudioFormat { value: String },
 }
 
 /// OpenAI の文字起こしモデル
@@ -94,6 +98,62 @@ impl TranscriptionConfig {
 pub struct PathConfig {
     /// XDG Data Home ディレクトリ
     pub xdg_data_home: Option<PathBuf>,
+    /// IPC ソケットの絶対パス上書き
+    pub socket_path: Option<PathBuf>,
+    /// IPC ソケット配置ディレクトリ上書き
+    pub socket_dir: Option<PathBuf>,
+}
+
+impl PathConfig {
+    /// IPC ソケットパスを返す
+    pub fn ipc_socket_path(&self) -> PathBuf {
+        const SOCKET_FILENAME: &str = "voice_input.sock";
+        const DEFAULT_SOCKET_PATH: &str = "/tmp/voice_input.sock";
+
+        if let Some(path) = self.socket_path.as_ref() {
+            return path.clone();
+        }
+
+        if let Some(dir) = self.socket_dir.as_ref() {
+            return dir.join(SOCKET_FILENAME);
+        }
+
+        PathBuf::from(DEFAULT_SOCKET_PATH)
+    }
+}
+
+/// HTTP プロキシ設定
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxyConfig {
+    /// すべてのプロトコルに適用するプロキシ
+    pub all: Option<String>,
+    /// HTTPS 用プロキシ
+    pub https: Option<String>,
+    /// HTTP 用プロキシ
+    pub http: Option<String>,
+}
+
+/// 音声入力設定
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioConfig {
+    /// 優先入力デバイスの一覧
+    pub input_device_priorities: Vec<String>,
+    /// 録音フォーマット
+    pub preferred_format: PreferredAudioFormat,
+}
+
+/// 録音フォーマット
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreferredAudioFormat {
+    Flac,
+    Wav,
+}
+
+/// プロファイリング設定
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfilingConfig {
+    /// プロファイルログ出力を有効にする
+    pub enabled: bool,
 }
 
 /// 録音設定
@@ -110,8 +170,14 @@ pub struct EnvConfig {
     pub paths: PathConfig,
     /// OpenAI 転写設定
     pub transcription: TranscriptionConfig,
+    /// HTTP プロキシ設定
+    pub proxy: ProxyConfig,
+    /// 音声入力設定
+    pub audio: AudioConfig,
     /// 録音設定
     pub recording: RecordingConfig,
+    /// プロファイリング設定
+    pub profiling: ProfilingConfig,
 }
 
 impl EnvConfig {
@@ -129,6 +195,8 @@ impl EnvConfig {
         Ok(Self {
             paths: PathConfig {
                 xdg_data_home: non_empty_env("XDG_DATA_HOME").map(PathBuf::from),
+                socket_path: non_empty_env("VOICE_INPUT_SOCKET_PATH").map(PathBuf::from),
+                socket_dir: non_empty_env("VOICE_INPUT_SOCKET_DIR").map(PathBuf::from),
             },
             transcription: TranscriptionConfig {
                 openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
@@ -139,7 +207,19 @@ impl EnvConfig {
                     "VOICE_INPUT_LOW_CONFIDENCE_SELECTION",
                 )?,
             },
+            proxy: ProxyConfig {
+                all: non_empty_env_with_lowercase_fallback("ALL_PROXY"),
+                https: non_empty_env_with_lowercase_fallback("HTTPS_PROXY"),
+                http: non_empty_env_with_lowercase_fallback("HTTP_PROXY"),
+            },
+            audio: AudioConfig {
+                input_device_priorities: csv_env("INPUT_DEVICE_PRIORITY"),
+                preferred_format: PreferredAudioFormat::from_env()?,
+            },
             recording: RecordingConfig { max_duration_secs },
+            profiling: ProfilingConfig {
+                enabled: parse_bool_env("VOICE_INPUT_PROFILE")?,
+            },
         })
     }
 
@@ -217,6 +297,22 @@ fn non_empty_env(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn non_empty_env_with_lowercase_fallback(name: &str) -> Option<String> {
+    non_empty_env(name).or_else(|| non_empty_env(&name.to_ascii_lowercase()))
+}
+
+fn csv_env(name: &str) -> Vec<String> {
+    non_empty_env(name)
+        .map(|value| {
+            value
+                .split(',')
+                .map(|entry| entry.trim().to_string())
+                .filter(|entry| !entry.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn parse_bool_env(name: &'static str) -> Result<bool, ConfigError> {
     match std::env::var(name) {
         Ok(value) => match value.as_str() {
@@ -228,10 +324,30 @@ fn parse_bool_env(name: &'static str) -> Result<bool, ConfigError> {
     }
 }
 
+impl PreferredAudioFormat {
+    fn from_env() -> Result<Self, ConfigError> {
+        match non_empty_env("VOICE_INPUT_AUDIO_FORMAT") {
+            Some(value) => Self::parse(&value),
+            None => Ok(Self::Flac),
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, ConfigError> {
+        match value.to_ascii_lowercase().as_str() {
+            "flac" => Ok(Self::Flac),
+            "wav" => Ok(Self::Wav),
+            _ => Err(ConfigError::InvalidAudioFormat {
+                value: value.to_string(),
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ConfigError, EnvConfig, OpenAiTranscriptionModel, PathConfig, RecordingConfig, TEST_LOCK,
+        AudioConfig, ConfigError, EnvConfig, OpenAiTranscriptionModel, PathConfig,
+        PreferredAudioFormat, ProfilingConfig, ProxyConfig, RecordingConfig, TEST_LOCK,
         TranscriptionConfig,
     };
     use std::path::PathBuf;
@@ -274,6 +390,8 @@ mod tests {
         let config = EnvConfig {
             paths: PathConfig {
                 xdg_data_home: None,
+                socket_path: None,
+                socket_dir: None,
             },
             transcription: TranscriptionConfig {
                 openai_api_key: None,
@@ -282,9 +400,19 @@ mod tests {
                 log_path: None,
                 low_confidence_selection_enabled: false,
             },
+            proxy: ProxyConfig {
+                all: None,
+                https: None,
+                http: None,
+            },
+            audio: AudioConfig {
+                input_device_priorities: Vec::new(),
+                preferred_format: PreferredAudioFormat::Flac,
+            },
             recording: RecordingConfig {
                 max_duration_secs: 30,
             },
+            profiling: ProfilingConfig { enabled: false },
         };
 
         assert!(config.transcription.streaming_enabled);
@@ -296,6 +424,8 @@ mod tests {
         let config = EnvConfig {
             paths: PathConfig {
                 xdg_data_home: None,
+                socket_path: None,
+                socket_dir: None,
             },
             transcription: TranscriptionConfig {
                 openai_api_key: None,
@@ -304,9 +434,19 @@ mod tests {
                 log_path: None,
                 low_confidence_selection_enabled: false,
             },
+            proxy: ProxyConfig {
+                all: None,
+                https: None,
+                http: None,
+            },
+            audio: AudioConfig {
+                input_device_priorities: Vec::new(),
+                preferred_format: PreferredAudioFormat::Flac,
+            },
             recording: RecordingConfig {
                 max_duration_secs: 30,
             },
+            profiling: ProfilingConfig { enabled: false },
         };
 
         assert_eq!(config.recommended_transcription_parallelism(), 1);
@@ -318,6 +458,8 @@ mod tests {
         let config = EnvConfig {
             paths: PathConfig {
                 xdg_data_home: None,
+                socket_path: None,
+                socket_dir: None,
             },
             transcription: TranscriptionConfig {
                 openai_api_key: None,
@@ -326,9 +468,19 @@ mod tests {
                 log_path: None,
                 low_confidence_selection_enabled: false,
             },
+            proxy: ProxyConfig {
+                all: None,
+                https: None,
+                http: None,
+            },
+            audio: AudioConfig {
+                input_device_priorities: Vec::new(),
+                preferred_format: PreferredAudioFormat::Flac,
+            },
             recording: RecordingConfig {
                 max_duration_secs: 30,
             },
+            profiling: ProfilingConfig { enabled: false },
         };
 
         assert_eq!(config.recommended_transcription_parallelism(), 2);
@@ -340,6 +492,8 @@ mod tests {
         let config = EnvConfig {
             paths: PathConfig {
                 xdg_data_home: None,
+                socket_path: None,
+                socket_dir: None,
             },
             transcription: TranscriptionConfig {
                 openai_api_key: None,
@@ -348,9 +502,19 @@ mod tests {
                 log_path: None,
                 low_confidence_selection_enabled: false,
             },
+            proxy: ProxyConfig {
+                all: None,
+                https: None,
+                http: None,
+            },
+            audio: AudioConfig {
+                input_device_priorities: Vec::new(),
+                preferred_format: PreferredAudioFormat::Flac,
+            },
             recording: RecordingConfig {
                 max_duration_secs: 30,
             },
+            profiling: ProfilingConfig { enabled: false },
         };
 
         assert_eq!(config.transcription.log_path, None);
@@ -362,6 +526,8 @@ mod tests {
         let config = EnvConfig {
             paths: PathConfig {
                 xdg_data_home: None,
+                socket_path: None,
+                socket_dir: None,
             },
             transcription: TranscriptionConfig {
                 openai_api_key: None,
@@ -370,9 +536,19 @@ mod tests {
                 log_path: Some(PathBuf::from("/tmp/transcription-log.ndjson")),
                 low_confidence_selection_enabled: false,
             },
+            proxy: ProxyConfig {
+                all: None,
+                https: None,
+                http: None,
+            },
+            audio: AudioConfig {
+                input_device_priorities: Vec::new(),
+                preferred_format: PreferredAudioFormat::Flac,
+            },
             recording: RecordingConfig {
                 max_duration_secs: 30,
             },
+            profiling: ProfilingConfig { enabled: false },
         };
 
         assert_eq!(
@@ -404,6 +580,8 @@ mod tests {
         let config = EnvConfig {
             paths: PathConfig {
                 xdg_data_home: None,
+                socket_path: None,
+                socket_dir: None,
             },
             transcription: TranscriptionConfig {
                 openai_api_key: None,
@@ -412,9 +590,19 @@ mod tests {
                 log_path: None,
                 low_confidence_selection_enabled: false,
             },
+            proxy: ProxyConfig {
+                all: None,
+                https: None,
+                http: None,
+            },
+            audio: AudioConfig {
+                input_device_priorities: Vec::new(),
+                preferred_format: PreferredAudioFormat::Flac,
+            },
             recording: RecordingConfig {
                 max_duration_secs: 30,
             },
+            profiling: ProfilingConfig { enabled: false },
         };
 
         assert!(!config.transcription.low_confidence_selection_enabled);
@@ -599,6 +787,210 @@ mod tests {
 
         unsafe {
             std::env::remove_var("OPENAI_TRANSCRIBE_STREAMING");
+        }
+    }
+
+    /// IPCソケット設定は環境変数から優先順に解決される
+    #[test]
+    fn ipc_socket_path_is_loaded_from_environment() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_SOCKET_PATH", "/tmp/voice_input-test.sock");
+            std::env::set_var("VOICE_INPUT_SOCKET_DIR", "/tmp/ignored-dir");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(
+            config.paths.socket_path,
+            Some(PathBuf::from("/tmp/voice_input-test.sock"))
+        );
+        assert_eq!(
+            config.paths.ipc_socket_path(),
+            PathBuf::from("/tmp/voice_input-test.sock")
+        );
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_SOCKET_PATH");
+            std::env::remove_var("VOICE_INPUT_SOCKET_DIR");
+        }
+    }
+
+    /// IPCソケットディレクトリ設定はパス未指定時の配置先として使われる
+    #[test]
+    fn ipc_socket_dir_is_loaded_from_environment() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_SOCKET_PATH");
+            std::env::set_var("VOICE_INPUT_SOCKET_DIR", "/var/tmp");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(config.paths.socket_path, None);
+        assert_eq!(config.paths.socket_dir, Some(PathBuf::from("/var/tmp")));
+        assert_eq!(
+            config.paths.ipc_socket_path(),
+            PathBuf::from("/var/tmp/voice_input.sock")
+        );
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_SOCKET_DIR");
+        }
+    }
+
+    /// 入力デバイス優先順はカンマ区切り環境変数から読み込める
+    #[test]
+    fn input_device_priorities_are_loaded_from_environment() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var(
+                "INPUT_DEVICE_PRIORITY",
+                "Built-in Microphone, Yeti X ,  ,External Mic",
+            );
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(
+            config.audio.input_device_priorities,
+            vec![
+                "Built-in Microphone".to_string(),
+                "Yeti X".to_string(),
+                "External Mic".to_string()
+            ]
+        );
+
+        unsafe {
+            std::env::remove_var("INPUT_DEVICE_PRIORITY");
+        }
+    }
+
+    /// 録音フォーマットは環境変数から読み込める
+    #[test]
+    fn preferred_audio_format_is_loaded_from_environment() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_AUDIO_FORMAT", "wav");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(config.audio.preferred_format, PreferredAudioFormat::Wav);
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_AUDIO_FORMAT");
+        }
+    }
+
+    /// HTTPプロキシ設定は大文字環境変数から読み込める
+    #[test]
+    fn proxy_settings_are_loaded_from_uppercase_environment() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("ALL_PROXY", "socks5://127.0.0.1:1080");
+            std::env::set_var("HTTPS_PROXY", "http://127.0.0.1:8443");
+            std::env::set_var("HTTP_PROXY", "http://127.0.0.1:8080");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(config.proxy.all.as_deref(), Some("socks5://127.0.0.1:1080"));
+        assert_eq!(config.proxy.https.as_deref(), Some("http://127.0.0.1:8443"));
+        assert_eq!(config.proxy.http.as_deref(), Some("http://127.0.0.1:8080"));
+
+        unsafe {
+            std::env::remove_var("ALL_PROXY");
+            std::env::remove_var("HTTPS_PROXY");
+            std::env::remove_var("HTTP_PROXY");
+        }
+    }
+
+    /// HTTPプロキシ設定は小文字環境変数も受け入れる
+    #[test]
+    fn proxy_settings_accept_lowercase_environment_names() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::remove_var("ALL_PROXY");
+            std::env::remove_var("HTTPS_PROXY");
+            std::env::remove_var("HTTP_PROXY");
+            std::env::set_var("all_proxy", "socks5://127.0.0.1:1081");
+            std::env::set_var("https_proxy", "http://127.0.0.1:8444");
+            std::env::set_var("http_proxy", "http://127.0.0.1:8081");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(config.proxy.all.as_deref(), Some("socks5://127.0.0.1:1081"));
+        assert_eq!(config.proxy.https.as_deref(), Some("http://127.0.0.1:8444"));
+        assert_eq!(config.proxy.http.as_deref(), Some("http://127.0.0.1:8081"));
+
+        unsafe {
+            std::env::remove_var("all_proxy");
+            std::env::remove_var("https_proxy");
+            std::env::remove_var("http_proxy");
+        }
+    }
+
+    /// プロファイル設定は環境変数から読み込める
+    #[test]
+    fn profiling_flag_is_loaded_from_environment() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_PROFILE", "true");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert!(config.profiling.enabled);
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_PROFILE");
+        }
+    }
+
+    /// プロファイル設定はtrue/false以外を許可しない
+    #[test]
+    fn try_from_env_rejects_invalid_profile_flag() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_PROFILE", "ture");
+        }
+
+        let result = EnvConfig::try_from_env();
+
+        assert_eq!(
+            result,
+            Err(ConfigError::InvalidBooleanEnv {
+                name: "VOICE_INPUT_PROFILE",
+                value: "ture".to_string(),
+            })
+        );
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_PROFILE");
+        }
+    }
+
+    /// 録音フォーマットは未対応値を拒否する
+    #[test]
+    fn try_from_env_rejects_invalid_audio_format() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_AUDIO_FORMAT", "mp3");
+        }
+
+        let result = EnvConfig::try_from_env();
+
+        assert_eq!(
+            result,
+            Err(ConfigError::InvalidAudioFormat {
+                value: "mp3".to_string(),
+            })
+        );
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_AUDIO_FORMAT");
         }
     }
 }

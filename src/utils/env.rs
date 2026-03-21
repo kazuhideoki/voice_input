@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)]
+
 /// Environment loading helpers.
 ///
 /// Loads environment variables from `.env` if present, or from the file

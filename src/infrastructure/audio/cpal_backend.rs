@@ -238,14 +238,7 @@ impl<T: Clone> InputSetupCache<T> {
 }
 
 fn input_device_priorities() -> Vec<String> {
-    use std::env;
-
-    env::var("INPUT_DEVICE_PRIORITY")
-        .unwrap_or_default()
-        .split(',')
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .collect()
+    EnvConfig::get().audio.input_device_priorities.clone()
 }
 
 fn select_input_device_with_priorities(
@@ -534,21 +527,9 @@ impl CpalAudioBackend {
     }
 
     fn preferred_format() -> AudioFormat {
-        let cfg = EnvConfig::get();
-        match std::env::var("VOICE_INPUT_AUDIO_FORMAT")
-            .ok()
-            .or_else(|| {
-                cfg.transcription
-                    .openai_api_key
-                    .as_ref()
-                    .map(|_| "flac".to_string())
-            })
-            .unwrap_or_else(|| "flac".to_string())
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "wav" => AudioFormat::Wav,
-            _ => AudioFormat::Flac,
+        match EnvConfig::get().audio.preferred_format {
+            crate::utils::config::PreferredAudioFormat::Wav => AudioFormat::Wav,
+            crate::utils::config::PreferredAudioFormat::Flac => AudioFormat::Flac,
         }
     }
 

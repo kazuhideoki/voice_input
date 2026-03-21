@@ -6,6 +6,7 @@ mod assert_cmd {
     }
 
     impl CommandCargoExt for Command {
+        #[allow(clippy::disallowed_methods)]
         fn cargo_bin(name: &str) -> Self {
             let var = format!("CARGO_BIN_EXE_{name}");
             let path = std::env::var(&var).unwrap_or_else(|_| {

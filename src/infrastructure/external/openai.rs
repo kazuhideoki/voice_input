@@ -444,31 +444,22 @@ fn find_frame_separator(buffer: &[u8]) -> Option<(usize, usize)> {
 
 fn build_http_client() -> Result<Client, reqwest::Error> {
     let mut builder = Client::builder().no_proxy();
+    let config = EnvConfig::get();
+    let proxy = &config.proxy;
 
-    if let Some(proxy) = proxy_env("ALL_PROXY") {
-        builder = builder.proxy(Proxy::all(&proxy)?);
+    if let Some(all_proxy) = proxy.all.as_ref() {
+        builder = builder.proxy(Proxy::all(all_proxy)?);
     } else {
-        if let Some(proxy) = proxy_env("HTTPS_PROXY") {
-            builder = builder.proxy(Proxy::https(&proxy)?);
+        if let Some(https_proxy) = proxy.https.as_ref() {
+            builder = builder.proxy(Proxy::https(https_proxy)?);
         }
 
-        if let Some(proxy) = proxy_env("HTTP_PROXY") {
-            builder = builder.proxy(Proxy::http(&proxy)?);
+        if let Some(http_proxy) = proxy.http.as_ref() {
+            builder = builder.proxy(Proxy::http(http_proxy)?);
         }
     }
 
     builder.build()
-}
-
-fn proxy_env(var: &str) -> Option<String> {
-    std::env::var(var)
-        .ok()
-        .or_else(|| {
-            let lowercase = var.to_ascii_lowercase();
-            std::env::var(&lowercase).ok()
-        })
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 // === Unit tests ==========================================================
@@ -496,9 +487,7 @@ mod tests {
 
         // 環境変数またはテスト設定でAPIキーが設定されていれば成功
         // そうでなければ失敗
-        if std::env::var("OPENAI_API_KEY").is_ok()
-            || EnvConfig::get().transcription.openai_api_key.is_some()
-        {
+        if EnvConfig::get().transcription.openai_api_key.is_some() {
             assert!(client.is_ok());
         } else {
             assert!(client.is_err());
@@ -512,9 +501,7 @@ mod tests {
         EnvConfig::test_init();
 
         // OpenAI APIキーが設定されていない場合はテストをスキップ
-        if EnvConfig::get().transcription.openai_api_key.is_none()
-            && std::env::var("OPENAI_API_KEY").is_err()
-        {
+        if EnvConfig::get().transcription.openai_api_key.is_none() {
             println!("Skipping test: OPENAI_API_KEY not set");
             return;
         }
@@ -558,9 +545,7 @@ mod tests {
         EnvConfig::test_init();
 
         // OpenAI APIキーが設定されていない場合はテストをスキップ
-        if EnvConfig::get().transcription.openai_api_key.is_none()
-            && std::env::var("OPENAI_API_KEY").is_err()
-        {
+        if EnvConfig::get().transcription.openai_api_key.is_none() {
             println!("Skipping test: OPENAI_API_KEY not set");
             return;
         }

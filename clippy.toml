@@ -1,0 +1,10 @@
+disallowed-methods = [
+  { path = "std::env::var", reason = "環境変数の直接読込は禁止。src/utils/config.rs または src/utils/env.rs 経由で扱うこと" },
+  { path = "std::env::var_os", reason = "環境変数の直接読込は禁止。src/utils/config.rs または src/utils/env.rs 経由で扱うこと" },
+  { path = "std::env::vars", reason = "環境変数の直接読込は禁止。src/utils/config.rs または src/utils/env.rs 経由で扱うこと" },
+  { path = "std::env::vars_os", reason = "環境変数の直接読込は禁止。src/utils/config.rs または src/utils/env.rs 経由で扱うこと" },
+  { path = "dotenvy::var", reason = "環境変数の直接読込は禁止。src/utils/config.rs または src/utils/env.rs 経由で扱うこと" },
+  { path = "dotenvy::var_os", reason = "環境変数の直接読込は禁止。src/utils/config.rs または src/utils/env.rs 経由で扱うこと" },
+  { path = "dotenvy::vars", reason = "環境変数の直接読込は禁止。src/utils/config.rs または src/utils/env.rs 経由で扱うこと" },
+  { path = "dotenvy::vars_os", reason = "環境変数の直接読込は禁止。src/utils/config.rs または src/utils/env.rs 経由で扱うこと" },
+]
