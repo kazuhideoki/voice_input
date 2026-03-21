@@ -9,6 +9,37 @@ use reqwest::{Client, Proxy, multipart};
 use serde::Deserialize;
 use tokio::sync::mpsc;
 
+#[derive(Debug, thiserror::Error)]
+pub enum OpenAiError {
+    #[error("OPENAI_API_KEY environment variable is not set")]
+    MissingApiKey,
+    #[error("failed to build HTTP client")]
+    HttpClientBuild(#[source] reqwest::Error),
+    #[error("failed to create multipart body")]
+    Multipart(#[source] reqwest::Error),
+    #[error("failed to send request")]
+    Request(#[source] reqwest::Error),
+    #[error("failed to read response body")]
+    ResponseBody(#[source] reqwest::Error),
+    #[error("OpenAI API request failed with status {status}: {body}")]
+    ApiStatus {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    #[error("failed to parse response JSON")]
+    ResponseParse(#[source] serde_json::Error),
+    #[error("failed to decode streaming frame")]
+    StreamingFrameUtf8(#[source] std::str::Utf8Error),
+    #[error("failed to parse streaming event payload")]
+    StreamingEventPayload(#[source] serde_json::Error),
+    #[error("failed to parse streaming delta")]
+    StreamingDelta(#[source] serde_json::Error),
+    #[error("failed to parse streaming completion")]
+    StreamingCompletion(#[source] serde_json::Error),
+    #[error("streaming response completed without final text")]
+    MissingFinalText,
+}
+
 /// STT API のレスポンス JSON。
 #[derive(Debug, Deserialize)]
 struct TranscriptionResponse {
@@ -66,18 +97,17 @@ pub struct OpenAiClient {
 
 impl OpenAiClient {
     /// Create a new OpenAI client
-    pub fn new() -> Result<Self, String> {
+    pub fn new() -> Result<Self, OpenAiError> {
         let config = EnvConfig::get();
         let api_key = config
             .transcription
             .openai_api_key
             .clone()
-            .ok_or("OPENAI_API_KEY environment variable is not set")?;
+            .ok_or(OpenAiError::MissingApiKey)?;
 
         let model = config.transcription.model.as_str().to_string();
 
-        let client =
-            build_http_client().map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+        let client = build_http_client().map_err(OpenAiError::HttpClientBuild)?;
 
         Ok(Self {
             api_key,
@@ -90,7 +120,7 @@ impl OpenAiClient {
     pub async fn transcribe_audio(
         &self,
         audio_data: AudioData,
-    ) -> Result<TranscriptionOutput, String> {
+    ) -> Result<TranscriptionOutput, OpenAiError> {
         if profiling::enabled() {
             profiling::log_point(
                 "openai.request",
@@ -106,7 +136,7 @@ impl OpenAiClient {
         let part = multipart::Part::bytes(audio_data.bytes)
             .file_name(audio_data.file_name)
             .mime_str(audio_data.mime_type)
-            .map_err(|e| format!("Failed to create multipart: {}", e))?;
+            .map_err(OpenAiError::Multipart)?;
 
         // 既存の転写処理を実行
         self.transcribe_with_part(part, None).await
@@ -117,7 +147,7 @@ impl OpenAiClient {
         &self,
         audio_data: AudioData,
         event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
-    ) -> Result<TranscriptionOutput, String> {
+    ) -> Result<TranscriptionOutput, OpenAiError> {
         if profiling::enabled() {
             profiling::log_point(
                 "openai.streaming_request",
@@ -133,7 +163,7 @@ impl OpenAiClient {
         let part = multipart::Part::bytes(audio_data.bytes)
             .file_name(audio_data.file_name)
             .mime_str(audio_data.mime_type)
-            .map_err(|e| format!("Failed to create multipart: {}", e))?;
+            .map_err(OpenAiError::Multipart)?;
 
         self.transcribe_streaming_with_part(part, None, event_tx)
             .await
@@ -144,7 +174,7 @@ impl OpenAiClient {
         &self,
         file_part: multipart::Part,
         prompt: Option<&str>,
-    ) -> Result<TranscriptionOutput, String> {
+    ) -> Result<TranscriptionOutput, OpenAiError> {
         let overall_timer = profiling::Timer::start("openai.transcribe_total");
         let url = "https://api.openai.com/v1/audio/transcriptions";
 
@@ -171,18 +201,12 @@ impl OpenAiClient {
             .multipart(form);
 
         let send_timer = profiling::Timer::start("openai.send");
-        let response = request
-            .send()
-            .await
-            .map_err(|e| format!("Failed to send request: {}", e))?;
+        let response = request.send().await.map_err(OpenAiError::Request)?;
         send_timer.log();
 
         let status = response.status();
         let read_timer = profiling::Timer::start("openai.read_body");
-        let body = response
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read response: {}", e))?;
+        let body = response.text().await.map_err(OpenAiError::ResponseBody)?;
         if profiling::enabled() {
             read_timer.log_with(&format!("status={} bytes={}", status, body.len()));
         } else {
@@ -195,15 +219,12 @@ impl OpenAiClient {
             } else {
                 overall_timer.log();
             }
-            return Err(format!(
-                "API request failed with status {}: {}",
-                status, body
-            ));
+            return Err(OpenAiError::ApiStatus { status, body });
         }
 
         let parse_timer = profiling::Timer::start("openai.parse_json");
         let transcription: TranscriptionResponse =
-            serde_json::from_str(&body).map_err(|e| format!("Failed to parse response: {}", e))?;
+            serde_json::from_str(&body).map_err(OpenAiError::ResponseParse)?;
         parse_timer.log();
         if profiling::enabled() {
             overall_timer.log_with(&format!(
@@ -225,7 +246,7 @@ impl OpenAiClient {
         file_part: multipart::Part,
         prompt: Option<&str>,
         event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
-    ) -> Result<TranscriptionOutput, String> {
+    ) -> Result<TranscriptionOutput, OpenAiError> {
         let overall_timer = profiling::Timer::start("openai.streaming_transcribe_total");
         let url = "https://api.openai.com/v1/audio/transcriptions";
 
@@ -252,34 +273,24 @@ impl OpenAiClient {
             .multipart(form)
             .send()
             .await
-            .map_err(|e| format!("Failed to send request: {}", e))?;
+            .map_err(OpenAiError::Request)?;
         send_timer.log();
 
         let status = response.status();
         if !status.is_success() {
-            let body = response
-                .text()
-                .await
-                .map_err(|e| format!("Failed to read response: {}", e))?;
+            let body = response.text().await.map_err(OpenAiError::ResponseBody)?;
             if profiling::enabled() {
                 overall_timer.log_with(&format!("status={}", status));
             } else {
                 overall_timer.log();
             }
-            return Err(format!(
-                "API request failed with status {}: {}",
-                status, body
-            ));
+            return Err(OpenAiError::ApiStatus { status, body });
         }
 
         let mut parser = StreamingEventParser::default();
         let mut final_output = None;
 
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|e| format!("Failed to read response chunk: {}", e))?
-        {
+        while let Some(chunk) = response.chunk().await.map_err(OpenAiError::ResponseBody)? {
             for event in parser.push_chunk(&chunk)? {
                 match event {
                     StreamingTranscriptionEvent::Delta(delta) => {
@@ -303,7 +314,7 @@ impl OpenAiClient {
             }
         }
 
-        let output = final_output.ok_or("Streaming response completed without final text")?;
+        let output = final_output.ok_or(OpenAiError::MissingFinalText)?;
 
         if profiling::enabled() {
             overall_timer.log_with(&format!("status={} text_len={}", status, output.text.len()));
@@ -321,12 +332,15 @@ struct StreamingEventParser {
 }
 
 impl StreamingEventParser {
-    fn push_chunk(&mut self, chunk: &[u8]) -> Result<Vec<StreamingTranscriptionEvent>, String> {
+    fn push_chunk(
+        &mut self,
+        chunk: &[u8],
+    ) -> Result<Vec<StreamingTranscriptionEvent>, OpenAiError> {
         self.buffer.extend_from_slice(chunk);
         self.drain_complete_events()
     }
 
-    fn finish(&mut self) -> Result<Vec<StreamingTranscriptionEvent>, String> {
+    fn finish(&mut self) -> Result<Vec<StreamingTranscriptionEvent>, OpenAiError> {
         if self.buffer.iter().all(|byte| byte.is_ascii_whitespace()) {
             return Ok(Vec::new());
         }
@@ -335,7 +349,7 @@ impl StreamingEventParser {
         parse_streaming_frame(&remainder).map(|event| event.into_iter().collect())
     }
 
-    fn drain_complete_events(&mut self) -> Result<Vec<StreamingTranscriptionEvent>, String> {
+    fn drain_complete_events(&mut self) -> Result<Vec<StreamingTranscriptionEvent>, OpenAiError> {
         let mut events = Vec::new();
 
         while let Some((separator, separator_len)) = find_frame_separator(&self.buffer) {
@@ -351,16 +365,16 @@ impl StreamingEventParser {
 }
 
 #[cfg(test)]
-fn parse_streaming_events(body: &str) -> Result<Vec<StreamingTranscriptionEvent>, String> {
+fn parse_streaming_events(body: &str) -> Result<Vec<StreamingTranscriptionEvent>, OpenAiError> {
     let mut parser = StreamingEventParser::default();
     let mut events = parser.push_chunk(body.as_bytes())?;
     events.extend(parser.finish()?);
     Ok(events)
 }
 
-fn parse_streaming_frame(frame: &[u8]) -> Result<Option<StreamingTranscriptionEvent>, String> {
+fn parse_streaming_frame(frame: &[u8]) -> Result<Option<StreamingTranscriptionEvent>, OpenAiError> {
     let normalized = std::str::from_utf8(frame)
-        .map_err(|e| format!("Failed to decode streaming frame: {}", e))?
+        .map_err(OpenAiError::StreamingFrameUtf8)?
         .replace("\r\n", "\n");
     let mut event_name = None;
     let mut data_lines = Vec::new();
@@ -382,8 +396,8 @@ fn parse_streaming_frame(frame: &[u8]) -> Result<Option<StreamingTranscriptionEv
         return Ok(None);
     }
 
-    let envelope: StreamingEventEnvelope = serde_json::from_str(&data)
-        .map_err(|e| format!("Failed to parse streaming event payload: {}", e))?;
+    let envelope: StreamingEventEnvelope =
+        serde_json::from_str(&data).map_err(OpenAiError::StreamingEventPayload)?;
     let Some(event_name) = event_name.or(envelope.event_type.clone()) else {
         return Ok(None);
     };
@@ -392,8 +406,8 @@ fn parse_streaming_frame(frame: &[u8]) -> Result<Option<StreamingTranscriptionEv
         "transcript.text.delta" => match envelope.delta {
             Some(delta) => Ok(Some(StreamingTranscriptionEvent::Delta(delta))),
             None => {
-                let payload: StreamingDeltaResponse = serde_json::from_str(&data)
-                    .map_err(|e| format!("Failed to parse streaming delta: {}", e))?;
+                let payload: StreamingDeltaResponse =
+                    serde_json::from_str(&data).map_err(OpenAiError::StreamingDelta)?;
                 Ok(Some(StreamingTranscriptionEvent::Delta(payload.delta)))
             }
         },
@@ -405,8 +419,8 @@ fn parse_streaming_frame(frame: &[u8]) -> Result<Option<StreamingTranscriptionEv
                 },
             ))),
             None => {
-                let payload: StreamingCompletedResponse = serde_json::from_str(&data)
-                    .map_err(|e| format!("Failed to parse streaming completion: {}", e))?;
+                let payload: StreamingCompletedResponse =
+                    serde_json::from_str(&data).map_err(OpenAiError::StreamingCompletion)?;
                 Ok(Some(StreamingTranscriptionEvent::Completed(
                     TranscriptionOutput {
                         text: payload.text,
@@ -490,7 +504,7 @@ mod tests {
         if EnvConfig::get().transcription.openai_api_key.is_some() {
             assert!(client.is_ok());
         } else {
-            assert!(client.is_err());
+            assert!(matches!(client, Err(OpenAiError::MissingApiKey)));
         }
     }
 

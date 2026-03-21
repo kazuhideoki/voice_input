@@ -1,5 +1,5 @@
-use super::AudioBackend;
 use super::encoder::{self, AudioFormat};
+use super::{AudioBackend, AudioBackendError};
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use audioadapter_buffers::SizeError;
@@ -14,7 +14,6 @@ use rubato::{
 use std::{
     borrow::Cow,
     error::Error,
-    fmt,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -70,8 +69,9 @@ const MIN_RESAMPLE_FRAMES: usize = 256;
 const INPUT_SETUP_REVALIDATION_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Audio processing errors
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum AudioError {
+    #[error("PCM data too large: {0} bytes exceeds u32 max")]
     DataTooLarge(usize),
 }
 
@@ -85,43 +85,20 @@ enum AudioResampleError {
     Buffer(#[from] SizeError),
 }
 
-impl fmt::Display for AudioError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AudioError::DataTooLarge(size) => {
-                write!(f, "PCM data too large: {} bytes exceeds u32 max", size)
-            }
-        }
-    }
-}
-
-impl Error for AudioError {}
-
 /// CpalAudioBackend 向けのエラー型（public APIの意味が伝わるメッセージ）
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum CpalBackendError {
+    #[error("recording is already in progress")]
     AlreadyRecording,
+    #[error("no input device available (check INPUT_DEVICE_PRIORITY)")]
     NoInputDevice,
+    #[error("unsupported sample format")]
     UnsupportedSampleFormat,
+    #[error("not currently recording")]
     NotRecording,
+    #[error("recording state not set")]
     RecordingStateNotSet,
 }
-
-impl fmt::Display for CpalBackendError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CpalBackendError::AlreadyRecording => write!(f, "recording is already in progress"),
-            CpalBackendError::NoInputDevice => {
-                write!(f, "no input device available (check INPUT_DEVICE_PRIORITY)")
-            }
-            CpalBackendError::UnsupportedSampleFormat => write!(f, "unsupported sample format"),
-            CpalBackendError::NotRecording => write!(f, "not currently recording"),
-            CpalBackendError::RecordingStateNotSet => write!(f, "recording state not set"),
-        }
-    }
-}
-
-impl Error for CpalBackendError {}
 
 /// サンプルフォーマット変換トレイト
 pub trait Sample {
@@ -522,8 +499,12 @@ impl CpalAudioBackend {
         Ok(input_setup)
     }
 
-    pub fn warm_up(&self) -> Result<(), Box<dyn Error>> {
-        self.ensure_input_stream().map(|_| ())
+    pub fn warm_up(&self) -> Result<(), AudioBackendError> {
+        self.ensure_input_stream()
+            .map(|_| ())
+            .map_err(|error| AudioBackendError::StreamOperation {
+                message: error.to_string(),
+            })
     }
 
     fn preferred_format() -> AudioFormat {
@@ -966,12 +947,16 @@ impl CpalAudioBackend {
 
 impl AudioBackend for CpalAudioBackend {
     /// 録音ストリームを開始します。
-    fn start_recording(&self) -> Result<(), Box<dyn Error>> {
+    fn start_recording(&self) -> Result<(), AudioBackendError> {
         if self.is_recording() {
             return Err(CpalBackendError::AlreadyRecording.into());
         }
 
-        let input_setup = self.ensure_input_stream()?;
+        let input_setup =
+            self.ensure_input_stream()
+                .map_err(|error| AudioBackendError::StreamOperation {
+                    message: error.to_string(),
+                })?;
         let config: StreamConfig = input_setup.supported_config.clone().into();
         let sample_rate = config.sample_rate;
         let channels = config.channels;
@@ -990,7 +975,7 @@ impl AudioBackend for CpalAudioBackend {
     }
 
     /// 録音を停止し、音声データを返します。
-    fn stop_recording(&self) -> Result<AudioData, Box<dyn Error>> {
+    fn stop_recording(&self) -> Result<AudioData, AudioBackendError> {
         let overall_timer = profiling::Timer::start("audio.stop_recording");
         if !self.is_recording() {
             return Err(CpalBackendError::NotRecording.into());
@@ -1046,7 +1031,10 @@ impl AudioBackend for CpalAudioBackend {
 
         if processed.sample_rate != TARGET_SAMPLE_RATE {
             let resample_timer = profiling::Timer::start("audio.resample_16khz");
-            let resampled = Self::resample_to_16khz(&processed.samples, processed.sample_rate)?;
+            let resampled = Self::resample_to_16khz(&processed.samples, processed.sample_rate)
+                .map_err(|error| AudioBackendError::Processing {
+                    message: error.to_string(),
+                })?;
             processed = ProcessedAudio {
                 samples: Cow::Owned(resampled.samples),
                 sample_rate: resampled.sample_rate,

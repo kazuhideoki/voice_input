@@ -2,10 +2,25 @@
 //! `voice_input` CLI ↔ `voice_inputd` デーモン間の通信で利用します。
 use crate::utils::config::EnvConfig;
 use serde::{Deserialize, Serialize};
-use std::{
-    error::Error,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, thiserror::Error)]
+pub enum IpcError {
+    #[error("failed to build IPC runtime")]
+    Runtime(#[source] std::io::Error),
+    #[error("daemon socket not found")]
+    DaemonSocketNotFound,
+    #[error("failed to connect to daemon")]
+    Connect(#[source] std::io::Error),
+    #[error("failed to send IPC command")]
+    Send(#[source] tokio_util::codec::LinesCodecError),
+    #[error("failed to serialize IPC command")]
+    Serialize(#[source] serde_json::Error),
+    #[error("failed to decode IPC response")]
+    Deserialize(#[source] serde_json::Error),
+    #[error("no response from daemon")]
+    NoResponse,
+}
 
 #[cfg(test)]
 const SOCKET_FILENAME: &str = "voice_input.sock";
@@ -79,30 +94,34 @@ impl From<AudioDataDto> for AudioData {
 }
 
 /// コマンドを送信して `IpcResp` を取得する同期ユーティリティ。
-pub fn send_cmd(cmd: &IpcCmd) -> Result<IpcResp, Box<dyn Error>> {
+pub fn send_cmd(cmd: &IpcCmd) -> Result<IpcResp, IpcError> {
     use futures::{SinkExt, StreamExt};
     use tokio::net::UnixStream;
     use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()?
+        .build()
+        .map_err(IpcError::Runtime)?
         .block_on(async {
             let path = socket_path();
             if !Path::new(&path).exists() {
-                return Err("daemon socket not found".into());
+                return Err(IpcError::DaemonSocketNotFound);
             }
 
-            let stream = UnixStream::connect(path).await?;
+            let stream = UnixStream::connect(path).await.map_err(IpcError::Connect)?;
             let (r, w) = stream.into_split();
             let mut writer = FramedWrite::new(w, LinesCodec::new());
             let mut reader = FramedRead::new(r, LinesCodec::new());
 
-            writer.send(serde_json::to_string(cmd)?).await?;
+            writer
+                .send(serde_json::to_string(cmd).map_err(IpcError::Serialize)?)
+                .await
+                .map_err(IpcError::Send)?;
             if let Some(Ok(line)) = reader.next().await {
-                Ok(serde_json::from_str::<IpcResp>(&line)?)
+                serde_json::from_str::<IpcResp>(&line).map_err(IpcError::Deserialize)
             } else {
-                Err("no response from daemon".into())
+                Err(IpcError::NoResponse)
             }
         })
 }

@@ -7,42 +7,24 @@ use enigo::{
     Direction::{Click, Press, Release},
     Enigo, Key, Keyboard, Settings,
 };
-use std::fmt;
 use tokio::sync::{mpsc, oneshot};
 
 /// 常駐ワーカー用のテキスト入力エラー
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TextInputWorkerError {
     /// Enigo 初期化失敗
+    #[error("Enigo initialization failed: {0}")]
     EnigoInitFailed(String),
     /// ワーカー起動失敗
+    #[error("Text input worker spawn failed: {0}")]
     WorkerSpawnFailed(String),
     /// 入力実行失敗
+    #[error("Text input failed: {0}")]
     InputFailed(String),
     /// ワーカーとのチャネルが切断された
+    #[error("Text input channel closed: {0}")]
     ChannelClosed(String),
 }
-
-impl fmt::Display for TextInputWorkerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TextInputWorkerError::EnigoInitFailed(msg) => {
-                write!(f, "Enigo initialization failed: {}", msg)
-            }
-            TextInputWorkerError::WorkerSpawnFailed(msg) => {
-                write!(f, "Text input worker spawn failed: {}", msg)
-            }
-            TextInputWorkerError::InputFailed(msg) => {
-                write!(f, "Text input failed: {}", msg)
-            }
-            TextInputWorkerError::ChannelClosed(msg) => {
-                write!(f, "Text input channel closed: {}", msg)
-            }
-        }
-    }
-}
-
-impl std::error::Error for TextInputWorkerError {}
 
 /// ワーカーへ送る入力リクエスト
 #[derive(Debug)]

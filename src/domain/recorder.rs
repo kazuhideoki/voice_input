@@ -1,5 +1,4 @@
-use crate::infrastructure::audio::{AudioBackend, AudioData};
-use std::error::Error;
+use crate::infrastructure::audio::{AudioBackend, AudioBackendError, AudioData};
 
 /// `AudioBackend` の薄いラッパ。バックエンド選択を抽象化し、ドメイン層に録音 I/F を提供する。
 pub struct Recorder<T: AudioBackend> {
@@ -13,12 +12,12 @@ impl<T: AudioBackend> Recorder<T> {
     }
 
     /// 録音を開始します。
-    pub fn start(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn start(&mut self) -> Result<(), AudioBackendError> {
         self.backend.start_recording()
     }
 
     /// 録音を停止し、音声データを返します。
-    pub fn stop(&mut self) -> Result<AudioData, Box<dyn Error>> {
+    pub fn stop(&mut self) -> Result<AudioData, AudioBackendError> {
         let result = self.backend.stop_recording()?;
         Ok(result)
     }
@@ -51,12 +50,12 @@ mod tests {
     }
 
     impl AudioBackend for MockAudioBackend {
-        fn start_recording(&self) -> Result<(), Box<dyn Error>> {
+        fn start_recording(&self) -> Result<(), AudioBackendError> {
             self.recording.store(true, Ordering::SeqCst);
             Ok(())
         }
 
-        fn stop_recording(&self) -> Result<AudioData, Box<dyn Error>> {
+        fn stop_recording(&self) -> Result<AudioData, AudioBackendError> {
             self.recording.store(false, Ordering::SeqCst);
             Ok(AudioData {
                 bytes: self.test_data.clone(),
