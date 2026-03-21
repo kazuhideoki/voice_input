@@ -269,8 +269,9 @@ CI実行前にローカルで品質チェックを実行できます：
 ./scripts/quality-check.sh --bench
 ```
 
-`scripts/quality-check.sh` は `cargo fmt -- --check`、`cargo clippy --all-targets -- -D warnings`、
-`cargo test` を順に実行したあと、補助的なE2E確認をベストエフォートで流します。
+`scripts/quality-check.sh` は `cargo fmt -- --check`、
+`cargo clippy --all-targets -- -D warnings`、`cargo test` を順に実行したあと、
+補助的なE2E確認をベストエフォートで流します。
 
 ### Rustバージョン管理
 

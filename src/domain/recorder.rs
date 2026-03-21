@@ -1,4 +1,4 @@
-use crate::infrastructure::audio::{AudioBackend, AudioData};
+use crate::domain::audio::{AudioBackend, AudioData};
 use std::error::Error;
 
 /// `AudioBackend` の薄いラッパ。バックエンド選択を抽象化し、ドメイン層に録音 I/F を提供する。

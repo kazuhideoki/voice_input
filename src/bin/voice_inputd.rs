@@ -21,10 +21,11 @@ use tokio::{
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 use voice_input::{
-    application::{ServiceContainer, spawn_transcription_worker},
     error::{Result, VoiceInputError},
-    infrastructure::audio::CpalAudioBackend,
-    infrastructure::external::text_input,
+    infrastructure::{
+        audio::CpalAudioBackend, command_handler::CommandHandler, external::text_input,
+        service_container::ServiceContainer, transcription_worker::spawn_transcription_worker,
+    },
     ipc::{IpcCmd, IpcResp, socket_path},
     load_env,
     utils::config::EnvConfig,
@@ -97,9 +98,7 @@ async fn async_main() -> Result<()> {
 /// 1 クライアントとの IPC セッションを処理します。
 async fn handle_client(
     stream: UnixStream,
-    command_handler: std::rc::Rc<
-        std::cell::RefCell<voice_input::application::CommandHandler<CpalAudioBackend>>,
-    >,
+    command_handler: std::rc::Rc<std::cell::RefCell<CommandHandler<CpalAudioBackend>>>,
 ) -> Result<()> {
     let (r, w) = stream.into_split();
     let mut reader = FramedRead::new(r, LinesCodec::new());

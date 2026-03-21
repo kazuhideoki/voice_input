@@ -13,22 +13,21 @@ use tokio::sync::mpsc;
 use tokio::task::spawn_local;
 use tokio::time::Duration;
 
-use crate::application::{
-    MediaControlService, RecordingOptions, RecordingService, TranscriptionService,
-};
+use crate::application::{RecordedAudio, RecordingOptions, RecordingService, TranscriptionService};
 use crate::error::{Result, VoiceInputError};
 use crate::infrastructure::{
     audio::{AudioBackend, CpalAudioBackend},
     external::sound::{play_start_sound, play_stop_sound},
+    media_control_service::MediaControlService,
 };
-use crate::ipc::{IpcCmd, IpcResp, RecordingResult};
+use crate::ipc::{IpcCmd, IpcResp};
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 
 /// 転写メッセージ
 #[derive(Clone, Debug)]
 pub struct TranscriptionMessage {
-    pub result: RecordingResult,
+    pub result: RecordedAudio,
     pub resume_music: bool,
     pub session_id: u64,
 }
@@ -154,7 +153,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         // 録音を停止
         let recording = self.recording.clone();
         let outcome = recording.borrow().stop_recording().await?;
-        let audio_bytes = outcome.result.audio_data.0.len();
+        let audio_bytes = outcome.result.audio_data.bytes.len();
 
         // 転写キューに送信
         self.transcription_tx
@@ -301,11 +300,11 @@ mod tests {
     use crate::application::RecordingConfig;
     use crate::application::TranscriptionClient;
     use crate::application::TranscriptionOutput;
-    use crate::application::media_control_service::MediaController;
+    use crate::domain::audio::AudioData;
     use crate::domain::dict::{DictRepository, WordEntry};
     use crate::domain::recorder::Recorder;
-    use crate::infrastructure::audio::cpal_backend::AudioData;
     use crate::infrastructure::external::sound::{clear_test_sound_runner, set_test_sound_runner};
+    use crate::infrastructure::media_control_service::MediaController;
     use async_trait::async_trait;
     use scopeguard::guard;
     use std::collections::VecDeque;

@@ -13,20 +13,20 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 use crate::application::{
-    FinalizedTranscription, LowConfidenceSelection, RecordingService, TranscriptionEvent,
-    TranscriptionMessage, TranscriptionOptions, TranscriptionService,
+    FinalizedTranscription, LowConfidenceSelection, RecordedAudio, RecordingService,
+    TranscriptionEvent, TranscriptionOptions, TranscriptionService,
 };
+use crate::domain::audio::AudioBackend;
 use crate::error::Result;
-use crate::infrastructure::audio::AudioBackend;
+use crate::infrastructure::command_handler::TranscriptionMessage;
 use crate::infrastructure::external::{sound::resume_apple_music, text_input};
-use crate::ipc::RecordingResult;
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use async_trait::async_trait;
 
 /// 転写結果を処理
 pub async fn handle_transcription<T: AudioBackend>(
-    result: RecordingResult,
+    result: RecordedAudio,
     resume_music: bool,
     session_id: u64,
     recording_service: Rc<RefCell<RecordingService<T>>>,
@@ -58,7 +58,7 @@ pub async fn handle_transcription<T: AudioBackend>(
 
         let finalized = transcription_service
             .borrow()
-            .transcribe_streaming(result.audio_data.into(), options, event_tx)
+            .transcribe_streaming(result.audio_data, options, event_tx)
             .await?;
 
         let streamed_finalized = match input_task.await {
@@ -80,7 +80,7 @@ pub async fn handle_transcription<T: AudioBackend>(
     } else {
         let finalized = transcription_service
             .borrow()
-            .transcribe(result.audio_data.into(), options)
+            .transcribe(result.audio_data, options)
             .await?;
         let input_succeeded = type_text_with_profile(&finalized.text).await;
         if input_succeeded {

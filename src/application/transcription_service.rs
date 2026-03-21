@@ -9,13 +9,11 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 
+use crate::domain::audio::AudioData;
 use crate::domain::dict::{
     DictRepository, ReplacementSpanMapping, apply_replacements_with_mappings,
 };
 use crate::error::{Result, VoiceInputError};
-use crate::infrastructure::audio::cpal_backend::AudioData;
-use crate::infrastructure::dict::JsonFileDictRepo;
-use crate::infrastructure::external::transcription_log::NonBlockingTranscriptionLogWriter;
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use async_trait::async_trait;
@@ -184,32 +182,6 @@ impl TranscriptionService {
             dict_repo,
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
             log_writer: Some(log_writer),
-        }
-    }
-
-    /// デフォルト設定で作成
-    pub fn with_default_repo(client: Box<dyn TranscriptionClient>) -> Self {
-        Self::new_with_optional_env_log(
-            client,
-            Box::new(JsonFileDictRepo::new()),
-            EnvConfig::get().recommended_transcription_parallelism(),
-        )
-    }
-
-    /// デフォルト辞書 + 環境変数ベースのログ設定付きで作成
-    pub fn new_with_optional_env_log(
-        client: Box<dyn TranscriptionClient>,
-        dict_repo: Box<dyn DictRepository>,
-        max_concurrent: usize,
-    ) -> Self {
-        match EnvConfig::get().transcription.log_path.clone() {
-            Some(path) => Self::with_log_writer(
-                client,
-                dict_repo,
-                max_concurrent,
-                Box::new(NonBlockingTranscriptionLogWriter::new(path)),
-            ),
-            None => Self::new(client, dict_repo, max_concurrent),
         }
     }
 
@@ -481,10 +453,15 @@ fn map_raw_range_to_processed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::config::EnvConfig;
     use crate::utils::profiling;
     use async_trait::async_trait;
     use scopeguard::guard;
     use std::sync::Mutex;
+
+    fn init_env_config() {
+        let _ = EnvConfig::init();
+    }
 
     /// テスト用のモック転写クライアント
     struct MockTranscriptionClient {
@@ -568,6 +545,7 @@ mod tests {
     /// 辞書変換が転写結果に適用される
     #[tokio::test]
     async fn transcription_applies_dictionary() {
+        init_env_config();
         let client = Box::new(MockTranscriptionClient::new("これはテストです"));
         let dict_repo = Box::new(MockDictRepo::new());
         let service = TranscriptionService::new(client, dict_repo, 1);
@@ -586,6 +564,7 @@ mod tests {
     /// 転写処理でプロファイルログが出力される
     #[tokio::test]
     async fn profile_log_is_emitted_during_transcription() {
+        init_env_config();
         let _guard = guard((), |_| profiling::clear_enabled_override());
         profiling::set_enabled_override(true);
         profiling::reset_log_count();
@@ -608,6 +587,7 @@ mod tests {
     /// 同時転写が制限内で完了する
     #[tokio::test]
     async fn concurrent_transcriptions_complete_within_limit() {
+        init_env_config();
         let client = Box::new(MockTranscriptionClient::new("test"));
         let dict_repo = Box::new(MockDictRepo::new());
         let service = Arc::new(TranscriptionService::new(client, dict_repo, 1));
@@ -649,6 +629,7 @@ mod tests {
     /// ストリーミング未実装クライアントでも最終確定イベントを通知できる
     #[tokio::test]
     async fn completed_event_is_emitted_when_streaming_uses_default_trait_path() {
+        init_env_config();
         let client = Box::new(MockTranscriptionClient::new("これはテストです"));
         let dict_repo = Box::new(MockDictRepo::new());
         let service = TranscriptionService::new(client, dict_repo, 1);
@@ -680,6 +661,7 @@ mod tests {
     /// ストリーミング転写ではdeltaを受け取りながら最終結果に到達できる
     #[tokio::test]
     async fn transcription_service_emits_delta_events_before_completion() {
+        init_env_config();
         struct MockStreamingClient;
 
         #[async_trait]
@@ -748,6 +730,7 @@ mod tests {
     /// ログ保存が有効な場合は辞書適用前後とトークン情報を保存要求できる
     #[tokio::test]
     async fn transcription_log_is_enqueued_with_raw_and_processed_text() {
+        init_env_config();
         struct MockClientWithTokens;
 
         #[async_trait]
@@ -821,6 +804,7 @@ mod tests {
     /// ログ保存が無効な場合は保存要求を行わない
     #[tokio::test]
     async fn transcription_log_is_not_enqueued_when_writer_is_not_configured() {
+        init_env_config();
         let client = Box::new(MockTranscriptionClient::new("これはテストです"));
         let dict_repo = Box::new(MockDictRepo::new());
         let service = TranscriptionService::new(client, dict_repo, 1);

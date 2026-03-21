@@ -10,10 +10,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
+use crate::domain::audio::{AudioBackend, AudioData};
 use crate::domain::recorder::Recorder;
 use crate::error::{Result, VoiceInputError};
-use crate::infrastructure::audio::AudioBackend;
-use crate::ipc::RecordingResult;
 
 /// 録音状態
 #[derive(Debug)]
@@ -121,8 +120,15 @@ pub struct StoppedSessionContext {
 
 /// 録音停止結果
 #[derive(Clone, Debug)]
+pub struct RecordedAudio {
+    pub audio_data: AudioData,
+    pub duration_ms: u64,
+}
+
+/// 録音停止結果
+#[derive(Clone, Debug)]
 pub struct StopRecordingOutcome {
-    pub result: RecordingResult,
+    pub result: RecordedAudio,
     pub context: StoppedSessionContext,
 }
 
@@ -255,8 +261,8 @@ impl<T: AudioBackend> RecordingService<T> {
         ctx.state = RecordingState::Idle;
 
         Ok(StopRecordingOutcome {
-            result: RecordingResult {
-                audio_data: audio_data.into(),
+            result: RecordedAudio {
+                audio_data,
                 duration_ms: 0, // TODO: 実際の録音時間を計算
             },
             context: stopped_context,
@@ -327,8 +333,8 @@ impl<T: AudioBackend> RecordingService<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::audio::AudioData;
     use crate::domain::recorder::Recorder;
-    use crate::infrastructure::audio::cpal_backend::AudioData;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
     use tokio::time::timeout;
@@ -358,7 +364,7 @@ mod tests {
         }
     }
 
-    impl crate::infrastructure::audio::AudioBackend for MockAudioBackend {
+    impl crate::domain::audio::AudioBackend for MockAudioBackend {
         fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
             self.is_recording.store(true, Ordering::SeqCst);
             Ok(())
@@ -378,7 +384,7 @@ mod tests {
         }
     }
 
-    impl crate::infrastructure::audio::AudioBackend for FailingStopAudioBackend {
+    impl crate::domain::audio::AudioBackend for FailingStopAudioBackend {
         fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
             self.is_recording.store(true, Ordering::SeqCst);
             Ok(())
@@ -465,7 +471,7 @@ mod tests {
             // 録音停止
             let result = service.stop_recording().await.unwrap();
             assert!(
-                !result.result.audio_data.0.is_empty(),
+                !result.result.audio_data.bytes.is_empty(),
                 "Should have audio data"
             );
             assert!(

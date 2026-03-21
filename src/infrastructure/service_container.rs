@@ -10,15 +10,19 @@ use std::rc::Rc;
 use tokio::sync::mpsc;
 
 use crate::application::{
-    CommandHandler, MediaControlService, RecordingConfig, RecordingService, TranscriptionClient,
-    TranscriptionMessage, TranscriptionService,
+    RecordingConfig, RecordingService, TranscriptionClient, TranscriptionService,
 };
 use crate::domain::recorder::Recorder;
 use crate::error::Result;
 use crate::infrastructure::{
     audio::{AudioBackend, CpalAudioBackend},
+    command_handler::{CommandHandler, TranscriptionMessage},
     dict::JsonFileDictRepo,
-    external::openai_adapter::OpenAiTranscriptionAdapter,
+    external::{
+        openai_adapter::OpenAiTranscriptionAdapter,
+        transcription_log::NonBlockingTranscriptionLogWriter,
+    },
+    media_control_service::MediaControlService,
 };
 use crate::utils::config::EnvConfig;
 
@@ -66,6 +70,22 @@ pub struct ServiceContainer<T: AudioBackend + 'static> {
     pub transcription_rx: Option<mpsc::UnboundedReceiver<TranscriptionMessage>>,
 }
 
+fn build_transcription_service(
+    client: Box<dyn TranscriptionClient>,
+    max_concurrent_transcriptions: usize,
+) -> TranscriptionService {
+    let dict_repo = Box::new(JsonFileDictRepo::new());
+    match EnvConfig::get().transcription.log_path.clone() {
+        Some(path) => TranscriptionService::with_log_writer(
+            client,
+            dict_repo,
+            max_concurrent_transcriptions,
+            Box::new(NonBlockingTranscriptionLogWriter::new(path)),
+        ),
+        None => TranscriptionService::new(client, dict_repo, max_concurrent_transcriptions),
+    }
+}
+
 impl ServiceContainer<CpalAudioBackend> {
     /// デフォルト設定で新しいServiceContainerを作成
     pub fn new() -> Result<Self> {
@@ -83,7 +103,7 @@ impl ServiceContainer<CpalAudioBackend> {
     /// テスト用の設定で作成
     #[cfg(test)]
     pub fn new_test() -> Result<Self> {
-        use crate::application::service_container::test_helpers::MockTranscriptionClient;
+        use crate::infrastructure::service_container::test_helpers::MockTranscriptionClient;
         let config = AppConfig::from_initialized_env()?;
         let recorder = Rc::new(RefCell::new(Recorder::new(CpalAudioBackend::default())));
         let client = Box::new(MockTranscriptionClient::new("test transcription"));
@@ -116,13 +136,10 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
             config.recording.clone(),
         )));
 
-        let transcription = Rc::new(RefCell::new(
-            TranscriptionService::new_with_optional_env_log(
-                transcription_client,
-                Box::new(JsonFileDictRepo::new()),
-                config.max_concurrent_transcriptions,
-            ),
-        ));
+        let transcription = Rc::new(RefCell::new(build_transcription_service(
+            transcription_client,
+            config.max_concurrent_transcriptions,
+        )));
 
         let media_control = Rc::new(RefCell::new(MediaControlService::new()));
 
@@ -158,11 +175,10 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
 #[cfg(test)]
 pub mod test_helpers {
     use super::*;
-    use crate::application::{
-        CommandHandler, MediaControlService, RecordingConfig, RecordingService,
-        TranscriptionOutput, TranscriptionService,
-    };
-    use crate::infrastructure::audio::cpal_backend::AudioData;
+    use crate::application::{RecordingConfig, RecordingService, TranscriptionOutput};
+    use crate::domain::audio::AudioData;
+    use crate::infrastructure::command_handler::CommandHandler;
+    use crate::infrastructure::media_control_service::MediaControlService;
     use async_trait::async_trait;
     use tokio::sync::mpsc;
 
@@ -275,9 +291,10 @@ pub mod test_helpers {
             )));
 
             // 他のサービスを作成
-            let transcription_service = Rc::new(RefCell::new(
-                TranscriptionService::with_default_repo(client),
-            ));
+            let transcription_service = Rc::new(RefCell::new(build_transcription_service(
+                client,
+                EnvConfig::get().recommended_transcription_parallelism(),
+            )));
             let media_control_service = Rc::new(RefCell::new(MediaControlService::new()));
 
             // 転写ワーカー用のチャンネル

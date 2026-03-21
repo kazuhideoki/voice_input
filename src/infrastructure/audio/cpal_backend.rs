@@ -1,5 +1,6 @@
 use super::AudioBackend;
 use super::encoder::{self, AudioFormat};
+use crate::domain::audio::AudioData;
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use audioadapter_buffers::SizeError;
@@ -21,14 +22,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
-/// 録音データの返却形式（メモリモード専用）
-#[derive(Debug, Clone)]
-pub struct AudioData {
-    pub bytes: Vec<u8>,
-    pub mime_type: &'static str,
-    pub file_name: String,
-}
 
 /// 録音状態（メモリモード専用）
 struct MemoryRecordingState {
@@ -1170,8 +1163,6 @@ mod tests {
     /// コードが誤って削除されることを防ぎます。
     use std::sync::Mutex;
 
-    static INPUT_DEVICE_ENV_LOCK: Mutex<()> = Mutex::new(());
-
     fn init_env_config_for_test() {
         let _ = crate::utils::config::EnvConfig::init();
     }
@@ -1644,36 +1635,19 @@ mod tests {
         assert!(description_matches_priority(&description, &detailed));
     }
 
-    /// 入力デバイス優先順位の環境変数が考慮される
+    /// 優先順位先頭が存在しなくても利用可能な入力デバイスへフォールバックできる
     #[test]
-    fn input_device_priority_env_is_respected() {
-        let _guard = INPUT_DEVICE_ENV_LOCK.lock().unwrap();
-        unsafe { std::env::set_var("INPUT_DEVICE_PRIORITY", "ClearlyNonexistentDevice") };
+    fn nonexistent_first_priority_falls_back_to_available_input_device() {
+        let priorities = vec!["ClearlyNonexistentDevice".to_string()];
+        let host = cpal::default_host();
+        let selected = select_input_device_with_priorities(&host, &priorities, false);
+        let has_input_device = host
+            .input_devices()
+            .ok()
+            .and_then(|mut devices| devices.next())
+            .is_some();
 
-        let backend = CpalAudioBackend::default();
-        let result = backend.start_recording();
-
-        // 環境変数を元に戻す（テスト間影響防止）。
-        unsafe { std::env::remove_var("INPUT_DEVICE_PRIORITY") };
-
-        match result {
-            Ok(_) => {
-                // Fallback device found → recording started
-                assert!(backend.is_recording());
-                backend.stop_recording().unwrap();
-            }
-            Err(e) => {
-                // Headless / CI environment without any devices
-                let msg = e.to_string();
-                assert!(
-                    msg.contains("INPUT_DEVICE_PRIORITY")
-                        || msg.contains("no input device")
-                        || msg.contains("no longer available")
-                        || msg.contains("unknown error"),
-                    "unexpected error: {msg}"
-                );
-            }
-        }
+        assert_eq!(selected.is_some(), has_input_device);
     }
 
     /// WAVヘッダーがRIFF/format/data構造を満たす
@@ -2160,6 +2134,7 @@ mod tests {
     #[test]
     #[cfg_attr(feature = "ci-test", ignore)]
     fn real_device_records_in_memory_mode() {
+        let _ = crate::utils::config::EnvConfig::init();
         // 実際のデバイスでメモリモード録音をテスト（CI環境では無視）
         let backend = CpalAudioBackend::default();
 

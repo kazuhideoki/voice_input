@@ -10,6 +10,8 @@ use enigo::{
 use std::fmt;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::error::VoiceInputError;
+
 /// 常駐ワーカー用のテキスト入力エラー
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextInputWorkerError {
@@ -43,6 +45,25 @@ impl fmt::Display for TextInputWorkerError {
 }
 
 impl std::error::Error for TextInputWorkerError {}
+
+impl From<TextInputWorkerError> for VoiceInputError {
+    fn from(error: TextInputWorkerError) -> Self {
+        match error {
+            TextInputWorkerError::EnigoInitFailed(msg) => {
+                VoiceInputError::TextInputWorkerInitFailed(msg)
+            }
+            TextInputWorkerError::WorkerSpawnFailed(msg) => {
+                VoiceInputError::TextInputWorkerInitFailed(msg)
+            }
+            TextInputWorkerError::InputFailed(msg) => {
+                VoiceInputError::TextInputWorkerInputFailed(msg)
+            }
+            TextInputWorkerError::ChannelClosed(msg) => {
+                VoiceInputError::TextInputWorkerChannelClosed(msg)
+            }
+        }
+    }
+}
 
 /// ワーカーへ送る入力リクエスト
 #[derive(Debug)]

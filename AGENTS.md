@@ -3,6 +3,7 @@
 ## Project Structure & Module Organization
 - `src/` holds the Rust library and binaries; `src/bin/` contains the CLI (`voice_input`) and daemon (`voice_inputd`) entrypoints.
 - `src/application/`, `src/domain/`, and `src/infrastructure/` follow a layered architecture; shared utilities live in `src/utils/`.
+- モジュール依存は `domain <- application <- infrastructure` の方向に揃え、内側の層から外側の層を参照しないこと。
 - Integration and E2E tests live in `tests/` (e.g., `tests/e2e/`, `tests/unit/`). Benchmarks are in `benches/`.
 - Developer scripts are in `scripts/`, and additional docs are in `README.md`
 
@@ -26,6 +27,7 @@
 - Tests are written with Rust’s built-in test framework; name files `*_test.rs` and place shared helpers in `tests/common/`.
 - Mark device/daemon-dependent tests with `#[cfg_attr(feature = "ci-test", ignore)]`.
 - Use `cargo test --features ci-test` for CI parity.
+- レイヤ依存の方向性は `tests/layer_dependencies_test.rs` で継続的に検証し、新しい依存制約もこのテストへ追加して保証すること。
 - Test function names must not use `test_` / `_test` prefixes or suffixes (e.g., `test_*`, `*_test`).
 - Test function names should clearly describe the verification intent.
 - Every test must include a Japanese doc comment that explains the specification.

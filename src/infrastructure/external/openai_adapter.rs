@@ -2,8 +2,8 @@
 //! Application層のTranscriptionClientトレイトを実装
 
 use crate::application::{TranscriptionClient, TranscriptionEvent, TranscriptionOutput};
+use crate::domain::audio::AudioData;
 use crate::error::Result;
-use crate::infrastructure::audio::cpal_backend::AudioData;
 use crate::infrastructure::external::openai::OpenAiClient;
 use async_trait::async_trait;
 use tokio::sync::mpsc;

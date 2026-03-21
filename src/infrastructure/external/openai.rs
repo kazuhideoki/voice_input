@@ -2,7 +2,7 @@
 //! AudioData（既定: FLAC、失敗時にWAVへフォールバック）を
 //! multipart/form-data で転写エンドポイントに送信します。
 use crate::application::{TranscriptionEvent, TranscriptionOutput, TranscriptionToken};
-use crate::infrastructure::audio::cpal_backend::AudioData;
+use crate::domain::audio::AudioData;
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use reqwest::{Client, Proxy, multipart};
@@ -466,7 +466,7 @@ fn build_http_client() -> Result<Client, reqwest::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infrastructure::audio::cpal_backend::AudioData;
+    use crate::domain::audio::AudioData;
 
     /// 転写レスポンスのJSONをパースできる
     #[test]

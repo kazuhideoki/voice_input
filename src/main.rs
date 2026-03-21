@@ -5,8 +5,7 @@ use clap::Parser;
 use voice_input::{
     cli::{Cli, Cmd, ConfigCmd, ConfigField, DictCmd},
     domain::dict::{DictRepository, EntryStatus, WordEntry},
-    infrastructure::config::AppConfig,
-    infrastructure::dict::JsonFileDictRepo,
+    infrastructure::{config::AppConfig, dict::JsonFileDictRepo},
     ipc::{IpcCmd, send_cmd},
     load_env,
     utils::config::EnvConfig,
