@@ -364,23 +364,17 @@ mod tests {
         }
     }
 
-<<<<<<< HEAD
     impl crate::domain::audio::AudioBackend for MockAudioBackend {
-        fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
-=======
-    impl crate::infrastructure::audio::AudioBackend for MockAudioBackend {
         fn start_recording(
             &self,
-        ) -> std::result::Result<(), crate::infrastructure::audio::AudioBackendError> {
->>>>>>> main
+        ) -> std::result::Result<(), crate::domain::audio::AudioBackendError> {
             self.is_recording.store(true, Ordering::SeqCst);
             Ok(())
         }
 
         fn stop_recording(
             &self,
-        ) -> std::result::Result<AudioData, crate::infrastructure::audio::AudioBackendError>
-        {
+        ) -> std::result::Result<AudioData, crate::domain::audio::AudioBackendError> {
             self.is_recording.store(false, Ordering::SeqCst);
             Ok(AudioData {
                 bytes: vec![0u8; 100],
@@ -394,28 +388,20 @@ mod tests {
         }
     }
 
-<<<<<<< HEAD
     impl crate::domain::audio::AudioBackend for FailingStopAudioBackend {
-        fn start_recording(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
-=======
-    impl crate::infrastructure::audio::AudioBackend for FailingStopAudioBackend {
         fn start_recording(
             &self,
-        ) -> std::result::Result<(), crate::infrastructure::audio::AudioBackendError> {
->>>>>>> main
+        ) -> std::result::Result<(), crate::domain::audio::AudioBackendError> {
             self.is_recording.store(true, Ordering::SeqCst);
             Ok(())
         }
 
         fn stop_recording(
             &self,
-        ) -> std::result::Result<AudioData, crate::infrastructure::audio::AudioBackendError>
-        {
-            Err(
-                crate::infrastructure::audio::AudioBackendError::StreamOperation {
-                    message: "stop failed".to_string(),
-                },
-            )
+        ) -> std::result::Result<AudioData, crate::domain::audio::AudioBackendError> {
+            Err(crate::domain::audio::AudioBackendError::StreamOperation {
+                message: "stop failed".to_string(),
+            })
         }
 
         fn is_recording(&self) -> bool {

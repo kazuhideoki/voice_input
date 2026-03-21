@@ -1,9 +1,4 @@
-<<<<<<< HEAD
-use crate::domain::audio::{AudioBackend, AudioData};
-use std::error::Error;
-=======
-use crate::infrastructure::audio::{AudioBackend, AudioBackendError, AudioData};
->>>>>>> main
+use crate::domain::audio::{AudioBackend, AudioBackendError, AudioData};
 
 /// `AudioBackend` の薄いラッパ。バックエンド選択を抽象化し、ドメイン層に録音 I/F を提供する。
 pub struct Recorder<T: AudioBackend> {

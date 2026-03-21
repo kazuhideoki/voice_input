@@ -28,28 +28,6 @@ pub enum TextInputWorkerError {
     ChannelClosed(String),
 }
 
-<<<<<<< HEAD
-impl fmt::Display for TextInputWorkerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TextInputWorkerError::EnigoInitFailed(msg) => {
-                write!(f, "Enigo initialization failed: {}", msg)
-            }
-            TextInputWorkerError::WorkerSpawnFailed(msg) => {
-                write!(f, "Text input worker spawn failed: {}", msg)
-            }
-            TextInputWorkerError::InputFailed(msg) => {
-                write!(f, "Text input failed: {}", msg)
-            }
-            TextInputWorkerError::ChannelClosed(msg) => {
-                write!(f, "Text input channel closed: {}", msg)
-            }
-        }
-    }
-}
-
-impl std::error::Error for TextInputWorkerError {}
-
 impl From<TextInputWorkerError> for VoiceInputError {
     fn from(error: TextInputWorkerError) -> Self {
         match error {
@@ -68,9 +46,6 @@ impl From<TextInputWorkerError> for VoiceInputError {
         }
     }
 }
-
-=======
->>>>>>> main
 /// ワーカーへ送る入力リクエスト
 #[derive(Debug)]
 pub enum TextInputRequest {

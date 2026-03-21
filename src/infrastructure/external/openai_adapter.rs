@@ -1,14 +1,10 @@
 //! OpenAI クライアントのアダプター実装
 //! Application層のTranscriptionClientトレイトを実装
 
-<<<<<<< HEAD
-use crate::application::{TranscriptionClient, TranscriptionEvent, TranscriptionOutput};
-use crate::domain::audio::AudioData;
-=======
 use crate::application::{
     TranscriptionClient, TranscriptionClientError, TranscriptionEvent, TranscriptionOutput,
 };
->>>>>>> main
+use crate::domain::audio::AudioData;
 use crate::error::Result;
 use crate::infrastructure::external::openai::OpenAiClient;
 use async_trait::async_trait;
