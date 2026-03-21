@@ -189,10 +189,11 @@ impl TranscriptionService {
 
     /// デフォルト設定で作成
     pub fn with_default_repo(client: Box<dyn TranscriptionClient>) -> Self {
+        let config = EnvConfig::get();
         Self::new_with_optional_env_log(
             client,
             Box::new(JsonFileDictRepo::new()),
-            EnvConfig::from_env().recommended_transcription_parallelism(),
+            config.recommended_transcription_parallelism(),
         )
     }
 
@@ -202,7 +203,7 @@ impl TranscriptionService {
         dict_repo: Box<dyn DictRepository>,
         max_concurrent: usize,
     ) -> Self {
-        match EnvConfig::from_env().openai_transcription_log_path {
+        match EnvConfig::get().transcription.log_path.clone() {
             Some(path) => Self::with_log_writer(
                 client,
                 dict_repo,
@@ -305,7 +306,10 @@ impl TranscriptionService {
         output: &TranscriptionOutput,
         processed: &crate::domain::dict::ReplacementOutput,
     ) -> FinalizedTranscription {
-        let low_confidence_selection = if EnvConfig::from_env().low_confidence_selection_enabled {
+        let low_confidence_selection = if EnvConfig::get()
+            .transcription
+            .low_confidence_selection_enabled
+        {
             plan_low_confidence_selection(
                 output,
                 &processed.span_mappings,

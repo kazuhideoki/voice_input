@@ -22,6 +22,7 @@ use crate::infrastructure::{
     external::sound::{play_start_sound, play_stop_sound},
 };
 use crate::ipc::{IpcCmd, IpcResp, RecordingResult};
+use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 
 /// 転写メッセージ
@@ -220,8 +221,8 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         }
 
         // OpenAI APIチェック
-        match std::env::var("OPENAI_API_KEY") {
-            Ok(key) => {
+        match EnvConfig::get().transcription.openai_api_key.clone() {
+            Some(key) => {
                 lines.push("OPENAI_API_KEY: present".to_string());
                 let client = reqwest::Client::new();
                 match client
@@ -243,7 +244,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                     }
                 }
             }
-            Err(_) => {
+            None => {
                 lines.push("OPENAI_API_KEY: missing".to_string());
                 ok = false;
             }

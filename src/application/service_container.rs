@@ -33,15 +33,12 @@ pub struct AppConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
+        let config = EnvConfig::get();
         Self {
             recording: RecordingConfig {
-                max_duration_secs: std::env::var("VOICE_INPUT_MAX_SECS")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(30),
+                max_duration_secs: config.recording.max_duration_secs,
             },
-            max_concurrent_transcriptions: EnvConfig::from_env()
-                .recommended_transcription_parallelism(),
+            max_concurrent_transcriptions: config.recommended_transcription_parallelism(),
         }
     }
 }

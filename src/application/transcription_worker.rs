@@ -50,7 +50,7 @@ pub async fn handle_transcription<T: AudioBackend>(
         prompt: None, // メモリモードではプロンプトファイルを使用しない
     };
 
-    let finalized = if EnvConfig::get().openai_transcribe_streaming {
+    let finalized = if EnvConfig::get().transcription.streaming_enabled {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
         let input_task = tokio::task::spawn_local(async move {
             process_streaming_events(&mut event_rx, &ProfiledTextApplier).await

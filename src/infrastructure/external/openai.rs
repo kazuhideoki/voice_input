@@ -69,13 +69,14 @@ impl OpenAiClient {
     pub fn new() -> Result<Self, String> {
         let config = EnvConfig::get();
         let api_key = config
+            .transcription
             .openai_api_key
             .clone()
             .ok_or("OPENAI_API_KEY environment variable is not set")?;
 
-        let model = config.openai_transcribe_model.as_str().to_string();
-        if config.openai_transcribe_streaming
-            && !config.openai_transcribe_model.supports_streaming()
+        let model = config.transcription.model.as_str().to_string();
+        if config.transcription.streaming_enabled
+            && !config.transcription.model.supports_streaming()
         {
             return Err(format!(
                 "OPENAI_TRANSCRIBE_MODEL={} does not support streaming",
@@ -503,7 +504,9 @@ mod tests {
 
         // 環境変数またはテスト設定でAPIキーが設定されていれば成功
         // そうでなければ失敗
-        if std::env::var("OPENAI_API_KEY").is_ok() || EnvConfig::get().openai_api_key.is_some() {
+        if std::env::var("OPENAI_API_KEY").is_ok()
+            || EnvConfig::get().transcription.openai_api_key.is_some()
+        {
             assert!(client.is_ok());
         } else {
             assert!(client.is_err());
@@ -517,7 +520,9 @@ mod tests {
         EnvConfig::test_init();
 
         // OpenAI APIキーが設定されていない場合はテストをスキップ
-        if EnvConfig::get().openai_api_key.is_none() && std::env::var("OPENAI_API_KEY").is_err() {
+        if EnvConfig::get().transcription.openai_api_key.is_none()
+            && std::env::var("OPENAI_API_KEY").is_err()
+        {
             println!("Skipping test: OPENAI_API_KEY not set");
             return;
         }
@@ -561,7 +566,9 @@ mod tests {
         EnvConfig::test_init();
 
         // OpenAI APIキーが設定されていない場合はテストをスキップ
-        if EnvConfig::get().openai_api_key.is_none() && std::env::var("OPENAI_API_KEY").is_err() {
+        if EnvConfig::get().transcription.openai_api_key.is_none()
+            && std::env::var("OPENAI_API_KEY").is_err()
+        {
             println!("Skipping test: OPENAI_API_KEY not set");
             return;
         }

@@ -537,7 +537,12 @@ impl CpalAudioBackend {
         let cfg = EnvConfig::get();
         match std::env::var("VOICE_INPUT_AUDIO_FORMAT")
             .ok()
-            .or_else(|| cfg.openai_api_key.as_ref().map(|_| "flac".to_string()))
+            .or_else(|| {
+                cfg.transcription
+                    .openai_api_key
+                    .as_ref()
+                    .map(|_| "flac".to_string())
+            })
             .unwrap_or_else(|| "flac".to_string())
             .to_ascii_lowercase()
             .as_str()

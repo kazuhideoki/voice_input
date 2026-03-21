@@ -10,8 +10,8 @@ pub struct AppConfig {
 
 fn data_dir() -> PathBuf {
     let config = EnvConfig::get();
-    if let Some(xdg_data_home) = &config.xdg_data_home {
-        let dir = PathBuf::from(xdg_data_home).join("voice_input");
+    if let Some(xdg_data_home) = &config.paths.xdg_data_home {
+        let dir = xdg_data_home.join("voice_input");
         fs::create_dir_all(&dir).expect("create data dir");
         return dir;
     }
