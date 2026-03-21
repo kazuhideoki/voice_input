@@ -189,10 +189,12 @@ impl TranscriptionService {
 
     /// デフォルト設定で作成
     pub fn with_default_repo(client: Box<dyn TranscriptionClient>) -> Self {
+        let env_config = EnvConfig::from_env()
+            .expect("transcription service requires a supported transcription model");
         Self::new_with_optional_env_log(
             client,
             Box::new(JsonFileDictRepo::new()),
-            EnvConfig::from_env().recommended_transcription_parallelism(),
+            env_config.recommended_transcription_parallelism(),
         )
     }
 
@@ -202,7 +204,10 @@ impl TranscriptionService {
         dict_repo: Box<dyn DictRepository>,
         max_concurrent: usize,
     ) -> Self {
-        match EnvConfig::from_env().openai_transcription_log_path {
+        let env_config = EnvConfig::from_env()
+            .expect("transcription service requires a supported transcription model");
+
+        match env_config.openai_transcription_log_path {
             Some(path) => Self::with_log_writer(
                 client,
                 dict_repo,
@@ -305,7 +310,9 @@ impl TranscriptionService {
         output: &TranscriptionOutput,
         processed: &crate::domain::dict::ReplacementOutput,
     ) -> FinalizedTranscription {
-        let low_confidence_selection = if EnvConfig::from_env().low_confidence_selection_enabled {
+        let env_config = EnvConfig::from_env()
+            .expect("transcription service requires a supported transcription model");
+        let low_confidence_selection = if env_config.low_confidence_selection_enabled {
             plan_low_confidence_selection(
                 output,
                 &processed.span_mappings,
