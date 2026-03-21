@@ -17,31 +17,41 @@ use std::sync::Mutex;
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// OpenAI の文字起こしモデル
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpenAiTranscriptionModel(String);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenAiTranscriptionModel {
+    Gpt4oMiniTranscribe,
+    Gpt4oTranscribe,
+}
 
 impl OpenAiTranscriptionModel {
-    const DEFAULT: &'static str = "gpt-4o-mini-transcribe";
-    const STREAMING_SUPPORTED: [&'static str; 2] = ["gpt-4o-mini-transcribe", "gpt-4o-transcribe"];
+    const DEFAULT: Self = Self::Gpt4oMiniTranscribe;
 
     /// 環境変数からモデル設定を生成
-    pub fn from_env() -> Self {
-        Self(std::env::var("OPENAI_TRANSCRIBE_MODEL").unwrap_or_else(|_| Self::DEFAULT.to_string()))
+    pub fn from_env() -> Result<Self, String> {
+        match std::env::var("OPENAI_TRANSCRIBE_MODEL") {
+            Ok(value) => Self::parse(&value),
+            Err(_) => Ok(Self::DEFAULT),
+        }
     }
 
     /// 文字列からモデル設定を生成
-    pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "gpt-4o-mini-transcribe" => Ok(Self::Gpt4oMiniTranscribe),
+            "gpt-4o-transcribe" => Ok(Self::Gpt4oTranscribe),
+            unsupported => Err(format!(
+                "OPENAI_TRANSCRIBE_MODEL={} is unsupported. Supported models: gpt-4o-mini-transcribe, gpt-4o-transcribe",
+                unsupported
+            )),
+        }
     }
 
     /// モデル名を文字列で取得
     pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// ストリーミング転写に対応しているか
-    pub fn supports_streaming(&self) -> bool {
-        Self::STREAMING_SUPPORTED.contains(&self.0.as_str())
+        match self {
+            Self::Gpt4oMiniTranscribe => "gpt-4o-mini-transcribe",
+            Self::Gpt4oTranscribe => "gpt-4o-transcribe",
+        }
     }
 }
 
@@ -105,6 +115,7 @@ pub struct EnvConfig {
 
 impl EnvConfig {
     /// 環境変数から設定を構築
+<<<<<<< HEAD
     #[cfg(test)]
     fn from_env() -> Self {
         Self {
@@ -127,6 +138,22 @@ impl EnvConfig {
                     .unwrap_or(30),
             },
         }
+=======
+    pub fn from_env() -> Result<Self, String> {
+        Ok(Self {
+            openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
+            xdg_data_home: std::env::var("XDG_DATA_HOME").ok(),
+            env_path: std::env::var("VOICE_INPUT_ENV_PATH").ok(),
+            openai_transcribe_model: OpenAiTranscriptionModel::from_env()?,
+            openai_transcribe_streaming: std::env::var("OPENAI_TRANSCRIBE_STREAMING")
+                .ok()
+                .is_some_and(|value| value == "true"),
+            openai_transcription_log_path: non_empty_env("OPENAI_TRANSCRIPTION_LOG_PATH"),
+            low_confidence_selection_enabled: std::env::var("VOICE_INPUT_LOW_CONFIDENCE_SELECTION")
+                .ok()
+                .is_some_and(|value| value == "true"),
+        })
+>>>>>>> main
     }
 
     /// 環境変数から設定を構築し、妥当性を検証する
@@ -177,7 +204,12 @@ impl EnvConfig {
             return Ok(());
         }
 
+<<<<<<< HEAD
         let config = EnvConfig::try_from_env()?;
+=======
+        let config =
+            EnvConfig::from_env().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+>>>>>>> main
 
         // 並列実行時の競合を考慮：既に他のスレッドが初期化していても成功とする
         let _ = ENV_CONFIG.set(Arc::new(config));
@@ -217,7 +249,12 @@ impl EnvConfig {
 
         if ENV_CONFIG.get().is_none() {
             // テスト用のデフォルト設定
+<<<<<<< HEAD
             let config = EnvConfig::try_from_env().expect("test env config should be valid");
+=======
+            let config = EnvConfig::from_env()
+                .expect("test environment must use a supported transcription model");
+>>>>>>> main
             ENV_CONFIG.set(Arc::new(config)).ok();
         }
     }
@@ -263,18 +300,24 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// ストリーミング有効化時は対応モデルのみ許可対象として判定できる
+    /// 対応モデルは文字列から列挙型へ変換できる
     #[test]
-    fn streaming_support_is_determined_by_model_whitelist() {
-        assert!(OpenAiTranscriptionModel::new("gpt-4o-mini-transcribe").supports_streaming());
-        assert!(OpenAiTranscriptionModel::new("gpt-4o-transcribe").supports_streaming());
-        assert!(!OpenAiTranscriptionModel::new("whisper-1").supports_streaming());
+    fn supported_models_are_parsed() {
+        assert_eq!(
+            OpenAiTranscriptionModel::parse("gpt-4o-mini-transcribe").unwrap(),
+            OpenAiTranscriptionModel::Gpt4oMiniTranscribe
+        );
+        assert_eq!(
+            OpenAiTranscriptionModel::parse("gpt-4o-transcribe").unwrap(),
+            OpenAiTranscriptionModel::Gpt4oTranscribe
+        );
     }
 
     /// ストリーミング設定は環境変数から有効化状態を読み取れる
     #[test]
     fn streaming_flag_is_loaded_from_environment() {
         let config = EnvConfig {
+<<<<<<< HEAD
             paths: PathConfig {
                 xdg_data_home: None,
             },
@@ -288,6 +331,15 @@ mod tests {
             recording: RecordingConfig {
                 max_duration_secs: 30,
             },
+=======
+            openai_api_key: None,
+            xdg_data_home: None,
+            env_path: None,
+            openai_transcribe_model: OpenAiTranscriptionModel::Gpt4oMiniTranscribe,
+            openai_transcribe_streaming: true,
+            openai_transcription_log_path: None,
+            low_confidence_selection_enabled: false,
+>>>>>>> main
         };
 
         assert!(config.transcription.streaming_enabled);
@@ -297,6 +349,7 @@ mod tests {
     #[test]
     fn streaming_uses_single_transcription_parallelism() {
         let config = EnvConfig {
+<<<<<<< HEAD
             paths: PathConfig {
                 xdg_data_home: None,
             },
@@ -310,6 +363,15 @@ mod tests {
             recording: RecordingConfig {
                 max_duration_secs: 30,
             },
+=======
+            openai_api_key: None,
+            xdg_data_home: None,
+            env_path: None,
+            openai_transcribe_model: OpenAiTranscriptionModel::Gpt4oMiniTranscribe,
+            openai_transcribe_streaming: true,
+            openai_transcription_log_path: None,
+            low_confidence_selection_enabled: false,
+>>>>>>> main
         };
 
         assert_eq!(config.recommended_transcription_parallelism(), 1);
@@ -319,6 +381,7 @@ mod tests {
     #[test]
     fn non_streaming_keeps_existing_transcription_parallelism() {
         let config = EnvConfig {
+<<<<<<< HEAD
             paths: PathConfig {
                 xdg_data_home: None,
             },
@@ -332,6 +395,15 @@ mod tests {
             recording: RecordingConfig {
                 max_duration_secs: 30,
             },
+=======
+            openai_api_key: None,
+            xdg_data_home: None,
+            env_path: None,
+            openai_transcribe_model: OpenAiTranscriptionModel::Gpt4oTranscribe,
+            openai_transcribe_streaming: false,
+            openai_transcription_log_path: None,
+            low_confidence_selection_enabled: false,
+>>>>>>> main
         };
 
         assert_eq!(config.recommended_transcription_parallelism(), 2);
@@ -341,6 +413,7 @@ mod tests {
     #[test]
     fn transcription_log_path_is_disabled_by_default() {
         let config = EnvConfig {
+<<<<<<< HEAD
             paths: PathConfig {
                 xdg_data_home: None,
             },
@@ -354,6 +427,15 @@ mod tests {
             recording: RecordingConfig {
                 max_duration_secs: 30,
             },
+=======
+            openai_api_key: None,
+            xdg_data_home: None,
+            env_path: None,
+            openai_transcribe_model: OpenAiTranscriptionModel::Gpt4oTranscribe,
+            openai_transcribe_streaming: false,
+            openai_transcription_log_path: None,
+            low_confidence_selection_enabled: false,
+>>>>>>> main
         };
 
         assert_eq!(config.transcription.log_path, None);
@@ -363,6 +445,7 @@ mod tests {
     #[test]
     fn transcription_log_path_keeps_configured_value() {
         let config = EnvConfig {
+<<<<<<< HEAD
             paths: PathConfig {
                 xdg_data_home: None,
             },
@@ -376,6 +459,15 @@ mod tests {
             recording: RecordingConfig {
                 max_duration_secs: 30,
             },
+=======
+            openai_api_key: None,
+            xdg_data_home: None,
+            env_path: None,
+            openai_transcribe_model: OpenAiTranscriptionModel::Gpt4oTranscribe,
+            openai_transcribe_streaming: false,
+            openai_transcription_log_path: Some("/tmp/transcription-log.ndjson".to_string()),
+            low_confidence_selection_enabled: false,
+>>>>>>> main
         };
 
         assert_eq!(
@@ -392,7 +484,7 @@ mod tests {
             std::env::set_var("OPENAI_TRANSCRIPTION_LOG_PATH", "   ");
         }
 
-        let config = EnvConfig::from_env();
+        let config = EnvConfig::from_env().unwrap();
 
         assert_eq!(config.transcription.log_path, None);
 
@@ -405,6 +497,7 @@ mod tests {
     #[test]
     fn low_confidence_selection_is_disabled_by_default() {
         let config = EnvConfig {
+<<<<<<< HEAD
             paths: PathConfig {
                 xdg_data_home: None,
             },
@@ -418,6 +511,15 @@ mod tests {
             recording: RecordingConfig {
                 max_duration_secs: 30,
             },
+=======
+            openai_api_key: None,
+            xdg_data_home: None,
+            env_path: None,
+            openai_transcribe_model: OpenAiTranscriptionModel::Gpt4oTranscribe,
+            openai_transcribe_streaming: false,
+            openai_transcription_log_path: None,
+            low_confidence_selection_enabled: false,
+>>>>>>> main
         };
 
         assert!(!config.transcription.low_confidence_selection_enabled);
@@ -431,7 +533,7 @@ mod tests {
             std::env::set_var("VOICE_INPUT_LOW_CONFIDENCE_SELECTION", "true");
         }
 
-        let config = EnvConfig::from_env();
+        let config = EnvConfig::from_env().unwrap();
 
         assert!(config.transcription.low_confidence_selection_enabled);
 
@@ -584,6 +686,7 @@ mod tests {
         }
     }
 
+<<<<<<< HEAD
     /// test_initが利用する検証経路は未初期化時に無効な環境変数を拒否する
     #[test]
     fn test_init_validation_path_rejects_invalid_env_when_uninitialized() {
@@ -604,6 +707,30 @@ mod tests {
 
         unsafe {
             std::env::remove_var("OPENAI_TRANSCRIBE_STREAMING");
+=======
+    /// 未対応モデルは設定値として拒否する
+    #[test]
+    fn unsupported_model_is_rejected() {
+        let error = OpenAiTranscriptionModel::parse("whisper-1").unwrap_err();
+
+        assert!(error.contains("whisper-1"));
+    }
+
+    /// 未対応モデルが環境変数に指定されている場合は設定構築に失敗する
+    #[test]
+    fn unsupported_model_in_env_fails_config_loading() {
+        let _lock = TEST_LOCK.lock().unwrap();
+        unsafe {
+            std::env::set_var("OPENAI_TRANSCRIBE_MODEL", "whisper-1");
+        }
+
+        let result = EnvConfig::from_env();
+
+        assert!(result.is_err());
+
+        unsafe {
+            std::env::remove_var("OPENAI_TRANSCRIBE_MODEL");
+>>>>>>> main
         }
     }
 }

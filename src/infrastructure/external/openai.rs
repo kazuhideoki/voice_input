@@ -74,6 +74,7 @@ impl OpenAiClient {
             .clone()
             .ok_or("OPENAI_API_KEY environment variable is not set")?;
 
+<<<<<<< HEAD
         let model = config.transcription.model.as_str().to_string();
         if config.transcription.streaming_enabled
             && !config.transcription.model.supports_streaming()
@@ -83,6 +84,9 @@ impl OpenAiClient {
                 model
             ));
         }
+=======
+        let model = config.openai_transcribe_model.as_str().to_string();
+>>>>>>> main
 
         let client =
             build_http_client().map_err(|e| format!("Failed to build HTTP client: {}", e))?;

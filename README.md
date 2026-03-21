@@ -25,8 +25,8 @@ cp .env.example .env
 ```
 
 - OPENAI_API_KEY=your_openai_api_key_here
-- OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe # デフォルト
-- OPENAI_TRANSCRIBE_STREAMING=false # gpt-4o-mini-transcribe / gpt-4o-transcribe のみ対応
+- OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe # 対応モデルは gpt-4o-mini-transcribe / gpt-4o-transcribe のみ
+- OPENAI_TRANSCRIBE_STREAMING=false
 - INPUT_DEVICE_PRIORITY="device1,device2,device3"
 - VOICE_INPUT_ENV_PATH=/path/to/.env
 - VOICE_INPUT_SOCKET_PATH=/custom/path/voice_input.sock
@@ -35,6 +35,7 @@ cp .env.example .env
 
 `.env` はデフォルトでカレントディレクトリから読み込まれ、`VOICE_INPUT_ENV_PATH` が設定されている場合はそのパスが優先されます。
 環境変数は `src/utils/config.rs` の `EnvConfig` で起動時に一度だけ読み込まれます。
+`OPENAI_TRANSCRIBE_MODEL` に `whisper-1` など未対応モデルを指定した場合は、起動時にエラーになります。
 
 ## 音声処理
 
