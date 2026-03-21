@@ -199,9 +199,14 @@ impl EnvConfig {
         let _lock = TEST_LOCK.lock().unwrap();
 
         if ENV_CONFIG.get().is_none() {
-            let config = EnvConfig::from_env().expect("test env config should be valid");
+            let config = Self::load_for_test_init().expect("test env config should be valid");
             ENV_CONFIG.set(Arc::new(config)).ok();
         }
+    }
+
+    #[cfg(test)]
+    fn load_for_test_init() -> Result<Self, ConfigError> {
+        Self::from_env()
     }
 }
 
@@ -576,13 +581,13 @@ mod tests {
 
     /// test_initが利用する検証経路は未初期化時に無効な環境変数を拒否する
     #[test]
-    fn test_init_validation_path_rejects_invalid_env_when_uninitialized() {
+    fn test_init_loader_rejects_invalid_env_when_uninitialized() {
         let _lock = lock_test_env();
         unsafe {
             std::env::set_var("OPENAI_TRANSCRIBE_STREAMING", "TRUE");
         }
 
-        let result = EnvConfig::try_from_env();
+        let result = EnvConfig::load_for_test_init();
 
         assert_eq!(
             result,

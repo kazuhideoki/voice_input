@@ -34,8 +34,7 @@ pub struct AppConfig {
 impl AppConfig {
     /// 環境変数からアプリケーション設定を構築する
     pub fn from_env() -> Result<Self> {
-        let env_config = EnvConfig::from_env()
-            .map_err(|error| crate::error::VoiceInputError::ConfigInitError(error.to_string()))?;
+        let env_config = EnvConfig::get();
 
         Ok(Self {
             recording: RecordingConfig {
