@@ -1,3 +1,7 @@
+//! プロファイル計測用の簡易ユーティリティ。
+//!
+//! 環境設定で有効化された場合のみ、処理時間や任意タイミングのログを標準エラーへ出力する。
+
 use crate::utils::config::EnvConfig;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
