@@ -1,8 +1,9 @@
 //! OpenAI STT API ラッパ。
 //! AudioData（既定: FLAC、失敗時にWAVへフォールバック）を
 //! multipart/form-data で転写エンドポイントに送信します。
-use crate::application::{TranscriptionEvent, TranscriptionOutput, TranscriptionToken};
+use crate::application::TranscriptionEvent;
 use crate::domain::audio::AudioData;
+use crate::domain::transcription::{TranscriptionOutput, TranscriptionToken};
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use reqwest::{Client, Proxy, multipart};

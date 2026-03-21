@@ -92,7 +92,9 @@ mod tests {
                 recorded_at: "2026-03-20T10:00:00+09:00".to_string(),
                 raw_text: "生テキスト".to_string(),
                 processed_text: "処理済みテキスト".to_string(),
-                tokens: vec![crate::application::TranscriptionToken::new("生", -0.4)],
+                tokens: vec![crate::domain::transcription::TranscriptionToken::new(
+                    "生", -0.4,
+                )],
             })
             .unwrap();
 
@@ -129,7 +131,9 @@ mod tests {
                 recorded_at: "2026-03-20T10:00:01+09:00".to_string(),
                 raw_text: "追加前".to_string(),
                 processed_text: "追加後".to_string(),
-                tokens: vec![crate::application::TranscriptionToken::new("追加", -0.2)],
+                tokens: vec![crate::domain::transcription::TranscriptionToken::new(
+                    "追加", -0.2,
+                )],
             })
             .unwrap();
 

@@ -13,10 +13,10 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 use crate::application::{
-    FinalizedTranscription, LowConfidenceSelection, RecordedAudio, RecordingService,
-    TranscriptionEvent, TranscriptionOptions, TranscriptionService,
+    RecordedAudio, RecordingService, TranscriptionEvent, TranscriptionOptions, TranscriptionService,
 };
 use crate::domain::audio::AudioBackend;
+use crate::domain::transcription::{FinalizedTranscription, LowConfidenceSelection};
 use crate::error::Result;
 use crate::infrastructure::command_handler::TranscriptionMessage;
 use crate::infrastructure::external::{sound::resume_apple_music, text_input};
@@ -374,7 +374,8 @@ mod tests {
     use super::{
         TextApplier, diff_text_for_patch, process_streaming_events, selection_to_recent_range,
     };
-    use crate::application::{FinalizedTranscription, LowConfidenceSelection, TranscriptionEvent};
+    use crate::application::TranscriptionEvent;
+    use crate::domain::transcription::{FinalizedTranscription, LowConfidenceSelection};
     use async_trait::async_trait;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;

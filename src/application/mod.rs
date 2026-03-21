@@ -6,7 +6,6 @@ pub use recording_service::{
     RecordingService, RecordingState, StopRecordingOutcome, StoppedSessionContext,
 };
 pub use transcription_service::{
-    FinalizedTranscription, LowConfidenceSelection, TranscriptionClient, TranscriptionClientError,
-    TranscriptionEvent, TranscriptionLogEntry, TranscriptionLogWriter, TranscriptionOptions,
-    TranscriptionOutput, TranscriptionService, TranscriptionToken,
+    TranscriptionClient, TranscriptionClientError, TranscriptionEvent, TranscriptionLogEntry,
+    TranscriptionLogWriter, TranscriptionOptions, TranscriptionService,
 };

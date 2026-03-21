@@ -299,10 +299,10 @@ mod tests {
     use super::*;
     use crate::application::RecordingConfig;
     use crate::application::TranscriptionClient;
-    use crate::application::TranscriptionOutput;
     use crate::domain::audio::AudioData;
     use crate::domain::dict::{DictRepository, WordEntry};
     use crate::domain::recorder::Recorder;
+    use crate::domain::transcription::TranscriptionOutput;
     use crate::infrastructure::external::sound::{clear_test_sound_runner, set_test_sound_runner};
     use crate::infrastructure::media_control_service::MediaController;
     use async_trait::async_trait;
