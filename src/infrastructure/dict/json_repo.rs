@@ -37,12 +37,11 @@ impl DictRepository for JsonFileDictRepo {
     }
 
     fn save(&self, all: &[WordEntry]) -> Result<()> {
-        let tmp = self.path.with_extension("json.tmp");
-        {
-            let f = fs::File::create(&tmp)?;
-            to_writer_pretty(f, all)?;
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)?;
         }
-        fs::rename(tmp, &self.path)?;
+        let f = fs::File::create(&self.path)?;
+        to_writer_pretty(f, all)?;
         Ok(())
     }
 }
@@ -51,6 +50,8 @@ impl DictRepository for JsonFileDictRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::os::unix::fs::symlink;
     use tempfile::TempDir;
 
     fn repo_in_tmp() -> (JsonFileDictRepo, TempDir) {
@@ -85,6 +86,38 @@ mod tests {
         assert_eq!(loaded[0].surface, list[0].surface);
         assert_eq!(loaded[0].replacement, list[0].replacement);
         assert_eq!(loaded[0].hit, list[0].hit);
+    }
+
+    /// シンボリックリンクの辞書保存でもリンク自体は維持されてリンク先だけ更新される
+    #[test]
+    fn save_keeps_symbolic_link_and_updates_target_file() {
+        let tmp = TempDir::new().expect("create tempdir");
+        let actual_path = tmp.path().join("actual-dictionary.json");
+        fs::write(&actual_path, "[]").expect("write initial dictionary");
+
+        let link_path = tmp.path().join("dictionary.json");
+        symlink(&actual_path, &link_path).expect("create symlink");
+
+        let repo = JsonFileDictRepo { path: link_path };
+        let list = vec![WordEntry {
+            surface: "foo".into(),
+            replacement: "bar".into(),
+            hit: 1,
+            status: EntryStatus::Active,
+        }];
+
+        repo.save(&list).expect("save");
+
+        assert!(
+            fs::symlink_metadata(tmp.path().join("dictionary.json"))
+                .expect("stat symlink")
+                .file_type()
+                .is_symlink()
+        );
+
+        let loaded = fs::read_to_string(&actual_path).expect("read actual dictionary");
+        assert!(loaded.contains("\"surface\": \"foo\""));
+        assert!(loaded.contains("\"replacement\": \"bar\""));
     }
 
     /// upsertで追加と更新ができる
