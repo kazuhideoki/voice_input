@@ -40,3 +40,4 @@
 ## Configuration & Environment
 - Rust version is pinned in `rust-toolchain.toml` (use the same toolchain locally).
 - Configure API keys and device priority via `.env` (see `.env.example`).
+- 環境変数の読み取りは `src/utils/config.rs` のみを入口とし、その他の場所で直接 `std::env` を読まないこと（lint で強制）。
