@@ -1,9 +1,9 @@
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use std::error::Error;
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
-use voice_input::domain::recorder::Recorder;
+use voice_input::application::{AudioBackendError, Recorder};
 use voice_input::infrastructure::audio::{AudioBackend, AudioData};
 
 /// ベンチマーク用のモックAudioBackend
@@ -27,12 +27,12 @@ impl BenchmarkAudioBackend {
 }
 
 impl AudioBackend for BenchmarkAudioBackend {
-    fn start_recording(&self) -> Result<(), Box<dyn Error>> {
+    fn start_recording(&self) -> Result<(), AudioBackendError> {
         self.recording.store(true, Ordering::SeqCst);
         Ok(())
     }
 
-    fn stop_recording(&self) -> Result<AudioData, Box<dyn Error>> {
+    fn stop_recording(&self) -> Result<AudioData, AudioBackendError> {
         self.recording.store(false, Ordering::SeqCst);
         let size = self.simulated_size.load(Ordering::SeqCst);
 

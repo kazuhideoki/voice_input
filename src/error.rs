@@ -3,8 +3,8 @@
 //! このモジュールは voice_input アプリケーション全体で使用する統一エラー型を定義します。
 //! 既存の散在したエラー型を統合し、一貫したエラーハンドリングを提供します。
 
+use crate::application::AudioBackendError;
 use crate::application::TranscriptionClientError;
-use crate::infrastructure::audio::AudioBackendError as InfrastructureAudioBackendError;
 use thiserror::Error;
 
 /// voice_input アプリケーション全体で使用する統一エラー型
@@ -23,7 +23,7 @@ pub enum VoiceInputError {
     AudioBackendError(
         #[from]
         #[source]
-        InfrastructureAudioBackendError,
+        AudioBackendError,
     ),
 
     // ========================================

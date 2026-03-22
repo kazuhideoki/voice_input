@@ -1,6 +1,6 @@
 use super::encoder::{self, AudioFormat};
 use super::{AudioBackend, AudioBackendError};
-use crate::domain::audio::AudioData;
+use crate::application::AudioData;
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use audioadapter_buffers::SizeError;

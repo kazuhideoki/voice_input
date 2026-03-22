@@ -2,7 +2,7 @@ pub mod cpal_backend;
 pub mod encoder;
 use self::cpal_backend::{AudioError, CpalBackendError};
 use self::encoder::AudioEncodeError;
-pub use crate::domain::audio::{AudioBackend, AudioBackendError, AudioData};
+pub use crate::application::{AudioBackend, AudioBackendError, AudioData};
 pub use cpal_backend::CpalAudioBackend;
 
 impl From<CpalBackendError> for AudioBackendError {

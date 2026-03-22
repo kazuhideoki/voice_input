@@ -1,7 +1,8 @@
 //! JSON ファイル版 DictRepository 実装
+use crate::application::DictRepository;
 #[cfg(test)]
 use crate::domain::dict::EntryStatus;
-use crate::domain::dict::{DictRepository, WordEntry};
+use crate::domain::dict::WordEntry;
 use crate::infrastructure::config::AppConfig;
 use serde_json::{from_reader, to_writer_pretty};
 use std::{fs, io::Result, path::PathBuf};
@@ -118,49 +119,5 @@ mod tests {
         let loaded = fs::read_to_string(&actual_path).expect("read actual dictionary");
         assert!(loaded.contains("\"surface\": \"foo\""));
         assert!(loaded.contains("\"replacement\": \"bar\""));
-    }
-
-    /// upsertで追加と更新ができる
-    #[test]
-    fn upsert_adds_and_updates() {
-        let (repo, _tmp) = repo_in_tmp();
-        repo.upsert(WordEntry {
-            surface: "foo".into(),
-            replacement: "bar".into(),
-            hit: 0,
-            status: EntryStatus::Active,
-        })
-        .expect("upsert add");
-
-        repo.upsert(WordEntry {
-            surface: "foo".into(),
-            replacement: "baz".into(),
-            hit: 2,
-            status: EntryStatus::Active,
-        })
-        .expect("upsert update");
-
-        let loaded = repo.load().expect("load");
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].surface, "foo");
-        assert_eq!(loaded[0].replacement, "baz");
-        assert_eq!(loaded[0].hit, 2);
-    }
-
-    /// deleteでエントリが削除される
-    #[test]
-    fn delete_removes_entry() {
-        let (repo, _tmp) = repo_in_tmp();
-        repo.upsert(WordEntry {
-            surface: "foo".into(),
-            replacement: "bar".into(),
-            hit: 0,
-            status: EntryStatus::Active,
-        })
-        .expect("upsert");
-        assert!(repo.delete("foo").expect("delete existing"));
-        assert!(!repo.delete("foo").expect("delete missing"));
-        let loaded = repo.load().expect("load");
-        assert!(loaded.is_empty());
     }
 }

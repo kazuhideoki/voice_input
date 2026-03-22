@@ -12,10 +12,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
+use crate::application::AudioBackend;
 use crate::application::{
     RecordedAudio, RecordingService, TranscriptionEvent, TranscriptionOptions, TranscriptionService,
 };
-use crate::domain::audio::AudioBackend;
 use crate::domain::transcription::{FinalizedTranscription, LowConfidenceSelection};
 use crate::error::Result;
 use crate::infrastructure::command_handler::TranscriptionMessage;

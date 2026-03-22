@@ -9,8 +9,8 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 
-use crate::domain::audio::AudioData;
-use crate::domain::dict::{DictRepository, apply_replacements_with_mappings};
+use crate::application::{AudioData, DictRepository};
+use crate::domain::dict::apply_replacements_with_mappings;
 use crate::domain::transcription::{
     FinalizedTranscription, TranscriptionOutput, TranscriptionToken, plan_low_confidence_selection,
 };

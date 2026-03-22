@@ -35,7 +35,7 @@ pub trait AudioBackend {
     fn is_recording(&self) -> bool;
 }
 
-/// `AudioBackend` の薄いラッパ。バックエンド選択を抽象化し、ドメイン層に録音 I/F を提供する。
+/// `AudioBackend` の薄いラッパ。録音 port をアプリケーション層へ提供する。
 pub struct Recorder<T: AudioBackend> {
     backend: T,
 }
@@ -53,8 +53,7 @@ impl<T: AudioBackend> Recorder<T> {
 
     /// 録音を停止し、音声データを返します。
     pub fn stop(&mut self) -> Result<AudioData, AudioBackendError> {
-        let result = self.backend.stop_recording()?;
-        Ok(result)
+        self.backend.stop_recording()
     }
 
     /// 録音中かどうかを返します。

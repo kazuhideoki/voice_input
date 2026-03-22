@@ -299,8 +299,8 @@ mod tests {
     use super::*;
     use crate::application::RecordingConfig;
     use crate::application::TranscriptionClient;
-    use crate::domain::audio::{AudioData, Recorder};
-    use crate::domain::dict::{DictRepository, WordEntry};
+    use crate::application::{AudioData, DictRepository, Recorder};
+    use crate::domain::dict::WordEntry;
     use crate::domain::transcription::TranscriptionOutput;
     use crate::infrastructure::external::sound::{clear_test_sound_runner, set_test_sound_runner};
     use crate::infrastructure::media_control_service::MediaController;

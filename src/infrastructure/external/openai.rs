@@ -1,8 +1,8 @@
 //! OpenAI STT API ラッパ。
 //! AudioData（既定: FLAC、失敗時にWAVへフォールバック）を
 //! multipart/form-data で転写エンドポイントに送信します。
+use crate::application::AudioData;
 use crate::application::TranscriptionEvent;
-use crate::domain::audio::AudioData;
 use crate::domain::transcription::{TranscriptionOutput, TranscriptionToken};
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
@@ -481,7 +481,7 @@ fn build_http_client() -> Result<Client, reqwest::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::audio::AudioData;
+    use crate::application::AudioData;
 
     /// 転写レスポンスのJSONをパースできる
     #[test]

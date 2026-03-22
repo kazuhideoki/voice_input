@@ -10,9 +10,8 @@ use std::rc::Rc;
 use tokio::sync::mpsc;
 
 use crate::application::{
-    RecordingConfig, RecordingService, TranscriptionClient, TranscriptionService,
+    Recorder, RecordingConfig, RecordingService, TranscriptionClient, TranscriptionService,
 };
-use crate::domain::audio::Recorder;
 use crate::error::Result;
 use crate::infrastructure::{
     audio::{AudioBackend, CpalAudioBackend},
@@ -175,8 +174,7 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
 #[cfg(test)]
 pub mod test_helpers {
     use super::*;
-    use crate::application::{RecordingConfig, RecordingService};
-    use crate::domain::audio::AudioData;
+    use crate::application::{AudioData, RecordingConfig, RecordingService};
     use crate::domain::transcription::TranscriptionOutput;
     use crate::infrastructure::command_handler::CommandHandler;
     use crate::infrastructure::media_control_service::MediaControlService;

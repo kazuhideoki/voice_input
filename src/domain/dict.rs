@@ -1,7 +1,6 @@
 //! 単語辞書エンティティとリポジトリ抽象 – ドメイン層
 
 use serde::{Deserialize, Serialize};
-use std::io;
 use std::ops::Range;
 
 /// 1 単語エントリ
@@ -109,33 +108,23 @@ pub fn apply_replacements_with_mappings(
     }
 }
 
-/// 辞書永続化 I/F
-pub trait DictRepository: Send + Sync {
-    fn load(&self) -> io::Result<Vec<WordEntry>>;
-    fn save(&self, all: &[WordEntry]) -> io::Result<()>;
-
-    /// 追加 or 置換
-    fn upsert(&self, entry: WordEntry) -> io::Result<()> {
-        let mut list = self.load()?;
-        if let Some(e) = list.iter_mut().find(|e| e.surface == entry.surface) {
-            *e = entry;
-        } else {
-            list.push(entry);
-        }
-        self.save(&list)
+/// 辞書エントリを追加または置換する。
+pub fn upsert_entry(entries: &mut Vec<WordEntry>, entry: WordEntry) {
+    if let Some(existing) = entries
+        .iter_mut()
+        .find(|existing| existing.surface == entry.surface)
+    {
+        *existing = entry;
+    } else {
+        entries.push(entry);
     }
+}
 
-    /// surface で削除。戻り値 true=削除した / false=見つからず
-    fn delete(&self, surface: &str) -> io::Result<bool> {
-        let mut list = self.load()?;
-        let len_before = list.len();
-        list.retain(|e| e.surface != surface);
-        let deleted = len_before != list.len();
-        if deleted {
-            self.save(&list)?;
-        }
-        Ok(deleted)
-    }
+/// surface で辞書エントリを削除する。戻り値 true=削除した / false=見つからず
+pub fn remove_entry(entries: &mut Vec<WordEntry>, surface: &str) -> bool {
+    let len_before = entries.len();
+    entries.retain(|entry| entry.surface != surface);
+    len_before != entries.len()
 }
 
 // === Unit tests ==========================================================
@@ -234,5 +223,55 @@ mod tests {
         // foo should not count because entry is draft
         assert_eq!(entries[0].hit, 0);
         assert_eq!(entries[1].hit, 1);
+    }
+
+    /// 同じsurfaceのエントリは置換更新できる
+    #[test]
+    fn upsert_entry_replaces_existing_entry() {
+        let mut entries = vec![WordEntry {
+            surface: "foo".into(),
+            replacement: "bar".into(),
+            hit: 1,
+            status: EntryStatus::Active,
+        }];
+
+        upsert_entry(
+            &mut entries,
+            WordEntry {
+                surface: "foo".into(),
+                replacement: "baz".into(),
+                hit: 2,
+                status: EntryStatus::Draft,
+            },
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].replacement, "baz");
+        assert_eq!(entries[0].hit, 2);
+        assert_eq!(entries[0].status, EntryStatus::Draft);
+    }
+
+    /// surface一致のエントリを削除できる
+    #[test]
+    fn remove_entry_deletes_matching_surface() {
+        let mut entries = vec![
+            WordEntry {
+                surface: "foo".into(),
+                replacement: "bar".into(),
+                hit: 0,
+                status: EntryStatus::Active,
+            },
+            WordEntry {
+                surface: "baz".into(),
+                replacement: "qux".into(),
+                hit: 0,
+                status: EntryStatus::Active,
+            },
+        ];
+
+        assert!(remove_entry(&mut entries, "foo"));
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].surface, "baz");
+        assert!(!remove_entry(&mut entries, "missing"));
     }
 }

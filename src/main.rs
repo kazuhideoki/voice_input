@@ -3,8 +3,9 @@
 //! 辞書操作、設定操作の各コマンドを `ipc::send_cmd` で送信します。
 use clap::Parser;
 use voice_input::{
+    application::DictionaryService,
     cli::{Cli, Cmd, ConfigCmd, ConfigField, DictCmd},
-    domain::dict::{DictRepository, EntryStatus, WordEntry},
+    domain::dict::{EntryStatus, WordEntry},
     infrastructure::{config::AppConfig, dict::JsonFileDictRepo},
     ipc::{IpcCmd, send_cmd},
     load_env,
@@ -40,13 +41,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         /* 辞書操作 → ローカル JSON */
         Cmd::Dict { action } => {
-            let repo = JsonFileDictRepo::new();
+            let service = DictionaryService::new(Box::new(JsonFileDictRepo::new()));
             match action {
                 DictCmd::Add {
                     surface,
                     replacement,
                 } => {
-                    repo.upsert(WordEntry {
+                    service.upsert(WordEntry {
                         surface: surface.clone(),
                         replacement,
                         hit: 0,
@@ -55,14 +56,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("✅ Added/updated entry for “{surface}”");
                 }
                 DictCmd::Remove { surface } => {
-                    if repo.delete(&surface)? {
+                    if service.delete(&surface)? {
                         println!("🗑️  Removed “{surface}”");
                     } else {
                         println!("ℹ️  No entry found for “{surface}”");
                     }
                 }
                 DictCmd::List => {
-                    let list = repo.load()?;
+                    let list = service.list()?;
                     if list.is_empty() {
                         println!("(no entries)");
                     } else {

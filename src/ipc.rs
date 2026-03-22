@@ -1,6 +1,6 @@
 //! Unix Domain Socket (UDS) ベースのシンプルな IPC モジュール。
 //! `voice_input` CLI ↔ `voice_inputd` デーモン間の通信で利用します。
-use crate::domain::audio::AudioData;
+use crate::application::AudioData;
 use crate::utils::config::EnvConfig;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

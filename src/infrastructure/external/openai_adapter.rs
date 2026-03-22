@@ -1,8 +1,8 @@
 //! OpenAI クライアントのアダプター実装
 //! Application層のTranscriptionClientトレイトを実装
 
+use crate::application::AudioData;
 use crate::application::{TranscriptionClient, TranscriptionClientError, TranscriptionEvent};
-use crate::domain::audio::AudioData;
 use crate::domain::transcription::TranscriptionOutput;
 use crate::error::Result;
 use crate::infrastructure::external::openai::OpenAiClient;

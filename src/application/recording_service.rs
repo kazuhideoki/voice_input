@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
-use crate::domain::audio::{AudioBackend, AudioData, Recorder};
+use crate::application::{AudioBackend, AudioData, Recorder};
 use crate::error::{Result, VoiceInputError};
 
 /// 録音状態
@@ -332,7 +332,7 @@ impl<T: AudioBackend> RecordingService<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::audio::{AudioData, Recorder};
+    use crate::application::{AudioData, Recorder};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
     use tokio::time::timeout;
@@ -362,17 +362,17 @@ mod tests {
         }
     }
 
-    impl crate::domain::audio::AudioBackend for MockAudioBackend {
+    impl crate::application::AudioBackend for MockAudioBackend {
         fn start_recording(
             &self,
-        ) -> std::result::Result<(), crate::domain::audio::AudioBackendError> {
+        ) -> std::result::Result<(), crate::application::AudioBackendError> {
             self.is_recording.store(true, Ordering::SeqCst);
             Ok(())
         }
 
         fn stop_recording(
             &self,
-        ) -> std::result::Result<AudioData, crate::domain::audio::AudioBackendError> {
+        ) -> std::result::Result<AudioData, crate::application::AudioBackendError> {
             self.is_recording.store(false, Ordering::SeqCst);
             Ok(AudioData {
                 bytes: vec![0u8; 100],
@@ -386,18 +386,18 @@ mod tests {
         }
     }
 
-    impl crate::domain::audio::AudioBackend for FailingStopAudioBackend {
+    impl crate::application::AudioBackend for FailingStopAudioBackend {
         fn start_recording(
             &self,
-        ) -> std::result::Result<(), crate::domain::audio::AudioBackendError> {
+        ) -> std::result::Result<(), crate::application::AudioBackendError> {
             self.is_recording.store(true, Ordering::SeqCst);
             Ok(())
         }
 
         fn stop_recording(
             &self,
-        ) -> std::result::Result<AudioData, crate::domain::audio::AudioBackendError> {
-            Err(crate::domain::audio::AudioBackendError::StreamOperation {
+        ) -> std::result::Result<AudioData, crate::application::AudioBackendError> {
+            Err(crate::application::AudioBackendError::StreamOperation {
                 message: "stop failed".to_string(),
             })
         }
