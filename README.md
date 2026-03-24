@@ -219,7 +219,7 @@ cargo build --release
 # すべてのテストを実行（ローカル環境）
 cargo test
 
-# CI環境向けテスト（音声デバイスが不要なテストのみ）
+# 環境依存を避けるテスト（音声デバイスが不要なテストのみ）
 cargo test --features ci-test
 
 # フォーマットチェック
@@ -248,18 +248,9 @@ cargo bench
 
 メモリ使用量の目安はユニットテストで確認できます。
 
-### CI/CD
-
-GitHub Actionsで自動テストが実行されます。CIでは以下が実行されます：
-
-1. **コードフォーマットチェック** - `cargo fmt`
-2. **Clippy静的解析** - `cargo clippy --all-targets --features ci-test -- -D warnings`
-3. **テスト実行** - `cargo test --features ci-test --jobs 4`
-4. **追加のE2E確認** - モックモードのE2E確認をベストエフォートで実行
-
 #### ローカル品質チェック
 
-CI実行前にローカルで品質チェックを実行できます：
+ローカルで品質チェックを実行できます：
 
 ```bash
 # 基本的な品質チェック
@@ -275,7 +266,7 @@ CI実行前にローカルで品質チェックを実行できます：
 
 ### Rustバージョン管理
 
-プロジェクトルートの `rust-toolchain.toml` により、ローカル環境とCI環境で同じRustバージョンが使用されます：
+プロジェクトルートの `rust-toolchain.toml` により、このリポジトリで使用するRustバージョンと補助コンポーネントを固定しています：
 
 ```toml
 [toolchain]
@@ -285,12 +276,12 @@ profile = "minimal"
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
 ```
 
-これにより、開発者間およびCI環境でのビルド再現性が保証されます。
+これにより、ローカル環境でのビルドや lint の再現性が安定します。
 
 ### テスト戦略
 
 - **ローカル環境**: `cargo test` ですべてのテストを実行
-- **CI環境**: `cargo test --features ci-test` で環境依存のテストをスキップ
+- **環境依存テストを避けたい場合**: `cargo test --features ci-test` で環境依存のテストをスキップ
 - **無視されるテスト**: 音声デバイス、デーモンプロセス、GUI操作が必要なテスト
 
 ### エージェント向けドキュメント連携
