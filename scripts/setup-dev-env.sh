@@ -1,6 +1,12 @@
 #!/bin/bash
 # 開発環境セットアップスクリプト
 
+set -u
+
+LAUNCH_AGENT_LABEL="com.user.voiceinputd"
+LAUNCH_AGENT_TARGET="gui/$(id -u)/${LAUNCH_AGENT_LABEL}"
+WRAPPER_PATH="/usr/local/bin/voice_inputd_wrapper"
+
 echo "📦 Setting up development environment for voice_input..."
 
 # 1. ラッパースクリプトを作成
@@ -52,7 +58,7 @@ else
         <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>HOME</key>
         <string>/Users/kazuhideoki</string>
-        <key>DOTENV_PATH</key>
+        <key>VOICE_INPUT_ENV_PATH</key>
         <string>/Users/kazuhideoki/voice_input/.env</string>
     </dict>
     <key>WorkingDirectory</key>
@@ -64,13 +70,21 @@ fi
 
 # 5. デーモンを再起動
 echo "Restarting daemon..."
-pkill -f voice_inputd 2>/dev/null
+if launchctl print "$LAUNCH_AGENT_TARGET" >/dev/null 2>&1; then
+    launchctl bootout "$LAUNCH_AGENT_TARGET" 2>/dev/null || true
+fi
+pkill -f "/Users/kazuhideoki/voice_input/target/release/voice_inputd" 2>/dev/null || true
 sleep 1
-if launchctl kickstart -k user/$(id -u)/com.user.voiceinputd 2>/dev/null; then
+rm -f /tmp/voice_input.sock
+if launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist" 2>/dev/null; then
+    echo "Daemon loaded successfully."
+elif launchctl kickstart -k "$LAUNCH_AGENT_TARGET" 2>/dev/null; then
     echo "Daemon restarted successfully."
 else
-    echo "Starting daemon manually..."
-    nohup /usr/local/bin/voice_inputd_wrapper > /tmp/voice_inputd.out 2> /tmp/voice_inputd.err &
+    echo "❌ Failed to load LaunchAgent." >&2
+    echo "   Resolve the LaunchAgent state first instead of starting manually." >&2
+    echo "   launchctl bootout $LAUNCH_AGENT_TARGET" >&2
+    exit 1
 fi
 
 echo ""
@@ -79,9 +93,14 @@ echo ""
 echo "⚠️  重要: システム設定で権限を付与してください:"
 echo ""
 echo "1. システム設定を開く"
-echo "2. プライバシーとセキュリティ → アクセシビリティ"
+echo "2. プライバシーとセキュリティ → マイク"
 echo "3. 以下を追加して有効化:"
-echo "   /usr/local/bin/voice_inputd_wrapper"
+echo "   - 使用中のターミナル"
+echo "   - $WRAPPER_PATH"
+echo "4. プライバシーとセキュリティ → アクセシビリティ"
+echo "5. 以下を追加して有効化:"
+echo "   - 使用中のターミナル"
+echo "   - $WRAPPER_PATH"
 echo ""
 echo "今後は以下のコマンドで開発できます:"
 echo "  ./scripts/dev-build.sh"

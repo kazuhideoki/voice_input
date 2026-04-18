@@ -78,10 +78,15 @@ cargo build --release
    実行すると以下を自動で行います：
 
    - `/usr/local/bin/voice_inputd_wrapper` にラッパースクリプトを作成
-   - LaunchAgentをラッパー経由で起動するよう設定
+    - LaunchAgentをラッパー経由で起動するよう設定
    - デーモンを再起動
+   - `.env` の読み込み先を `VOICE_INPUT_ENV_PATH` で固定
 
 2. **権限の付与**
+   - システム設定 → プライバシーとセキュリティ → マイク
+   - 以下を追加して有効化：
+     - **使用中のターミナル**（Terminal.app、iTerm2など）
+     - `/usr/local/bin/voice_inputd_wrapper`
    - システム設定 → プライバシーとセキュリティ → アクセシビリティ
    - 以下を追加して有効化：
      - **使用中のターミナル**（Terminal.app、iTerm2など）
@@ -95,11 +100,15 @@ cargo build --release
 ./scripts/dev-build.sh
 ```
 
-これだけで：
+通常はこのコマンドだけで十分です。以下をまとめて行います：
 
 - リリースビルドを実行
-- デーモンを自動的に再起動
+- LaunchAgent 運用時は `com.user.voiceinputd` を安全に再起動
+- LaunchAgent が未ロードの場合のみ手動起動
 - **権限の再設定は不要**
+
+`voice_inputd` を手動起動している最中に LaunchAgent を併用すると二重起動の原因になります。
+常駐方法は `LaunchAgent` か `手動起動` のどちらか一方に統一してください。
 
 ### 仕組み
 
@@ -118,8 +127,17 @@ macOSのTCCシステムは実行ファイルのハッシュ値で権限を管理
 # エラーログを確認
 tail -f /tmp/voice_inputd.err
 
-# 手動でデーモンを再起動
-pkill -f voice_inputd
+# まず通常の再ビルド兼再起動を試す
+./scripts/dev-build.sh
+
+# LaunchAgent 運用中なら明示的に再起動
+launchctl kickstart -k gui/$(id -u)/com.user.voiceinputd
+```
+
+手動起動に切り替える場合は、先に LaunchAgent を停止してから起動してください。
+
+```sh
+launchctl bootout gui/$(id -u)/com.user.voiceinputd
 nohup /usr/local/bin/voice_inputd_wrapper > /tmp/voice_inputd.out 2> /tmp/voice_inputd.err &
 ```
 
@@ -244,10 +262,6 @@ cargo bench
 - 一時ファイル作成・削除のオーバーヘッド排除
 - システムコールの削減
 
-#### メモリ使用量の確認
-
-メモリ使用量の目安はユニットテストで確認できます。
-
 #### ローカル品質チェック
 
 ローカルで品質チェックを実行できます：
@@ -276,14 +290,8 @@ profile = "minimal"
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
 ```
 
-これにより、ローカル環境でのビルドや lint の再現性が安定します。
-
 ### テスト戦略
 
 - **ローカル環境**: `cargo test` ですべてのテストを実行
 - **環境依存テストを避けたい場合**: `cargo test --features ci-test` で環境依存のテストをスキップ
 - **無視されるテスト**: 音声デバイス、デーモンプロセス、GUI操作が必要なテスト
-
-### エージェント向けドキュメント連携
-
-- [AGENTS.md](./AGENTS.md)
