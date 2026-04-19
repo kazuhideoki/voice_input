@@ -68,7 +68,7 @@ cargo build --release
 
 ### 初回セットアップ
 
-1. **開発環境セットアップ（ラッパースクリプト方式）**
+1. **開発環境セットアップ（LaunchAgent 常駐方式）**
 
    ```sh
    ./scripts/setup-dev-env.sh
@@ -77,24 +77,19 @@ cargo build --release
    このスクリプトは個人用の開発環境を前提に絶対パスを書き込むため、リポジトリ配置先が異なる場合は中身を調整してから実行してください。
    実行すると以下を自動で行います：
 
-   - `/usr/local/bin/voice_inputd_wrapper` にラッパースクリプトを作成
-    - LaunchAgentをラッパー経由で起動するよう設定
-   - デーモンを再起動
+   - `~/Library/LaunchAgents/com.user.voiceinputd.plist` を作成
+   - LaunchAgent が固定配置先の `voice_inputd` を起動するよう設定
    - `.env` の読み込み先を `VOICE_INPUT_ENV_PATH` で固定
 
 2. **権限の付与**
    - システム設定 → プライバシーとセキュリティ → マイク
-   - 以下を追加して有効化：
-     - **使用中のターミナル**（Terminal.app、iTerm2など）
-     - `/usr/local/bin/voice_inputd_wrapper`
+   - `~/Library/Application Support/voice_input/bin/voice_inputd` を有効化
    - システム設定 → プライバシーとセキュリティ → アクセシビリティ
-   - 以下を追加して有効化：
-     - **使用中のターミナル**（Terminal.app、iTerm2など）
-     - `/usr/local/bin/voice_inputd_wrapper`
+   - `~/Library/Application Support/voice_input/bin/voice_inputd` を有効化
 
 ### 開発時の再ビルド
 
-ラッパースクリプト方式により、再ビルド時の権限再設定が不要になりました：
+固定配置先の daemon を LaunchAgent で起動するため、再ビルド時の権限再設定は不要です：
 
 ```sh
 ./scripts/dev-build.sh
@@ -103,21 +98,25 @@ cargo build --release
 通常はこのコマンドだけで十分です。以下をまとめて行います：
 
 - リリースビルドを実行
-- LaunchAgent 運用時は `com.user.voiceinputd` を安全に再起動
-- LaunchAgent が未ロードの場合のみ手動起動
+- `~/Library/Application Support/voice_input/bin/voice_inputd` へ反映
+- `com.user.voiceinputd` を再起動
 - **権限の再設定は不要**
+- ログイン後は LaunchAgent が自動起動するため、通常は再実行不要
 
-`voice_inputd` を手動起動している最中に LaunchAgent を併用すると二重起動の原因になります。
-常駐方法は `LaunchAgent` か `手動起動` のどちらか一方に統一してください。
+### 自動復旧
+
+- macOS に再ログインした後は LaunchAgent が自動で `voice_inputd` を起動します
+- `voice_inputd` が異常終了した場合は `KeepAlive` により自動で再起動されます
+- 長時間スリープ後にプロセスが落ちた場合も、LaunchAgent が再起動を試みます
 
 ### 仕組み
 
 macOSのTCCシステムは実行ファイルのハッシュ値で権限を管理するため、再ビルドすると権限が失われます。
-ラッパースクリプト方式では：
+この開発環境では：
 
-1. 変更されないラッパースクリプト（`/usr/local/bin/voice_inputd_wrapper`）に権限を付与
-2. ラッパーが実際のバイナリ（`target/release/voice_inputd`）を実行
-3. 再ビルドしてもラッパーのハッシュ値は変わらないため、権限が維持される
+1. ビルド結果を固定配置先（`~/Library/Application Support/voice_input/bin/voice_inputd`）へコピー
+2. その固定配置先の実行ファイルを同じ identifier で再署名
+3. LaunchAgent が常にその固定配置先を起動するため、再ビルド後も同じ権限対象を維持しやすい
 
 ### トラブルシューティング
 
@@ -130,15 +129,8 @@ tail -f /tmp/voice_inputd.err
 # まず通常の再ビルド兼再起動を試す
 ./scripts/dev-build.sh
 
-# LaunchAgent 運用中なら明示的に再起動
+# LaunchAgent を明示的に再起動
 launchctl kickstart -k gui/$(id -u)/com.user.voiceinputd
-```
-
-手動起動に切り替える場合は、先に LaunchAgent を停止してから起動してください。
-
-```sh
-launchctl bootout gui/$(id -u)/com.user.voiceinputd
-nohup /usr/local/bin/voice_inputd_wrapper > /tmp/voice_inputd.out 2> /tmp/voice_inputd.err &
 ```
 
 開発環境自体を解除したい場合は、以下を実行してください。

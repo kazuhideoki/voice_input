@@ -12,12 +12,12 @@ struct ScriptFixture {
     state_dir: PathBuf,
     repo_root: PathBuf,
     home_dir: PathBuf,
-    wrapper_path: PathBuf,
     plist_path: PathBuf,
     socket_path: PathBuf,
     stdout_path: PathBuf,
     stderr_path: PathBuf,
-    daemon_path: PathBuf,
+    build_daemon_path: PathBuf,
+    installed_daemon_path: PathBuf,
 }
 
 impl ScriptFixture {
@@ -28,18 +28,18 @@ impl ScriptFixture {
         let state_dir = root.join("state");
         let repo_root = root.join("repo");
         let home_dir = root.join("home");
-        let wrapper_path = root.join("bin/voice_inputd_wrapper");
         let plist_path = home_dir.join("Library/LaunchAgents/com.user.voiceinputd.plist");
         let socket_path = root.join("runtime/voice_input.sock");
         let stdout_path = root.join("runtime/voice_inputd.out");
         let stderr_path = root.join("runtime/voice_inputd.err");
-        let daemon_path = repo_root.join("target/release/voice_inputd");
+        let build_daemon_path = repo_root.join("target/release/voice_inputd");
+        let installed_daemon_path =
+            home_dir.join("Library/Application Support/voice_input/bin/voice_inputd");
 
         fs::create_dir_all(&fake_bin_dir)?;
         fs::create_dir_all(&state_dir)?;
         fs::create_dir_all(&repo_root)?;
         fs::create_dir_all(home_dir.join("Library/LaunchAgents"))?;
-        fs::create_dir_all(root.join("bin"))?;
         fs::create_dir_all(root.join("runtime"))?;
 
         write_executable(
@@ -59,6 +59,9 @@ case "$1" in
     ;;
   bootstrap|kickstart)
     touch "$FAKE_STATE_DIR/launch_agent_loaded"
+    if [ -x "$VOICE_INPUT_INSTALLED_DAEMON_PATH" ]; then
+      "$VOICE_INPUT_INSTALLED_DAEMON_PATH"
+    fi
     exit 0
     ;;
   *)
@@ -90,10 +93,10 @@ exit 1
         )?;
 
         write_executable(
-            &fake_bin_dir.join("nohup"),
+            &fake_bin_dir.join("codesign"),
             r#"#!/bin/sh
-echo "$@" >> "$FAKE_STATE_DIR/nohup.log"
-"$@"
+echo "$@" >> "$FAKE_STATE_DIR/codesign.log"
+exit 0
 "#,
         )?;
 
@@ -105,39 +108,18 @@ exit 0
 "#,
         )?;
 
-        write_executable(
-            &fake_bin_dir.join("sudo"),
-            r#"#!/bin/sh
-echo "$@" >> "$FAKE_STATE_DIR/sudo.log"
-"$@"
-"#,
-        )?;
-
-        fs::write(state_dir.join("launch_agent_loaded"), "")?;
-        fs::write(
-            &plist_path,
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.user.voiceinputd</string>
-</dict>
-</plist>
-"#,
-        )?;
-
         Ok(Self {
             _temp_dir: temp_dir,
             fake_bin_dir,
             state_dir,
             repo_root,
             home_dir,
-            wrapper_path,
             plist_path,
             socket_path,
             stdout_path,
             stderr_path,
-            daemon_path,
+            build_daemon_path,
+            installed_daemon_path,
         })
     }
 
@@ -157,11 +139,14 @@ echo "$@" >> "$FAKE_STATE_DIR/sudo.log"
         command.env("HOME", &self.home_dir);
         command.env("FAKE_STATE_DIR", &self.state_dir);
         command.env("VOICE_INPUT_REPO_ROOT", &self.repo_root);
-        command.env("VOICE_INPUT_WRAPPER_PATH", &self.wrapper_path);
         command.env("VOICE_INPUT_LAUNCH_AGENT_PLIST_PATH", &self.plist_path);
         command.env("VOICE_INPUT_SOCKET_PATH", &self.socket_path);
         command.env("VOICE_INPUT_STDOUT_PATH", &self.stdout_path);
         command.env("VOICE_INPUT_STDERR_PATH", &self.stderr_path);
+        command.env(
+            "VOICE_INPUT_INSTALLED_DAEMON_PATH",
+            &self.installed_daemon_path,
+        );
         command
     }
 
@@ -178,10 +163,42 @@ fn write_executable(path: &Path, body: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// setup-dev-env の後に dev-build を実行すると LaunchAgent に依存せず利用可能になる
+/// setup-dev-env は固定配置先を使う LaunchAgent plist を作成する
 #[test]
 #[cfg(feature = "ci-test")]
-fn setup_then_dev_build_starts_terminal_managed_daemon() -> Result<(), Box<dyn Error>> {
+fn setup_creates_launch_agent_for_installed_daemon() -> Result<(), Box<dyn Error>> {
+    let fixture = ScriptFixture::new()?;
+
+    let setup_output = fixture.command_for_script("setup-dev-env.sh").output()?;
+    assert!(
+        setup_output.status.success(),
+        "setup failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&setup_output.stdout),
+        String::from_utf8_lossy(&setup_output.stderr)
+    );
+
+    let plist = fs::read_to_string(&fixture.plist_path)?;
+    assert!(
+        plist.contains(&fixture.installed_daemon_path.display().to_string()),
+        "setup should point LaunchAgent to installed daemon path: {plist}"
+    );
+    assert!(
+        plist.contains("<key>RunAtLoad</key>"),
+        "setup should enable RunAtLoad: {plist}"
+    );
+    assert!(
+        plist.contains("<key>KeepAlive</key>"),
+        "setup should enable KeepAlive: {plist}"
+    );
+
+    Ok(())
+}
+
+/// setup-dev-env の後に dev-build を実行すると固定配置先へ反映され LaunchAgent で利用可能になる
+#[test]
+#[cfg(feature = "ci-test")]
+fn setup_then_dev_build_installs_daemon_and_bootstraps_launch_agent() -> Result<(), Box<dyn Error>>
+{
     let fixture = ScriptFixture::new()?;
 
     let setup_output = fixture.command_for_script("setup-dev-env.sh").output()?;
@@ -200,36 +217,33 @@ fn setup_then_dev_build_starts_terminal_managed_daemon() -> Result<(), Box<dyn E
         String::from_utf8_lossy(&build_output.stderr)
     );
 
-    assert!(fixture.daemon_path.exists(), "release daemon was not built");
     assert!(
-        fixture.socket_path.exists(),
-        "daemon socket was not created"
+        fixture.build_daemon_path.exists(),
+        "release daemon was not built"
     );
     assert!(
-        !fixture.wrapper_path.exists(),
-        "wrapper should not be required for development flow"
+        fixture.installed_daemon_path.exists(),
+        "installed daemon was not created"
+    );
+    assert!(
+        fixture.socket_path.exists(),
+        "launch agent did not make daemon available"
     );
 
     let launchctl_log = fixture.state_log("launchctl.log");
     assert!(
-        !launchctl_log.contains("bootstrap"),
-        "setup/dev-build should not bootstrap LaunchAgent: {launchctl_log}"
+        launchctl_log.contains("bootstrap"),
+        "dev-build should bootstrap LaunchAgent when not loaded: {launchctl_log}"
     );
     assert!(
-        !launchctl_log.contains("kickstart"),
-        "setup/dev-build should not kickstart LaunchAgent: {launchctl_log}"
-    );
-
-    let cargo_log = fixture.state_log("cargo.log");
-    assert!(
-        cargo_log.contains("build --release"),
-        "dev-build should perform a release build: {cargo_log}"
+        !launchctl_log.contains("bootout"),
+        "fresh setup -> dev-build should not boot out LaunchAgent again: {launchctl_log}"
     );
 
-    let nohup_log = fixture.state_log("nohup.log");
+    let codesign_log = fixture.state_log("codesign.log");
     assert!(
-        nohup_log.contains(&fixture.daemon_path.display().to_string()),
-        "dev-build should start the built daemon directly: {nohup_log}"
+        codesign_log.contains(&fixture.installed_daemon_path.display().to_string()),
+        "dev-build should sign installed daemon: {codesign_log}"
     );
 
     Ok(())
