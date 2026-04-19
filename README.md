@@ -141,6 +141,14 @@ launchctl bootout gui/$(id -u)/com.user.voiceinputd
 nohup /usr/local/bin/voice_inputd_wrapper > /tmp/voice_inputd.out 2> /tmp/voice_inputd.err &
 ```
 
+開発環境自体を解除したい場合は、以下を実行してください。
+
+```sh
+./scripts/cleanup-dev-env.sh
+```
+
+ビルド生成物まで消したい場合は、別途 `cargo clean` を実行してください。
+
 ## 使い方（基本）
 
 録音開始,停止
