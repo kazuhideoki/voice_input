@@ -1,37 +1,36 @@
 #!/bin/bash
-# 開発用ビルドスクリプト（ラッパー使用版）
+# 開発用ビルドスクリプト
 
-set -u
+set -eu
 
 # Rustc が macOS 15 の一部環境で root 所有の /var/folders/zz/.../T を参照して
 # Permission denied になる問題への暫定対応として、書き込み可能な専用 TMPDIR を設定する。
 VOICE_INPUT_TMP="/tmp"
-if ! mkdir -p "$VOICE_INPUT_TMP"; then
-    echo "❌ TMPDIR の作成に失敗しました: $VOICE_INPUT_TMP" >&2
-    exit 1
-fi
+mkdir -p "$VOICE_INPUT_TMP"
 export TMPDIR="$VOICE_INPUT_TMP"
 
-LAUNCH_AGENT_LABEL="com.user.voiceinputd"
+REPO_ROOT="${VOICE_INPUT_REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+LAUNCH_AGENT_LABEL="${VOICE_INPUT_LAUNCH_AGENT_LABEL:-com.user.voiceinputd}"
 LAUNCH_AGENT_TARGET="gui/$(id -u)/${LAUNCH_AGENT_LABEL}"
-WRAPPER_PATH="/usr/local/bin/voice_inputd_wrapper"
-DAEMON_PATH="$(pwd)/target/release/voice_inputd"
-SOCKET_PATH="/tmp/voice_input.sock"
+DAEMON_PATH="${VOICE_INPUT_DAEMON_PATH:-${REPO_ROOT}/target/release/voice_inputd}"
+SOCKET_PATH="${VOICE_INPUT_SOCKET_PATH:-/tmp/voice_input.sock}"
+STDOUT_PATH="${VOICE_INPUT_STDOUT_PATH:-/tmp/voice_inputd.out}"
+STDERR_PATH="${VOICE_INPUT_STDERR_PATH:-/tmp/voice_inputd.err}"
 
 launch_agent_loaded() {
     launchctl print "$LAUNCH_AGENT_TARGET" >/dev/null 2>&1
 }
 
-restart_loaded_launch_agent() {
-    if launchctl kickstart -k "$LAUNCH_AGENT_TARGET" 2>/dev/null; then
-        echo "✅ Build complete! voice_inputd has been restarted via LaunchAgent."
+stop_launch_agent_if_loaded() {
+    if ! launch_agent_loaded; then
         return 0
     fi
 
-    echo "❌ LaunchAgent restart failed." >&2
-    echo "   Refusing manual start to avoid duplicate voice_inputd processes." >&2
-    echo "   Resolve the LaunchAgent state first: launchctl bootout $LAUNCH_AGENT_TARGET" >&2
-    return 1
+    echo "Stopping LaunchAgent to avoid duplicate voice_inputd processes..."
+    if ! launchctl bootout "$LAUNCH_AGENT_TARGET" 2>/dev/null; then
+        echo "❌ Failed to stop LaunchAgent: $LAUNCH_AGENT_TARGET" >&2
+        exit 1
+    fi
 }
 
 restart_manual_daemon() {
@@ -39,23 +38,32 @@ restart_manual_daemon() {
     sleep 1
     rm -f "$SOCKET_PATH"
 
-    nohup "$WRAPPER_PATH" > /tmp/voice_inputd.out 2> /tmp/voice_inputd.err &
-    echo "✅ Build complete! voice_inputd started manually."
+    nohup "$DAEMON_PATH" </dev/null > "$STDOUT_PATH" 2> "$STDERR_PATH" &
+
+    wait_count=0
+    while [ "$wait_count" -lt 20 ]; do
+        if [ -S "$SOCKET_PATH" ] || [ -e "$SOCKET_PATH" ]; then
+            echo "✅ Build complete! voice_inputd started manually."
+            return 0
+        fi
+
+        sleep 0.2
+        wait_count=$((wait_count + 1))
+    done
+
+    echo "❌ voice_inputd did not become available after build." >&2
+    echo "   stderr: $STDERR_PATH" >&2
+    echo "   stdout: $STDOUT_PATH" >&2
+    return 1
 }
 
 echo "🔨 Building voice_input..."
+cd "$REPO_ROOT"
 if ! cargo build --release; then
-    echo "❌ Build failed"
+    echo "❌ Build failed" >&2
     exit 1
 fi
 
-
 echo "🔄 Restarting voice_inputd daemon..."
-
-# LaunchAgent 利用中は manual fallback で二重起動させない
-if launch_agent_loaded; then
-    restart_loaded_launch_agent || exit 1
-else
-    echo "ℹ️  LaunchAgent is not loaded, using manual restart path..."
-    restart_manual_daemon
-fi
+stop_launch_agent_if_loaded
+restart_manual_daemon
