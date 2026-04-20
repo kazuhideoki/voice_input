@@ -219,33 +219,65 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             lines.push("Input device: OK".to_string());
         }
 
-        // OpenAI APIチェック
-        match EnvConfig::get().transcription.openai_api_key.clone() {
-            Some(key) => {
-                lines.push("OPENAI_API_KEY: present".to_string());
-                let client = reqwest::Client::new();
-                match client
-                    .get("https://api.openai.com/v1/models")
-                    .bearer_auth(key)
-                    .send()
-                    .await
-                {
-                    Ok(resp) if resp.status().is_success() => {
-                        lines.push("OpenAI API: reachable".to_string());
+        let transcription = &EnvConfig::get().transcription;
+        match transcription.provider {
+            crate::utils::config::TranscriptionProvider::OpenAi => {
+                match transcription.api_key.clone() {
+                    Some(key) => {
+                        lines.push("TRANSCRIPTION_PROVIDER: openai".to_string());
+                        lines.push("TRANSCRIPTION_API_KEY: present".to_string());
+                        let client = reqwest::Client::new();
+                        match client
+                            .get("https://api.openai.com/v1/models")
+                            .bearer_auth(key)
+                            .send()
+                            .await
+                        {
+                            Ok(resp) if resp.status().is_success() => {
+                                lines.push("OpenAI API: reachable".to_string());
+                            }
+                            Ok(resp) => {
+                                lines.push(format!("OpenAI API: fail({})", resp.status()));
+                                ok = false;
+                            }
+                            Err(e) => {
+                                lines.push(format!("OpenAI API: error({})", e));
+                                ok = false;
+                            }
+                        }
                     }
-                    Ok(resp) => {
-                        lines.push(format!("OpenAI API: fail({})", resp.status()));
-                        ok = false;
-                    }
-                    Err(e) => {
-                        lines.push(format!("OpenAI API: error({})", e));
+                    None => {
+                        lines.push("TRANSCRIPTION_PROVIDER: openai".to_string());
+                        lines.push("TRANSCRIPTION_API_KEY: missing".to_string());
                         ok = false;
                     }
                 }
             }
-            None => {
-                lines.push("OPENAI_API_KEY: missing".to_string());
-                ok = false;
+            crate::utils::config::TranscriptionProvider::MlxQwen3Asr => {
+                let resolved_command = crate::utils::config::resolve_mlx_qwen3_asr_command(
+                    &transcription.mlx_qwen3_asr_command,
+                );
+                lines.push("TRANSCRIPTION_PROVIDER: mlx-qwen3-asr".to_string());
+                lines.push(format!("MLX_QWEN3_ASR_COMMAND: {resolved_command}"));
+                match std::process::Command::new(&resolved_command)
+                    .arg("--help")
+                    .output()
+                {
+                    Ok(output) if output.status.success() => {
+                        lines.push("mlx-qwen3-asr: reachable".to_string());
+                    }
+                    Ok(output) => {
+                        lines.push(format!(
+                            "mlx-qwen3-asr: fail({})",
+                            output.status.code().unwrap_or(-1)
+                        ));
+                        ok = false;
+                    }
+                    Err(error) => {
+                        lines.push(format!("mlx-qwen3-asr: error({})", error));
+                        ok = false;
+                    }
+                }
             }
         }
 

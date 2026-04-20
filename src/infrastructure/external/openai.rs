@@ -102,11 +102,11 @@ impl OpenAiClient {
         let config = EnvConfig::get();
         let api_key = config
             .transcription
-            .openai_api_key
+            .api_key
             .clone()
             .ok_or(OpenAiError::MissingApiKey)?;
 
-        let model = config.transcription.model.as_str().to_string();
+        let model = config.transcription.model.clone();
 
         let client = build_http_client().map_err(OpenAiError::HttpClientBuild)?;
 
@@ -502,7 +502,7 @@ mod tests {
 
         // 環境変数またはテスト設定でAPIキーが設定されていれば成功
         // そうでなければ失敗
-        if EnvConfig::get().transcription.openai_api_key.is_some() {
+        if EnvConfig::get().transcription.api_key.is_some() {
             assert!(client.is_ok());
         } else {
             assert!(matches!(client, Err(OpenAiError::MissingApiKey)));
@@ -516,7 +516,7 @@ mod tests {
         EnvConfig::test_init();
 
         // OpenAI APIキーが設定されていない場合はテストをスキップ
-        if EnvConfig::get().transcription.openai_api_key.is_none() {
+        if EnvConfig::get().transcription.api_key.is_none() {
             println!("Skipping test: OPENAI_API_KEY not set");
             return;
         }
@@ -560,7 +560,7 @@ mod tests {
         EnvConfig::test_init();
 
         // OpenAI APIキーが設定されていない場合はテストをスキップ
-        if EnvConfig::get().transcription.openai_api_key.is_none() {
+        if EnvConfig::get().transcription.api_key.is_none() {
             println!("Skipping test: OPENAI_API_KEY not set");
             return;
         }

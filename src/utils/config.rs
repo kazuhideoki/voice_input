@@ -7,7 +7,9 @@
 //! プロセス起動時に一度だけ初期化し、以降はどこからでもアクセス可能。
 
 use once_cell::sync::OnceCell;
-use std::path::PathBuf;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// グローバル環境変数設定
@@ -23,9 +25,13 @@ static TEST_LOCK: Mutex<()> = Mutex::new(());
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ConfigError {
     #[error(
-        "OPENAI_TRANSCRIBE_MODEL={value} is unsupported. Supported models: gpt-4o-mini-transcribe, gpt-4o-transcribe"
+        "TRANSCRIPTION_PROVIDER={value} is unsupported. Supported providers: openai, mlx-qwen3-asr"
     )]
-    UnsupportedTranscriptionModel { value: String },
+    UnsupportedTranscriptionProvider { value: String },
+    #[error(
+        "TRANSCRIPTION_MODEL={value} is unsupported for provider {provider}. Supported OpenAI models: gpt-4o-mini-transcribe, gpt-4o-transcribe"
+    )]
+    UnsupportedTranscriptionModel { provider: String, value: String },
     #[error("VOICE_INPUT_MAX_SECS must be an integer: {value}")]
     InvalidMaxDurationSecs { value: String },
     #[error("{name} must be either 'true' or 'false': {value}")]
@@ -34,57 +40,83 @@ pub enum ConfigError {
     InvalidAudioFormat { value: String },
 }
 
-/// OpenAI の文字起こしモデル
+/// 転写バックエンド種別
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OpenAiTranscriptionModel {
-    Gpt4oMiniTranscribe,
-    Gpt4oTranscribe,
+pub enum TranscriptionProvider {
+    OpenAi,
+    MlxQwen3Asr,
 }
 
-impl OpenAiTranscriptionModel {
-    const DEFAULT: Self = Self::Gpt4oMiniTranscribe;
+impl TranscriptionProvider {
+    const DEFAULT: Self = Self::OpenAi;
 
-    /// 環境変数からモデル設定を生成
+    /// 環境変数から転写バックエンド設定を生成
     pub fn from_env() -> Result<Self, ConfigError> {
-        match std::env::var("OPENAI_TRANSCRIBE_MODEL") {
+        match std::env::var("TRANSCRIPTION_PROVIDER") {
             Ok(value) => Self::parse(&value),
             Err(_) => Ok(Self::DEFAULT),
         }
     }
 
-    /// 文字列からモデル設定を生成
+    /// 文字列から転写バックエンド設定を生成
     pub fn parse(value: &str) -> Result<Self, ConfigError> {
         match value {
-            "gpt-4o-mini-transcribe" => Ok(Self::Gpt4oMiniTranscribe),
-            "gpt-4o-transcribe" => Ok(Self::Gpt4oTranscribe),
-            unsupported => Err(ConfigError::UnsupportedTranscriptionModel {
+            "openai" => Ok(Self::OpenAi),
+            "mlx-qwen3-asr" => Ok(Self::MlxQwen3Asr),
+            unsupported => Err(ConfigError::UnsupportedTranscriptionProvider {
                 value: unsupported.to_string(),
             }),
         }
     }
 
-    /// モデル名を文字列で取得
+    /// 環境変数未指定時のモデル名を返す
+    pub fn default_model(&self) -> &'static str {
+        match self {
+            Self::OpenAi => "gpt-4o-mini-transcribe",
+            Self::MlxQwen3Asr => "Qwen/Qwen3-ASR-1.7B",
+        }
+    }
+
+    /// モデル名を検証する
+    pub fn validate_model(&self, value: &str) -> Result<(), ConfigError> {
+        match self {
+            Self::OpenAi => match value {
+                "gpt-4o-mini-transcribe" | "gpt-4o-transcribe" => Ok(()),
+                unsupported => Err(ConfigError::UnsupportedTranscriptionModel {
+                    provider: self.as_str().to_string(),
+                    value: unsupported.to_string(),
+                }),
+            },
+            Self::MlxQwen3Asr => Ok(()),
+        }
+    }
+
+    /// バックエンド名を文字列で取得
     pub fn as_str(&self) -> &str {
         match self {
-            Self::Gpt4oMiniTranscribe => "gpt-4o-mini-transcribe",
-            Self::Gpt4oTranscribe => "gpt-4o-transcribe",
+            Self::OpenAi => "openai",
+            Self::MlxQwen3Asr => "mlx-qwen3-asr",
         }
     }
 }
 
-/// OpenAI 転写設定
+/// 転写設定
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranscriptionConfig {
-    /// OpenAI APIキー
-    pub openai_api_key: Option<String>,
-    /// OpenAI 文字起こしモデル
-    pub model: OpenAiTranscriptionModel,
+    /// 転写バックエンド
+    pub provider: TranscriptionProvider,
+    /// 転写サービス APIキー
+    pub api_key: Option<String>,
+    /// 転写モデル名
+    pub model: String,
     /// ストリーミング直接入力を有効にする
     pub streaming_enabled: bool,
     /// 転写ログ保存先パス
     pub log_path: Option<PathBuf>,
     /// 低信頼語の自動選択を有効にする
     pub low_confidence_selection_enabled: bool,
+    /// mlx-qwen3-asr コマンド名
+    pub mlx_qwen3_asr_command: String,
 }
 
 impl TranscriptionConfig {
@@ -184,8 +216,10 @@ pub struct EnvConfig {
 impl EnvConfig {
     /// 環境変数から設定を構築し、妥当性を検証する
     pub(crate) fn from_env() -> Result<Self, ConfigError> {
-        let model = OpenAiTranscriptionModel::from_env()?;
+        let provider = TranscriptionProvider::from_env()?;
+        let model = load_transcription_model(provider)?;
         let streaming_enabled = parse_bool_env("OPENAI_TRANSCRIBE_STREAMING")?;
+        let mlx_qwen3_asr_command = load_mlx_qwen3_asr_command();
         let max_duration_secs = match std::env::var("VOICE_INPUT_MAX_SECS") {
             Ok(value) => value
                 .parse()
@@ -200,13 +234,16 @@ impl EnvConfig {
                 socket_dir: non_empty_env("VOICE_INPUT_SOCKET_DIR").map(PathBuf::from),
             },
             transcription: TranscriptionConfig {
-                openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
+                provider,
+                api_key: non_empty_env("TRANSCRIPTION_API_KEY")
+                    .or_else(|| non_empty_env("OPENAI_API_KEY")),
                 model,
                 streaming_enabled,
                 log_path: non_empty_env("OPENAI_TRANSCRIPTION_LOG_PATH").map(PathBuf::from),
                 low_confidence_selection_enabled: parse_bool_env(
                     "VOICE_INPUT_LOW_CONFIDENCE_SELECTION",
                 )?,
+                mlx_qwen3_asr_command,
             },
             proxy: ProxyConfig {
                 all: non_empty_env_with_lowercase_fallback("ALL_PROXY"),
@@ -314,6 +351,114 @@ fn csv_env(name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn load_transcription_model(provider: TranscriptionProvider) -> Result<String, ConfigError> {
+    let value = non_empty_env("TRANSCRIPTION_MODEL").or_else(|| match provider {
+        TranscriptionProvider::OpenAi => non_empty_env("OPENAI_TRANSCRIBE_MODEL"),
+        TranscriptionProvider::MlxQwen3Asr => None,
+    });
+
+    let model = value.unwrap_or_else(|| provider.default_model().to_string());
+    provider.validate_model(&model)?;
+    Ok(model)
+}
+
+fn load_mlx_qwen3_asr_command() -> String {
+    let command = non_empty_env("MLX_QWEN3_ASR_COMMAND").unwrap_or_else(|| "mlx-qwen3-asr".into());
+    resolve_mlx_qwen3_asr_command(&command)
+}
+
+/// mlx-qwen3-asr コマンド名を実行可能な絶対パスへ解決する
+pub fn resolve_mlx_qwen3_asr_command(command: &str) -> String {
+    resolve_executable_command(command).unwrap_or_else(|| command.to_string())
+}
+
+fn resolve_executable_command(command: &str) -> Option<String> {
+    let command_path = PathBuf::from(command);
+    if command_path.components().count() > 1 {
+        return is_executable_file(&command_path).then_some(command.to_string());
+    }
+
+    executable_search_dirs()
+        .into_iter()
+        .map(|dir| dir.join(command))
+        .find(|candidate| is_executable_file(candidate))
+        .map(|candidate| candidate.display().to_string())
+}
+
+fn executable_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            push_unique_dir(&mut dirs, dir);
+        }
+    }
+
+    if let Some(home) = non_empty_env("HOME").map(PathBuf::from) {
+        for dir in [
+            home.join(".local/bin"),
+            home.join("bin"),
+            home.join(".cargo/bin"),
+        ] {
+            push_unique_dir(&mut dirs, dir);
+        }
+
+        let user_python_root = home.join("Library/Python");
+        if let Ok(entries) = std::fs::read_dir(user_python_root) {
+            let mut python_bin_dirs = entries
+                .filter_map(|entry| entry.ok().map(|entry| entry.path().join("bin")))
+                .collect::<Vec<_>>();
+            python_bin_dirs.sort_by(|left, right| right.cmp(left));
+            for dir in python_bin_dirs {
+                push_unique_dir(&mut dirs, dir);
+            }
+        }
+    }
+
+    for dir in [
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/opt/homebrew/sbin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/local/sbin"),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/usr/sbin"),
+        PathBuf::from("/sbin"),
+    ] {
+        push_unique_dir(&mut dirs, dir);
+    }
+
+    dirs
+}
+
+fn push_unique_dir(dirs: &mut Vec<PathBuf>, dir: PathBuf) {
+    if dir.as_os_str().is_empty() || dirs.iter().any(|entry| entry == &dir) {
+        return;
+    }
+    dirs.push(dir);
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => return false,
+    };
+
+    if !metadata.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        metadata.permissions().mode() & 0o111 != 0
+    }
+
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 fn parse_bool_env(name: &'static str) -> Result<bool, ConfigError> {
     match std::env::var(name) {
         Ok(value) => match value.as_str() {
@@ -347,12 +492,14 @@ impl PreferredAudioFormat {
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioConfig, ConfigError, EnvConfig, OpenAiTranscriptionModel, PathConfig,
-        PreferredAudioFormat, ProfilingConfig, ProxyConfig, RecordingConfig, TEST_LOCK,
-        TranscriptionConfig,
+        AudioConfig, ConfigError, EnvConfig, PathConfig, PreferredAudioFormat, ProfilingConfig,
+        ProxyConfig, RecordingConfig, TEST_LOCK, TranscriptionConfig, TranscriptionProvider,
     };
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::sync::MutexGuard;
+    use tempfile::TempDir;
 
     fn lock_test_env() -> MutexGuard<'static, ()> {
         TEST_LOCK
@@ -360,47 +507,14 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// 対応モデルは文字列から列挙型へ変換できる
-    #[test]
-    fn supported_models_are_parsed() {
-        assert_eq!(
-            OpenAiTranscriptionModel::parse("gpt-4o-mini-transcribe").unwrap(),
-            OpenAiTranscriptionModel::Gpt4oMiniTranscribe
-        );
-        assert_eq!(
-            OpenAiTranscriptionModel::parse("gpt-4o-transcribe").unwrap(),
-            OpenAiTranscriptionModel::Gpt4oTranscribe
-        );
-    }
-
-    /// 未対応モデルは設定値として拒否する
-    #[test]
-    fn unsupported_model_is_rejected() {
-        let error = OpenAiTranscriptionModel::parse("whisper-1").unwrap_err();
-        assert_eq!(
-            error,
-            ConfigError::UnsupportedTranscriptionModel {
-                value: "whisper-1".to_string(),
-            }
-        );
-    }
-
-    /// ストリーミング設定は環境変数から有効化状態を読み取れる
-    #[test]
-    fn streaming_flag_is_loaded_from_environment() {
-        let config = EnvConfig {
+    fn sample_env_config(transcription: TranscriptionConfig) -> EnvConfig {
+        EnvConfig {
             paths: PathConfig {
                 xdg_data_home: None,
                 socket_path: None,
                 socket_dir: None,
             },
-            transcription: TranscriptionConfig {
-                openai_api_key: None,
-                model: OpenAiTranscriptionModel::Gpt4oMiniTranscribe,
-                streaming_enabled: true,
-                log_path: None,
-                low_confidence_selection_enabled: false,
-            },
+            transcription,
             proxy: ProxyConfig {
                 all: None,
                 https: None,
@@ -414,7 +528,65 @@ mod tests {
                 max_duration_secs: 30,
             },
             profiling: ProfilingConfig { enabled: false },
-        };
+        }
+    }
+
+    fn openai_transcription_config() -> TranscriptionConfig {
+        TranscriptionConfig {
+            provider: TranscriptionProvider::OpenAi,
+            api_key: None,
+            model: "gpt-4o-mini-transcribe".to_string(),
+            streaming_enabled: false,
+            log_path: None,
+            low_confidence_selection_enabled: false,
+            mlx_qwen3_asr_command: "mlx-qwen3-asr".to_string(),
+        }
+    }
+
+    /// 対応プロバイダは文字列から列挙型へ変換できる
+    #[test]
+    fn supported_transcription_providers_are_parsed() {
+        assert_eq!(
+            TranscriptionProvider::parse("openai").unwrap(),
+            TranscriptionProvider::OpenAi
+        );
+        assert_eq!(
+            TranscriptionProvider::parse("mlx-qwen3-asr").unwrap(),
+            TranscriptionProvider::MlxQwen3Asr
+        );
+    }
+
+    /// OpenAI の未対応モデルは設定値として拒否する
+    #[test]
+    fn unsupported_openai_model_is_rejected() {
+        let error = TranscriptionProvider::OpenAi
+            .validate_model("whisper-1")
+            .unwrap_err();
+        assert_eq!(
+            error,
+            ConfigError::UnsupportedTranscriptionModel {
+                provider: "openai".to_string(),
+                value: "whisper-1".to_string(),
+            }
+        );
+    }
+
+    /// mlx-qwen3-asr は Hugging Face のモデル名をそのまま受け入れる
+    #[test]
+    fn mlx_qwen3_asr_accepts_hugging_face_model_name() {
+        assert!(
+            TranscriptionProvider::MlxQwen3Asr
+                .validate_model("Qwen/Qwen3-ASR-1.7B")
+                .is_ok()
+        );
+    }
+
+    /// ストリーミング設定は環境変数から有効化状態を読み取れる
+    #[test]
+    fn streaming_flag_is_loaded_from_environment() {
+        let mut transcription = openai_transcription_config();
+        transcription.streaming_enabled = true;
+        let config = sample_env_config(transcription);
 
         assert!(config.transcription.streaming_enabled);
     }
@@ -422,33 +594,9 @@ mod tests {
     /// ストリーミング有効時は転写を直列化する
     #[test]
     fn streaming_uses_single_transcription_parallelism() {
-        let config = EnvConfig {
-            paths: PathConfig {
-                xdg_data_home: None,
-                socket_path: None,
-                socket_dir: None,
-            },
-            transcription: TranscriptionConfig {
-                openai_api_key: None,
-                model: OpenAiTranscriptionModel::Gpt4oMiniTranscribe,
-                streaming_enabled: true,
-                log_path: None,
-                low_confidence_selection_enabled: false,
-            },
-            proxy: ProxyConfig {
-                all: None,
-                https: None,
-                http: None,
-            },
-            audio: AudioConfig {
-                input_device_priorities: Vec::new(),
-                preferred_format: PreferredAudioFormat::Flac,
-            },
-            recording: RecordingConfig {
-                max_duration_secs: 30,
-            },
-            profiling: ProfilingConfig { enabled: false },
-        };
+        let mut transcription = openai_transcription_config();
+        transcription.streaming_enabled = true;
+        let config = sample_env_config(transcription);
 
         assert_eq!(config.recommended_transcription_parallelism(), 1);
     }
@@ -456,33 +604,7 @@ mod tests {
     /// ストリーミング無効時は従来の並列度を維持する
     #[test]
     fn non_streaming_keeps_existing_transcription_parallelism() {
-        let config = EnvConfig {
-            paths: PathConfig {
-                xdg_data_home: None,
-                socket_path: None,
-                socket_dir: None,
-            },
-            transcription: TranscriptionConfig {
-                openai_api_key: None,
-                model: OpenAiTranscriptionModel::Gpt4oTranscribe,
-                streaming_enabled: false,
-                log_path: None,
-                low_confidence_selection_enabled: false,
-            },
-            proxy: ProxyConfig {
-                all: None,
-                https: None,
-                http: None,
-            },
-            audio: AudioConfig {
-                input_device_priorities: Vec::new(),
-                preferred_format: PreferredAudioFormat::Flac,
-            },
-            recording: RecordingConfig {
-                max_duration_secs: 30,
-            },
-            profiling: ProfilingConfig { enabled: false },
-        };
+        let config = sample_env_config(openai_transcription_config());
 
         assert_eq!(config.recommended_transcription_parallelism(), 2);
     }
@@ -490,33 +612,7 @@ mod tests {
     /// 転写ログ保存先は環境変数未指定なら無効のままになる
     #[test]
     fn transcription_log_path_is_disabled_by_default() {
-        let config = EnvConfig {
-            paths: PathConfig {
-                xdg_data_home: None,
-                socket_path: None,
-                socket_dir: None,
-            },
-            transcription: TranscriptionConfig {
-                openai_api_key: None,
-                model: OpenAiTranscriptionModel::Gpt4oTranscribe,
-                streaming_enabled: false,
-                log_path: None,
-                low_confidence_selection_enabled: false,
-            },
-            proxy: ProxyConfig {
-                all: None,
-                https: None,
-                http: None,
-            },
-            audio: AudioConfig {
-                input_device_priorities: Vec::new(),
-                preferred_format: PreferredAudioFormat::Flac,
-            },
-            recording: RecordingConfig {
-                max_duration_secs: 30,
-            },
-            profiling: ProfilingConfig { enabled: false },
-        };
+        let config = sample_env_config(openai_transcription_config());
 
         assert_eq!(config.transcription.log_path, None);
     }
@@ -524,33 +620,9 @@ mod tests {
     /// 転写ログ保存先は設定されていればその値を保持する
     #[test]
     fn transcription_log_path_keeps_configured_value() {
-        let config = EnvConfig {
-            paths: PathConfig {
-                xdg_data_home: None,
-                socket_path: None,
-                socket_dir: None,
-            },
-            transcription: TranscriptionConfig {
-                openai_api_key: None,
-                model: OpenAiTranscriptionModel::Gpt4oTranscribe,
-                streaming_enabled: false,
-                log_path: Some(PathBuf::from("/tmp/transcription-log.ndjson")),
-                low_confidence_selection_enabled: false,
-            },
-            proxy: ProxyConfig {
-                all: None,
-                https: None,
-                http: None,
-            },
-            audio: AudioConfig {
-                input_device_priorities: Vec::new(),
-                preferred_format: PreferredAudioFormat::Flac,
-            },
-            recording: RecordingConfig {
-                max_duration_secs: 30,
-            },
-            profiling: ProfilingConfig { enabled: false },
-        };
+        let mut transcription = openai_transcription_config();
+        transcription.log_path = Some(PathBuf::from("/tmp/transcription-log.ndjson"));
+        let config = sample_env_config(transcription);
 
         assert_eq!(
             config.transcription.log_path.as_deref(),
@@ -578,33 +650,7 @@ mod tests {
     /// 低信頼語の自動選択は既定で無効
     #[test]
     fn low_confidence_selection_is_disabled_by_default() {
-        let config = EnvConfig {
-            paths: PathConfig {
-                xdg_data_home: None,
-                socket_path: None,
-                socket_dir: None,
-            },
-            transcription: TranscriptionConfig {
-                openai_api_key: None,
-                model: OpenAiTranscriptionModel::Gpt4oTranscribe,
-                streaming_enabled: false,
-                log_path: None,
-                low_confidence_selection_enabled: false,
-            },
-            proxy: ProxyConfig {
-                all: None,
-                https: None,
-                http: None,
-            },
-            audio: AudioConfig {
-                input_device_priorities: Vec::new(),
-                preferred_format: PreferredAudioFormat::Flac,
-            },
-            recording: RecordingConfig {
-                max_duration_secs: 30,
-            },
-            profiling: ProfilingConfig { enabled: false },
-        };
+        let config = sample_env_config(openai_transcription_config());
 
         assert!(!config.transcription.low_confidence_selection_enabled);
     }
@@ -643,11 +689,12 @@ mod tests {
         }
     }
 
-    /// 未対応モデルが環境変数に指定されている場合は設定構築に失敗する
+    /// OpenAI の未対応モデルが環境変数に指定されている場合は設定構築に失敗する
     #[test]
-    fn unsupported_model_in_env_fails_config_loading() {
+    fn unsupported_openai_model_in_env_fails_config_loading() {
         let _lock = lock_test_env();
         unsafe {
+            std::env::set_var("TRANSCRIPTION_PROVIDER", "openai");
             std::env::set_var("OPENAI_TRANSCRIBE_MODEL", "whisper-1");
         }
 
@@ -656,12 +703,99 @@ mod tests {
         assert_eq!(
             result,
             Err(ConfigError::UnsupportedTranscriptionModel {
+                provider: "openai".to_string(),
                 value: "whisper-1".to_string(),
             })
         );
 
         unsafe {
+            std::env::remove_var("TRANSCRIPTION_PROVIDER");
             std::env::remove_var("OPENAI_TRANSCRIBE_MODEL");
+        }
+    }
+
+    /// mlx-qwen3-asr 指定時は既定モデルを自動設定する
+    #[test]
+    fn mlx_qwen3_asr_uses_default_model_when_model_env_is_missing() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("TRANSCRIPTION_PROVIDER", "mlx-qwen3-asr");
+            std::env::remove_var("TRANSCRIPTION_MODEL");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(
+            config.transcription.provider,
+            TranscriptionProvider::MlxQwen3Asr
+        );
+        assert_eq!(config.transcription.model, "Qwen/Qwen3-ASR-1.7B");
+        assert_eq!(config.transcription.mlx_qwen3_asr_command, "mlx-qwen3-asr");
+
+        unsafe {
+            std::env::remove_var("TRANSCRIPTION_PROVIDER");
+        }
+    }
+
+    /// mlx-qwen3-asr は app bundle でもユーザー Python 配下から自動検出できる
+    #[test]
+    fn mlx_qwen3_asr_command_is_resolved_from_user_python_bin() {
+        let _lock = lock_test_env();
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let home_dir = temp_dir.path().join("home");
+        let user_bin_dir = home_dir.join("Library/Python/3.9/bin");
+        fs::create_dir_all(&user_bin_dir).expect("create user bin dir");
+
+        let command_path = user_bin_dir.join("mlx-qwen3-asr");
+        fs::write(&command_path, "#!/bin/sh\nexit 0\n").expect("write fake command");
+        let mut permissions = fs::metadata(&command_path)
+            .expect("read metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&command_path, permissions).expect("set executable");
+
+        unsafe {
+            std::env::set_var("TRANSCRIPTION_PROVIDER", "mlx-qwen3-asr");
+            std::env::set_var("HOME", &home_dir);
+            std::env::set_var("PATH", "/usr/bin:/bin:/usr/sbin:/sbin");
+            std::env::remove_var("TRANSCRIPTION_MODEL");
+            std::env::remove_var("MLX_QWEN3_ASR_COMMAND");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(
+            config.transcription.mlx_qwen3_asr_command,
+            command_path.display().to_string()
+        );
+
+        unsafe {
+            std::env::remove_var("TRANSCRIPTION_PROVIDER");
+            std::env::remove_var("TRANSCRIPTION_MODEL");
+            std::env::remove_var("MLX_QWEN3_ASR_COMMAND");
+            std::env::remove_var("HOME");
+            std::env::remove_var("PATH");
+        }
+    }
+
+    /// OpenAI APIキーは新旧環境変数の後方互換を保つ
+    #[test]
+    fn transcription_api_key_falls_back_to_openai_api_key() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::remove_var("TRANSCRIPTION_API_KEY");
+            std::env::set_var("OPENAI_API_KEY", "legacy-openai-key");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(
+            config.transcription.api_key.as_deref(),
+            Some("legacy-openai-key")
+        );
+
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
         }
     }
 

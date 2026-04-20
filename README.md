@@ -10,7 +10,7 @@ Rust 製の **音声録音・文字起こし CLI / デーモン** です。
 | 機能                               | 説明                                             |
 | ---------------------------------- | ------------------------------------------------ |
 | **高速録音トグル**                 | 1 コマンドで録音開始 / 停止を切替                |
-| **OpenAI API 対応**                | 日本語・英語を自動認識                           |
+| **複数転写バックエンド**           | OpenAI API または `mlx-qwen3-asr` を利用可能     |
 | **Apple Music 自動ポーズ/再開**    | 録音中は BGM を一時停止、終了後に自動再生        |
 | **単語リスト置換**                 | 転写テキストを辞書で自動置換                     |
 | **録音→転写まで自動**              | 1 コマンドで録音開始から文字起こしまで           |
@@ -24,9 +24,11 @@ Rust 製の **音声録音・文字起こし CLI / デーモン** です。
 cp .env.example .env
 ```
 
-- OPENAI_API_KEY=your_openai_api_key_here
-- OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe # 対応モデルは gpt-4o-mini-transcribe / gpt-4o-transcribe のみ
+- TRANSCRIPTION_PROVIDER=openai # または mlx-qwen3-asr
+- TRANSCRIPTION_API_KEY=your_openai_api_key_here # OpenAI 利用時のみ
+- TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe # OpenAI: gpt-4o-mini-transcribe / gpt-4o-transcribe, mlx: 例 Qwen/Qwen3-ASR-1.7B
 - OPENAI_TRANSCRIBE_STREAMING=false
+- MLX_QWEN3_ASR_COMMAND=mlx-qwen3-asr
 - INPUT_DEVICE_PRIORITY="device1,device2,device3"
 - VOICE_INPUT_ENV_PATH=/path/to/.env
 - VOICE_INPUT_SOCKET_PATH=/custom/path/voice_input.sock
@@ -35,7 +37,8 @@ cp .env.example .env
 
 `.env` はデフォルトでカレントディレクトリから読み込まれ、`VOICE_INPUT_ENV_PATH` が設定されている場合はそのパスが優先されます。
 環境変数は `src/utils/config.rs` の `EnvConfig` で起動時に一度だけ読み込まれます。
-`OPENAI_TRANSCRIBE_MODEL` に `whisper-1` など未対応モデルを指定した場合は、起動時にエラーになります。
+`TRANSCRIPTION_PROVIDER=openai` のときに `TRANSCRIPTION_MODEL` へ `whisper-1` など未対応モデルを指定した場合は、起動時にエラーになります。
+`TRANSCRIPTION_PROVIDER=mlx-qwen3-asr` のときは `mlx-qwen3-asr` コマンドが必要で、録音データは CLI 連携のため一時ファイル経由で渡します。
 
 ## 音声処理
 

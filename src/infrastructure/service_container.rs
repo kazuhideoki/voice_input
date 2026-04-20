@@ -18,12 +18,14 @@ use crate::infrastructure::{
     command_handler::{CommandHandler, TranscriptionMessage},
     dict::JsonFileDictRepo,
     external::{
+        mlx_qwen3_asr_adapter::MlxQwen3AsrTranscriptionAdapter,
         openai_adapter::OpenAiTranscriptionAdapter,
         transcription_log::NonBlockingTranscriptionLogWriter,
     },
     media_control_service::MediaControlService,
 };
 use crate::utils::config::EnvConfig;
+use crate::utils::config::TranscriptionProvider;
 
 /// アプリケーション設定
 #[derive(Clone, Debug)]
@@ -85,6 +87,15 @@ fn build_transcription_service(
     }
 }
 
+fn build_default_transcription_client(config: &EnvConfig) -> Result<Box<dyn TranscriptionClient>> {
+    match config.transcription.provider {
+        TranscriptionProvider::OpenAi => Ok(Box::new(OpenAiTranscriptionAdapter::new()?)),
+        TranscriptionProvider::MlxQwen3Asr => Ok(Box::new(
+            MlxQwen3AsrTranscriptionAdapter::from_config(&config.transcription),
+        )),
+    }
+}
+
 impl ServiceContainer<CpalAudioBackend> {
     /// デフォルト設定で新しいServiceContainerを作成
     pub fn new() -> Result<Self> {
@@ -94,7 +105,7 @@ impl ServiceContainer<CpalAudioBackend> {
             eprintln!("Input stream warm-up skipped: {}", err);
         }
         let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
-        let client = Box::new(OpenAiTranscriptionAdapter::new()?);
+        let client = build_default_transcription_client(&EnvConfig::get())?;
 
         Self::with_dependencies(config, recorder, client)
     }
@@ -118,7 +129,7 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
         T: Default,
     {
         let recorder = Rc::new(RefCell::new(Recorder::new(T::default())));
-        let client = Box::new(OpenAiTranscriptionAdapter::new()?);
+        let client = build_default_transcription_client(&EnvConfig::get())?;
 
         Self::with_dependencies(config, recorder, client)
     }
@@ -325,7 +336,44 @@ pub mod test_helpers {
 
 #[cfg(test)]
 mod tests {
+    use super::build_default_transcription_client;
     use super::test_helpers::*;
+    use crate::utils::config::{
+        AudioConfig, EnvConfig, PathConfig, PreferredAudioFormat, ProfilingConfig, ProxyConfig,
+        RecordingConfig, TranscriptionConfig, TranscriptionProvider,
+    };
+
+    fn mlx_env_config() -> EnvConfig {
+        EnvConfig {
+            paths: PathConfig {
+                xdg_data_home: None,
+                socket_path: None,
+                socket_dir: None,
+            },
+            transcription: TranscriptionConfig {
+                provider: TranscriptionProvider::MlxQwen3Asr,
+                api_key: None,
+                model: "Qwen/Qwen3-ASR-1.7B".to_string(),
+                streaming_enabled: false,
+                log_path: None,
+                low_confidence_selection_enabled: false,
+                mlx_qwen3_asr_command: "mlx-qwen3-asr".to_string(),
+            },
+            proxy: ProxyConfig {
+                all: None,
+                https: None,
+                http: None,
+            },
+            audio: AudioConfig {
+                input_device_priorities: Vec::new(),
+                preferred_format: PreferredAudioFormat::Flac,
+            },
+            recording: RecordingConfig {
+                max_duration_secs: 30,
+            },
+            profiling: ProfilingConfig { enabled: false },
+        }
+    }
 
     /// テスト用のサービスコンテナを構築できる
     #[tokio::test]
@@ -358,5 +406,13 @@ mod tests {
         // 二回目はNone
         let rx2 = container.take_transcription_rx();
         assert!(rx2.is_none());
+    }
+
+    /// mlx-qwen3-asr プロバイダでも既定クライアントを構築できる
+    #[test]
+    fn mlx_qwen_provider_default_client_can_be_built() {
+        let result = build_default_transcription_client(&mlx_env_config());
+
+        assert!(result.is_ok());
     }
 }
