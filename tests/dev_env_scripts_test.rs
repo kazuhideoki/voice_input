@@ -12,6 +12,7 @@ struct ScriptFixture {
     state_dir: PathBuf,
     repo_root: PathBuf,
     home_dir: PathBuf,
+    user_python_bin_dir: PathBuf,
     plist_path: PathBuf,
     socket_path: PathBuf,
     stdout_path: PathBuf,
@@ -33,6 +34,7 @@ impl ScriptFixture {
         let state_dir = root.join("state");
         let repo_root = root.join("repo");
         let home_dir = root.join("home");
+        let user_python_bin_dir = home_dir.join("Library/Python/3.11/bin");
         let plist_path = home_dir.join("Library/LaunchAgents/com.user.voiceinputd.plist");
         let socket_path = root.join("runtime/voice_input.sock");
         let stdout_path = root.join("runtime/voice_inputd.out");
@@ -50,6 +52,7 @@ impl ScriptFixture {
         fs::create_dir_all(&state_dir)?;
         fs::create_dir_all(&repo_root)?;
         fs::create_dir_all(home_dir.join("Library/LaunchAgents"))?;
+        fs::create_dir_all(&user_python_bin_dir)?;
         fs::create_dir_all(root.join("runtime"))?;
 
         write_executable(
@@ -140,6 +143,7 @@ exit 0
             state_dir,
             repo_root,
             home_dir,
+            user_python_bin_dir,
             plist_path,
             socket_path,
             stdout_path,
@@ -230,6 +234,14 @@ fn setup_creates_launch_agent_for_installed_daemon() -> Result<(), Box<dyn Error
         plist.contains("<key>KeepAlive</key>"),
         "setup should enable KeepAlive: {plist}"
     );
+    assert!(
+        plist.contains(&fixture.fake_bin_dir.display().to_string()),
+        "setup should preserve caller PATH for LaunchAgent tools: {plist}"
+    );
+    assert!(
+        plist.contains(&fixture.user_python_bin_dir.display().to_string()),
+        "setup should include user Python bin directories for LaunchAgent tools: {plist}"
+    );
 
     Ok(())
 }
@@ -260,6 +272,14 @@ fn setup_app_bundle_creates_launch_agent_for_bundled_daemon() -> Result<(), Box<
     assert!(
         plist.contains("<key>KeepAlive</key>"),
         "setup-app-bundle should enable KeepAlive: {plist}"
+    );
+    assert!(
+        plist.contains(&fixture.fake_bin_dir.display().to_string()),
+        "setup-app-bundle should preserve caller PATH for LaunchAgent tools: {plist}"
+    );
+    assert!(
+        plist.contains(&fixture.user_python_bin_dir.display().to_string()),
+        "setup-app-bundle should include user Python bin directories for LaunchAgent tools: {plist}"
     );
 
     Ok(())
@@ -375,6 +395,10 @@ fn setup_then_build_app_bundle_installs_bundle_and_bootstraps_launch_agent()
     assert!(
         codesign_log.contains(&fixture.app_bundle_path.display().to_string()),
         "build-app-bundle should sign app bundle: {codesign_log}"
+    );
+    assert!(
+        codesign_log.contains("-r=designated => identifier \"com.user.voiceinput\""),
+        "build-app-bundle should sign app bundle with stable designated requirement: {codesign_log}"
     );
 
     let plist = fs::read_to_string(&fixture.app_bundle_info_plist_path)?;

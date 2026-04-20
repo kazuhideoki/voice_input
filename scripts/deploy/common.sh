@@ -56,9 +56,68 @@ remove_path_if_exists() {
     rm -rf "$path"
 }
 
+append_unique_path_entry() {
+    local current_path="$1"
+    local entry="$2"
+
+    if [ -z "$entry" ]; then
+        echo "$current_path"
+        return 0
+    fi
+
+    case ":${current_path}:" in
+        *":${entry}:"*) echo "$current_path" ;;
+        *)
+            if [ -n "$current_path" ]; then
+                echo "${current_path}:${entry}"
+            else
+                echo "$entry"
+            fi
+            ;;
+    esac
+}
+
+build_launch_agent_path() {
+    local launch_path="${PATH:-/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
+    local user_base=""
+    local user_python_bin_dir=""
+
+    for extra_dir in \
+        "$HOME/.local/bin" \
+        "$HOME/bin" \
+        "$HOME/.cargo/bin" \
+        "/opt/homebrew/bin" \
+        "/opt/homebrew/sbin" \
+        "/usr/local/bin" \
+        "/usr/local/sbin"
+    do
+        if [ -d "$extra_dir" ]; then
+            launch_path="$(append_unique_path_entry "$launch_path" "$extra_dir")"
+        fi
+    done
+
+    if command -v python3 >/dev/null 2>&1; then
+        user_base="$(python3 -m site --user-base 2>/dev/null || true)"
+        if [ -n "$user_base" ] && [ -d "$user_base/bin" ]; then
+            launch_path="$(append_unique_path_entry "$launch_path" "$user_base/bin")"
+        fi
+    fi
+
+    for user_python_bin_dir in "$HOME"/Library/Python/*/bin; do
+        if [ -d "$user_python_bin_dir" ]; then
+            launch_path="$(append_unique_path_entry "$launch_path" "$user_python_bin_dir")"
+        fi
+    done
+
+    echo "$launch_path"
+}
+
 write_launch_agent_plist() {
+    local launch_agent_path
+
     mkdir -p "$(dirname "$LAUNCH_AGENT_PLIST_PATH")"
     mkdir -p "$(dirname "$LAUNCH_PROGRAM_PATH")"
+    launch_agent_path="$(build_launch_agent_path)"
 
     cat > "$LAUNCH_AGENT_PLIST_PATH" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -82,7 +141,7 @@ write_launch_agent_plist() {
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>${launch_agent_path}</string>
         <key>HOME</key>
         <string>${HOME}</string>
         <key>VOICE_INPUT_ENV_PATH</key>
