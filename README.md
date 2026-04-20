@@ -74,7 +74,7 @@ cargo build --release
 - **app bundle**: `VoiceInput.app` を構築し、その bundle 内の `voice_inputd` を LaunchAgent で起動
 
 既存の `setup-dev-env.sh` / `dev-build.sh` / `cleanup-dev-env.sh` はそのまま利用できます。
-比較用に `setup-app-bundle.sh` / `build-app-bundle.sh` / `cleanup-app-bundle.sh` も追加されています。
+比較用に `setup-app-bundle.sh` / `build-app-bundle.sh` / `restart-app-bundle.sh` / `cleanup-app-bundle.sh` も追加されています。
 
 どちらもデフォルトでは同じ LaunchAgent label と socket path を使うため、**同時常駐ではなく切り替えて比較する前提**です。
 
@@ -106,9 +106,12 @@ cargo build --release
 ```sh
 ./scripts/setup-app-bundle.sh
 ./scripts/build-app-bundle.sh
+./scripts/restart-app-bundle.sh
 ```
 
 この方式では `~/Applications/VoiceInput.app` を構築し、LaunchAgent は bundle 内の `voice_inputd` を起動します。
+初回は `build-app-bundle.sh` で app bundle を配置したあと、システム設定で `VoiceInput.app` に `Microphone` / `Accessibility` 権限を付与し、最後に `restart-app-bundle.sh` で LaunchAgent を再起動してください。
+`restart-app-bundle.sh` は再ビルドや再署名を行わず、権限付与の反映に必要な再起動だけを実行します。
 `cleanup-app-bundle.sh` は bundle を削除したうえで、bundle identifier に対して `Microphone` / `Accessibility` の TCC 設定を reset します。
 
 ### 開発時の再ビルド

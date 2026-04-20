@@ -3,4 +3,4 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-/bin/bash "${SCRIPT_DIR}/deploy/cleanup.sh" app_bundle
+/bin/bash "${SCRIPT_DIR}/deploy/restart.sh" app_bundle

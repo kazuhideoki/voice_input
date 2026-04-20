@@ -386,6 +386,69 @@ fn setup_then_build_app_bundle_installs_bundle_and_bootstraps_launch_agent()
     Ok(())
 }
 
+/// build-app-bundle 後の権限付与では再ビルドではなく LaunchAgent の再起動だけで再利用できる
+#[test]
+#[cfg(feature = "ci-test")]
+fn restart_app_bundle_restarts_launch_agent_without_rebuild() -> Result<(), Box<dyn Error>> {
+    let fixture = ScriptFixture::new()?;
+
+    let setup_output = fixture.command_for_script("setup-app-bundle.sh").output()?;
+    assert!(
+        setup_output.status.success(),
+        "setup-app-bundle failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&setup_output.stdout),
+        String::from_utf8_lossy(&setup_output.stderr)
+    );
+
+    let build_output = fixture.command_for_script("build-app-bundle.sh").output()?;
+    assert!(
+        build_output.status.success(),
+        "build-app-bundle failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&build_output.stdout),
+        String::from_utf8_lossy(&build_output.stderr)
+    );
+
+    fs::remove_file(fixture.state_dir.join("launchctl.log")).ok();
+    fs::remove_file(fixture.state_dir.join("cargo.log")).ok();
+    fs::remove_file(fixture.state_dir.join("codesign.log")).ok();
+    fs::remove_file(&fixture.socket_path).ok();
+
+    let restart_output = fixture
+        .command_for_script("restart-app-bundle.sh")
+        .output()?;
+    assert!(
+        restart_output.status.success(),
+        "restart-app-bundle failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&restart_output.stdout),
+        String::from_utf8_lossy(&restart_output.stderr)
+    );
+
+    assert!(
+        fixture.socket_path.exists(),
+        "restart-app-bundle should make bundled daemon available again"
+    );
+
+    let launchctl_log = fixture.state_log("launchctl.log");
+    assert!(
+        launchctl_log.contains("kickstart"),
+        "restart-app-bundle should kickstart existing LaunchAgent: {launchctl_log}"
+    );
+
+    let cargo_log = fixture.state_log("cargo.log");
+    assert!(
+        cargo_log.is_empty(),
+        "restart-app-bundle should not rebuild artifacts: {cargo_log}"
+    );
+
+    let codesign_log = fixture.state_log("codesign.log");
+    assert!(
+        codesign_log.is_empty(),
+        "restart-app-bundle should not resign app bundle: {codesign_log}"
+    );
+
+    Ok(())
+}
+
 /// cleanup-app-bundle は app bundle を削除し TCC を reset する
 #[test]
 #[cfg(feature = "ci-test")]

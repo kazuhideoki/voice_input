@@ -80,13 +80,27 @@ cleanup_profile_artifacts() {
     reset_tcc_permission "Accessibility" "$APP_BUNDLE_IDENTIFIER"
 }
 
+validate_restart_prerequisites() {
+    if [ ! -x "$BUNDLED_DAEMON_PATH" ]; then
+        echo "❌ Bundled daemon was not found: $BUNDLED_DAEMON_PATH" >&2
+        echo "   Run ./scripts/build-app-bundle.sh before restarting the app bundle." >&2
+        exit 1
+    fi
+}
+
 print_setup_next_steps() {
     echo ""
     echo "✅ Setup complete!"
     echo ""
-    echo "ℹ️  初回起動時に VoiceInput.app へマイク/アクセシビリティ権限を付与してください。"
-    echo "今後は以下のコマンドで app bundle を更新できます:"
+    echo "初回は以下の順序で app bundle を利用してください:"
+    echo "  1. ./scripts/build-app-bundle.sh"
+    echo "  2. システム設定で VoiceInput.app にマイク/アクセシビリティ権限を付与"
+    echo "  3. ./scripts/restart-app-bundle.sh"
+    echo ""
+    echo "app bundle を更新する場合は以下のコマンドを利用できます:"
     echo "  ./scripts/build-app-bundle.sh"
+    echo "権限付与の反映だけであれば以下で十分です:"
+    echo "  ./scripts/restart-app-bundle.sh"
 }
 
 print_cleanup_summary() {
