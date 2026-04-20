@@ -78,38 +78,7 @@ append_unique_path_entry() {
 }
 
 build_launch_agent_path() {
-    local launch_path="${PATH:-/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
-    local user_base=""
-    local user_python_bin_dir=""
-
-    for extra_dir in \
-        "$HOME/.local/bin" \
-        "$HOME/bin" \
-        "$HOME/.cargo/bin" \
-        "/opt/homebrew/bin" \
-        "/opt/homebrew/sbin" \
-        "/usr/local/bin" \
-        "/usr/local/sbin"
-    do
-        if [ -d "$extra_dir" ]; then
-            launch_path="$(append_unique_path_entry "$launch_path" "$extra_dir")"
-        fi
-    done
-
-    if command -v python3 >/dev/null 2>&1; then
-        user_base="$(python3 -m site --user-base 2>/dev/null || true)"
-        if [ -n "$user_base" ] && [ -d "$user_base/bin" ]; then
-            launch_path="$(append_unique_path_entry "$launch_path" "$user_base/bin")"
-        fi
-    fi
-
-    for user_python_bin_dir in "$HOME"/Library/Python/*/bin; do
-        if [ -d "$user_python_bin_dir" ]; then
-            launch_path="$(append_unique_path_entry "$launch_path" "$user_python_bin_dir")"
-        fi
-    done
-
-    echo "$launch_path"
+    echo "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 }
 
 write_launch_agent_plist() {

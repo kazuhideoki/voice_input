@@ -5,7 +5,7 @@ use crate::application::AudioData;
 use crate::application::{TranscriptionClient, TranscriptionClientError};
 use crate::domain::transcription::TranscriptionOutput;
 use crate::error::Result;
-use crate::utils::config::{EnvConfig, TranscriptionConfig, resolve_mlx_qwen3_asr_command};
+use crate::utils::config::{EnvConfig, TranscriptionConfig};
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -38,7 +38,7 @@ impl MlxQwen3AsrTranscriptionAdapter {
     /// 転写設定から新しいアダプターを作成
     pub fn from_config(config: &TranscriptionConfig) -> Self {
         Self {
-            command: resolve_mlx_qwen3_asr_command(&config.mlx_qwen3_asr_command),
+            command: config.mlx_qwen3_asr_command.clone(),
             model: config.model.clone(),
         }
     }

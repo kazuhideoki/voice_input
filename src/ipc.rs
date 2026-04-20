@@ -128,13 +128,10 @@ pub fn send_cmd(cmd: &IpcCmd) -> Result<IpcResp, IpcError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::config::EnvConfig;
-    use std::sync::Mutex;
-
-    static SOCKET_ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::utils::config::{EnvConfig, lock_test_env};
 
     fn with_env_lock<F: FnOnce()>(f: F) {
-        let _guard = SOCKET_ENV_LOCK.lock().unwrap();
+        let _guard = lock_test_env();
         f();
     }
 

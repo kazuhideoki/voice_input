@@ -235,12 +235,12 @@ fn setup_creates_launch_agent_for_installed_daemon() -> Result<(), Box<dyn Error
         "setup should enable KeepAlive: {plist}"
     );
     assert!(
-        plist.contains(&fixture.fake_bin_dir.display().to_string()),
-        "setup should preserve caller PATH for LaunchAgent tools: {plist}"
+        !plist.contains(&fixture.fake_bin_dir.display().to_string()),
+        "setup should not bake caller PATH into LaunchAgent environment: {plist}"
     );
     assert!(
-        plist.contains(&fixture.user_python_bin_dir.display().to_string()),
-        "setup should include user Python bin directories for LaunchAgent tools: {plist}"
+        !plist.contains(&fixture.user_python_bin_dir.display().to_string()),
+        "setup should not include user Python bin directories in LaunchAgent PATH: {plist}"
     );
 
     Ok(())
@@ -274,12 +274,12 @@ fn setup_app_bundle_creates_launch_agent_for_bundled_daemon() -> Result<(), Box<
         "setup-app-bundle should enable KeepAlive: {plist}"
     );
     assert!(
-        plist.contains(&fixture.fake_bin_dir.display().to_string()),
-        "setup-app-bundle should preserve caller PATH for LaunchAgent tools: {plist}"
+        !plist.contains(&fixture.fake_bin_dir.display().to_string()),
+        "setup-app-bundle should not bake caller PATH into LaunchAgent environment: {plist}"
     );
     assert!(
-        plist.contains(&fixture.user_python_bin_dir.display().to_string()),
-        "setup-app-bundle should include user Python bin directories for LaunchAgent tools: {plist}"
+        !plist.contains(&fixture.user_python_bin_dir.display().to_string()),
+        "setup-app-bundle should not include user Python bin directories in LaunchAgent PATH: {plist}"
     );
 
     Ok(())

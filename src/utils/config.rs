@@ -7,9 +7,7 @@
 //! プロセス起動時に一度だけ初期化し、以降はどこからでもアクセス可能。
 
 use once_cell::sync::OnceCell;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// グローバル環境変数設定
@@ -20,6 +18,13 @@ use std::sync::Mutex;
 
 #[cfg(test)]
 static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn lock_test_env() -> std::sync::MutexGuard<'static, ()> {
+    TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// 設定読み込みエラー
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -38,6 +43,14 @@ pub enum ConfigError {
     InvalidBooleanEnv { name: &'static str, value: String },
     #[error("VOICE_INPUT_AUDIO_FORMAT must be either 'flac' or 'wav': {value}")]
     InvalidAudioFormat { value: String },
+    #[error(
+        "VOICE_INPUT_AUDIO_FORMAT={value} is unsupported for provider {provider}. Supported formats: {supported}"
+    )]
+    UnsupportedAudioFormatForProvider {
+        provider: String,
+        value: String,
+        supported: &'static str,
+    },
 }
 
 /// 転写バックエンド種別
@@ -220,6 +233,7 @@ impl EnvConfig {
         let model = load_transcription_model(provider)?;
         let streaming_enabled = parse_bool_env("OPENAI_TRANSCRIBE_STREAMING")?;
         let mlx_qwen3_asr_command = load_mlx_qwen3_asr_command();
+        let preferred_format = PreferredAudioFormat::from_env(provider)?;
         let max_duration_secs = match std::env::var("VOICE_INPUT_MAX_SECS") {
             Ok(value) => value
                 .parse()
@@ -252,7 +266,7 @@ impl EnvConfig {
             },
             audio: AudioConfig {
                 input_device_priorities: csv_env("INPUT_DEVICE_PRIORITY"),
-                preferred_format: PreferredAudioFormat::from_env()?,
+                preferred_format,
             },
             recording: RecordingConfig { max_duration_secs },
             profiling: ProfilingConfig {
@@ -363,100 +377,7 @@ fn load_transcription_model(provider: TranscriptionProvider) -> Result<String, C
 }
 
 fn load_mlx_qwen3_asr_command() -> String {
-    let command = non_empty_env("MLX_QWEN3_ASR_COMMAND").unwrap_or_else(|| "mlx-qwen3-asr".into());
-    resolve_mlx_qwen3_asr_command(&command)
-}
-
-/// mlx-qwen3-asr コマンド名を実行可能な絶対パスへ解決する
-pub fn resolve_mlx_qwen3_asr_command(command: &str) -> String {
-    resolve_executable_command(command).unwrap_or_else(|| command.to_string())
-}
-
-fn resolve_executable_command(command: &str) -> Option<String> {
-    let command_path = PathBuf::from(command);
-    if command_path.components().count() > 1 {
-        return is_executable_file(&command_path).then_some(command.to_string());
-    }
-
-    executable_search_dirs()
-        .into_iter()
-        .map(|dir| dir.join(command))
-        .find(|candidate| is_executable_file(candidate))
-        .map(|candidate| candidate.display().to_string())
-}
-
-fn executable_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-
-    if let Some(path) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path) {
-            push_unique_dir(&mut dirs, dir);
-        }
-    }
-
-    if let Some(home) = non_empty_env("HOME").map(PathBuf::from) {
-        for dir in [
-            home.join(".local/bin"),
-            home.join("bin"),
-            home.join(".cargo/bin"),
-        ] {
-            push_unique_dir(&mut dirs, dir);
-        }
-
-        let user_python_root = home.join("Library/Python");
-        if let Ok(entries) = std::fs::read_dir(user_python_root) {
-            let mut python_bin_dirs = entries
-                .filter_map(|entry| entry.ok().map(|entry| entry.path().join("bin")))
-                .collect::<Vec<_>>();
-            python_bin_dirs.sort_by(|left, right| right.cmp(left));
-            for dir in python_bin_dirs {
-                push_unique_dir(&mut dirs, dir);
-            }
-        }
-    }
-
-    for dir in [
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/opt/homebrew/sbin"),
-        PathBuf::from("/usr/local/bin"),
-        PathBuf::from("/usr/local/sbin"),
-        PathBuf::from("/usr/bin"),
-        PathBuf::from("/bin"),
-        PathBuf::from("/usr/sbin"),
-        PathBuf::from("/sbin"),
-    ] {
-        push_unique_dir(&mut dirs, dir);
-    }
-
-    dirs
-}
-
-fn push_unique_dir(dirs: &mut Vec<PathBuf>, dir: PathBuf) {
-    if dir.as_os_str().is_empty() || dirs.iter().any(|entry| entry == &dir) {
-        return;
-    }
-    dirs.push(dir);
-}
-
-fn is_executable_file(path: &Path) -> bool {
-    let metadata = match std::fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(_) => return false,
-    };
-
-    if !metadata.is_file() {
-        return false;
-    }
-
-    #[cfg(unix)]
-    {
-        metadata.permissions().mode() & 0o111 != 0
-    }
-
-    #[cfg(not(unix))]
-    {
-        true
-    }
+    non_empty_env("MLX_QWEN3_ASR_COMMAND").unwrap_or_else(|| "mlx-qwen3-asr".into())
 }
 
 fn parse_bool_env(name: &'static str) -> Result<bool, ConfigError> {
@@ -471,10 +392,13 @@ fn parse_bool_env(name: &'static str) -> Result<bool, ConfigError> {
 }
 
 impl PreferredAudioFormat {
-    fn from_env() -> Result<Self, ConfigError> {
+    fn from_env(provider: TranscriptionProvider) -> Result<Self, ConfigError> {
         match non_empty_env("VOICE_INPUT_AUDIO_FORMAT") {
-            Some(value) => Self::parse(&value),
-            None => Ok(Self::Flac),
+            Some(value) => Self::parse_for_provider(provider, &value),
+            None => Ok(match provider {
+                TranscriptionProvider::OpenAi => Self::Flac,
+                TranscriptionProvider::MlxQwen3Asr => Self::Wav,
+            }),
         }
     }
 
@@ -487,25 +411,31 @@ impl PreferredAudioFormat {
             }),
         }
     }
+
+    fn parse_for_provider(
+        provider: TranscriptionProvider,
+        value: &str,
+    ) -> Result<Self, ConfigError> {
+        let format = Self::parse(value)?;
+        if provider == TranscriptionProvider::MlxQwen3Asr && format != Self::Wav {
+            return Err(ConfigError::UnsupportedAudioFormatForProvider {
+                provider: provider.as_str().to_string(),
+                value: value.to_string(),
+                supported: "wav",
+            });
+        }
+
+        Ok(format)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         AudioConfig, ConfigError, EnvConfig, PathConfig, PreferredAudioFormat, ProfilingConfig,
-        ProxyConfig, RecordingConfig, TEST_LOCK, TranscriptionConfig, TranscriptionProvider,
+        ProxyConfig, RecordingConfig, TranscriptionConfig, TranscriptionProvider, lock_test_env,
     };
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
-    use std::sync::MutexGuard;
-    use tempfile::TempDir;
-
-    fn lock_test_env() -> MutexGuard<'static, ()> {
-        TEST_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
 
     fn sample_env_config(transcription: TranscriptionConfig) -> EnvConfig {
         EnvConfig {
@@ -737,44 +667,55 @@ mod tests {
         }
     }
 
-    /// mlx-qwen3-asr は app bundle でもユーザー Python 配下から自動検出できる
+    /// mlx-qwen3-asr コマンドは明示設定された値をそのまま使う
     #[test]
-    fn mlx_qwen3_asr_command_is_resolved_from_user_python_bin() {
+    fn mlx_qwen3_asr_command_uses_configured_value_as_is() {
         let _lock = lock_test_env();
-        let temp_dir = TempDir::new().expect("create temp dir");
-        let home_dir = temp_dir.path().join("home");
-        let user_bin_dir = home_dir.join("Library/Python/3.9/bin");
-        fs::create_dir_all(&user_bin_dir).expect("create user bin dir");
-
-        let command_path = user_bin_dir.join("mlx-qwen3-asr");
-        fs::write(&command_path, "#!/bin/sh\nexit 0\n").expect("write fake command");
-        let mut permissions = fs::metadata(&command_path)
-            .expect("read metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&command_path, permissions).expect("set executable");
+        let original_command = std::env::var("MLX_QWEN3_ASR_COMMAND").ok();
 
         unsafe {
             std::env::set_var("TRANSCRIPTION_PROVIDER", "mlx-qwen3-asr");
-            std::env::set_var("HOME", &home_dir);
-            std::env::set_var("PATH", "/usr/bin:/bin:/usr/sbin:/sbin");
             std::env::remove_var("TRANSCRIPTION_MODEL");
-            std::env::remove_var("MLX_QWEN3_ASR_COMMAND");
+            std::env::set_var("MLX_QWEN3_ASR_COMMAND", "/Users/example/bin/mlx-qwen3-asr");
         }
 
         let config = EnvConfig::from_env().unwrap();
 
         assert_eq!(
             config.transcription.mlx_qwen3_asr_command,
-            command_path.display().to_string()
+            "/Users/example/bin/mlx-qwen3-asr"
         );
 
         unsafe {
             std::env::remove_var("TRANSCRIPTION_PROVIDER");
             std::env::remove_var("TRANSCRIPTION_MODEL");
-            std::env::remove_var("MLX_QWEN3_ASR_COMMAND");
-            std::env::remove_var("HOME");
-            std::env::remove_var("PATH");
+        }
+        if let Some(value) = original_command {
+            unsafe {
+                std::env::set_var("MLX_QWEN3_ASR_COMMAND", value);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("MLX_QWEN3_ASR_COMMAND");
+            }
+        }
+    }
+
+    /// mlx-qwen3-asr 利用時は既定で WAV を選ぶ
+    #[test]
+    fn mlx_qwen3_asr_defaults_to_wav_audio_format() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("TRANSCRIPTION_PROVIDER", "mlx-qwen3-asr");
+            std::env::remove_var("VOICE_INPUT_AUDIO_FORMAT");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(config.audio.preferred_format, PreferredAudioFormat::Wav);
+
+        unsafe {
+            std::env::remove_var("TRANSCRIPTION_PROVIDER");
         }
     }
 
@@ -1125,6 +1066,32 @@ mod tests {
         );
 
         unsafe {
+            std::env::remove_var("VOICE_INPUT_AUDIO_FORMAT");
+        }
+    }
+
+    /// mlx-qwen3-asr は FLAC 指定を受け付けない
+    #[test]
+    fn mlx_qwen3_asr_rejects_flac_audio_format() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("TRANSCRIPTION_PROVIDER", "mlx-qwen3-asr");
+            std::env::set_var("VOICE_INPUT_AUDIO_FORMAT", "flac");
+        }
+
+        let result = EnvConfig::try_from_env();
+
+        assert_eq!(
+            result,
+            Err(ConfigError::UnsupportedAudioFormatForProvider {
+                provider: "mlx-qwen3-asr".to_string(),
+                value: "flac".to_string(),
+                supported: "wav",
+            })
+        );
+
+        unsafe {
+            std::env::remove_var("TRANSCRIPTION_PROVIDER");
             std::env::remove_var("VOICE_INPUT_AUDIO_FORMAT");
         }
     }

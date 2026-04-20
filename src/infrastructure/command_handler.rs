@@ -254,12 +254,12 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 }
             }
             crate::utils::config::TranscriptionProvider::MlxQwen3Asr => {
-                let resolved_command = crate::utils::config::resolve_mlx_qwen3_asr_command(
-                    &transcription.mlx_qwen3_asr_command,
-                );
                 lines.push("TRANSCRIPTION_PROVIDER: mlx-qwen3-asr".to_string());
-                lines.push(format!("MLX_QWEN3_ASR_COMMAND: {resolved_command}"));
-                match std::process::Command::new(&resolved_command)
+                lines.push(format!(
+                    "MLX_QWEN3_ASR_COMMAND: {}",
+                    transcription.mlx_qwen3_asr_command
+                ));
+                match std::process::Command::new(&transcription.mlx_qwen3_asr_command)
                     .arg("--help")
                     .output()
                 {
