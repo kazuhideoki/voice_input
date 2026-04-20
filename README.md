@@ -66,6 +66,18 @@ cargo build --release
 
 ## macOS での権限設定
 
+### デプロイ方式
+
+現在は 2 つのデプロイ方式を選べます。
+
+- **legacy**: 固定配置した `voice_inputd` を LaunchAgent で起動
+- **app bundle**: `VoiceInput.app` を構築し、その bundle 内の `voice_inputd` を LaunchAgent で起動
+
+既存の `setup-dev-env.sh` / `dev-build.sh` / `cleanup-dev-env.sh` はそのまま利用できます。
+比較用に `setup-app-bundle.sh` / `build-app-bundle.sh` / `cleanup-app-bundle.sh` も追加されています。
+
+どちらもデフォルトでは同じ LaunchAgent label と socket path を使うため、**同時常駐ではなく切り替えて比較する前提**です。
+
 ### 初回セットアップ
 
 1. **開発環境セットアップ（LaunchAgent 常駐方式）**
@@ -86,6 +98,18 @@ cargo build --release
    - `~/Library/Application Support/voice_input/bin/voice_inputd` を有効化
    - システム設定 → プライバシーとセキュリティ → アクセシビリティ
    - `~/Library/Application Support/voice_input/bin/voice_inputd` を有効化
+
+### App Bundle 方式
+
+比較用に app bundle 方式も利用できます。
+
+```sh
+./scripts/setup-app-bundle.sh
+./scripts/build-app-bundle.sh
+```
+
+この方式では `~/Applications/VoiceInput.app` を構築し、LaunchAgent は bundle 内の `voice_inputd` を起動します。
+`cleanup-app-bundle.sh` は bundle を削除したうえで、bundle identifier に対して `Microphone` / `Accessibility` の TCC 設定を reset します。
 
 ### 開発時の再ビルド
 

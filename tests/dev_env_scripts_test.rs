@@ -16,8 +16,13 @@ struct ScriptFixture {
     socket_path: PathBuf,
     stdout_path: PathBuf,
     stderr_path: PathBuf,
+    build_cli_path: PathBuf,
     build_daemon_path: PathBuf,
     installed_daemon_path: PathBuf,
+    app_bundle_path: PathBuf,
+    app_bundle_info_plist_path: PathBuf,
+    bundled_cli_path: PathBuf,
+    bundled_daemon_path: PathBuf,
 }
 
 impl ScriptFixture {
@@ -32,9 +37,14 @@ impl ScriptFixture {
         let socket_path = root.join("runtime/voice_input.sock");
         let stdout_path = root.join("runtime/voice_inputd.out");
         let stderr_path = root.join("runtime/voice_inputd.err");
+        let build_cli_path = repo_root.join("target/release/voice_input");
         let build_daemon_path = repo_root.join("target/release/voice_inputd");
         let installed_daemon_path =
             home_dir.join("Library/Application Support/voice_input/bin/voice_inputd");
+        let app_bundle_path = home_dir.join("Applications/VoiceInput.app");
+        let app_bundle_info_plist_path = app_bundle_path.join("Contents/Info.plist");
+        let bundled_cli_path = app_bundle_path.join("Contents/MacOS/voice_input");
+        let bundled_daemon_path = app_bundle_path.join("Contents/MacOS/voice_inputd");
 
         fs::create_dir_all(&fake_bin_dir)?;
         fs::create_dir_all(&state_dir)?;
@@ -61,6 +71,8 @@ case "$1" in
     touch "$FAKE_STATE_DIR/launch_agent_loaded"
     if [ -x "$VOICE_INPUT_INSTALLED_DAEMON_PATH" ]; then
       "$VOICE_INPUT_INSTALLED_DAEMON_PATH"
+    elif [ -x "$VOICE_INPUT_BUNDLED_DAEMON_PATH" ]; then
+      "$VOICE_INPUT_BUNDLED_DAEMON_PATH"
     fi
     exit 0
     ;;
@@ -75,9 +87,15 @@ esac
             &fake_bin_dir.join("cargo"),
             r#"#!/bin/sh
 echo "$@" >> "$FAKE_STATE_DIR/cargo.log"
-if [ "$1" = "build" ] && [ "$2" = "--release" ]; then
-  mkdir -p "$VOICE_INPUT_REPO_ROOT/target/release"
-  cat > "$VOICE_INPUT_REPO_ROOT/target/release/voice_inputd" <<'EOF'
+    if [ "$1" = "build" ] && [ "$2" = "--release" ]; then
+      mkdir -p "$VOICE_INPUT_REPO_ROOT/target/release"
+      cat > "$VOICE_INPUT_REPO_ROOT/target/release/voice_input" <<'EOF'
+#!/bin/sh
+echo "$0 $@" >> "$FAKE_STATE_DIR/cli.log"
+exit 0
+EOF
+      chmod +x "$VOICE_INPUT_REPO_ROOT/target/release/voice_input"
+      cat > "$VOICE_INPUT_REPO_ROOT/target/release/voice_inputd" <<'EOF'
 #!/bin/sh
 echo "$0 $@" >> "$FAKE_STATE_DIR/daemon.log"
 mkdir -p "$(dirname "$VOICE_INPUT_SOCKET_PATH")"
@@ -108,6 +126,14 @@ exit 0
 "#,
         )?;
 
+        write_executable(
+            &fake_bin_dir.join("tccutil"),
+            r#"#!/bin/sh
+echo "$@" >> "$FAKE_STATE_DIR/tccutil.log"
+exit 0
+"#,
+        )?;
+
         Ok(Self {
             _temp_dir: temp_dir,
             fake_bin_dir,
@@ -118,8 +144,13 @@ exit 0
             socket_path,
             stdout_path,
             stderr_path,
+            build_cli_path,
             build_daemon_path,
             installed_daemon_path,
+            app_bundle_path,
+            app_bundle_info_plist_path,
+            bundled_cli_path,
+            bundled_daemon_path,
         })
     }
 
@@ -143,10 +174,19 @@ exit 0
         command.env("VOICE_INPUT_SOCKET_PATH", &self.socket_path);
         command.env("VOICE_INPUT_STDOUT_PATH", &self.stdout_path);
         command.env("VOICE_INPUT_STDERR_PATH", &self.stderr_path);
+        command.env("VOICE_INPUT_BUILD_CLI_PATH", &self.build_cli_path);
         command.env(
             "VOICE_INPUT_INSTALLED_DAEMON_PATH",
             &self.installed_daemon_path,
         );
+        command.env("VOICE_INPUT_APP_BUNDLE_PATH", &self.app_bundle_path);
+        command.env(
+            "VOICE_INPUT_APP_BUNDLE_INFO_PLIST_PATH",
+            &self.app_bundle_info_plist_path,
+        );
+        command.env("VOICE_INPUT_BUNDLED_CLI_PATH", &self.bundled_cli_path);
+        command.env("VOICE_INPUT_BUNDLED_DAEMON_PATH", &self.bundled_daemon_path);
+        command.env("VOICE_INPUT_APP_BUNDLE_IDENTIFIER", "com.user.voiceinput");
         command
     }
 
@@ -189,6 +229,37 @@ fn setup_creates_launch_agent_for_installed_daemon() -> Result<(), Box<dyn Error
     assert!(
         plist.contains("<key>KeepAlive</key>"),
         "setup should enable KeepAlive: {plist}"
+    );
+
+    Ok(())
+}
+
+/// setup-app-bundle は app bundle 内 daemon を起動する LaunchAgent plist を作成する
+#[test]
+#[cfg(feature = "ci-test")]
+fn setup_app_bundle_creates_launch_agent_for_bundled_daemon() -> Result<(), Box<dyn Error>> {
+    let fixture = ScriptFixture::new()?;
+
+    let setup_output = fixture.command_for_script("setup-app-bundle.sh").output()?;
+    assert!(
+        setup_output.status.success(),
+        "setup-app-bundle failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&setup_output.stdout),
+        String::from_utf8_lossy(&setup_output.stderr)
+    );
+
+    let plist = fs::read_to_string(&fixture.plist_path)?;
+    assert!(
+        plist.contains(&fixture.bundled_daemon_path.display().to_string()),
+        "setup-app-bundle should point LaunchAgent to bundled daemon path: {plist}"
+    );
+    assert!(
+        plist.contains("<key>RunAtLoad</key>"),
+        "setup-app-bundle should enable RunAtLoad: {plist}"
+    );
+    assert!(
+        plist.contains("<key>KeepAlive</key>"),
+        "setup-app-bundle should enable KeepAlive: {plist}"
     );
 
     Ok(())
@@ -244,6 +315,122 @@ fn setup_then_dev_build_installs_daemon_and_bootstraps_launch_agent() -> Result<
     assert!(
         codesign_log.contains(&fixture.installed_daemon_path.display().to_string()),
         "dev-build should sign installed daemon: {codesign_log}"
+    );
+
+    Ok(())
+}
+
+/// setup-app-bundle の後に build-app-bundle を実行すると app bundle が更新され LaunchAgent で利用可能になる
+#[test]
+#[cfg(feature = "ci-test")]
+fn setup_then_build_app_bundle_installs_bundle_and_bootstraps_launch_agent()
+-> Result<(), Box<dyn Error>> {
+    let fixture = ScriptFixture::new()?;
+
+    let setup_output = fixture.command_for_script("setup-app-bundle.sh").output()?;
+    assert!(
+        setup_output.status.success(),
+        "setup-app-bundle failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&setup_output.stdout),
+        String::from_utf8_lossy(&setup_output.stderr)
+    );
+
+    let build_output = fixture.command_for_script("build-app-bundle.sh").output()?;
+    assert!(
+        build_output.status.success(),
+        "build-app-bundle failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&build_output.stdout),
+        String::from_utf8_lossy(&build_output.stderr)
+    );
+
+    assert!(fixture.build_cli_path.exists(), "release cli was not built");
+    assert!(
+        fixture.build_daemon_path.exists(),
+        "release daemon was not built"
+    );
+    assert!(
+        fixture.bundled_cli_path.exists(),
+        "bundled cli was not created"
+    );
+    assert!(
+        fixture.bundled_daemon_path.exists(),
+        "bundled daemon was not created"
+    );
+    assert!(
+        fixture.app_bundle_info_plist_path.exists(),
+        "Info.plist was not created"
+    );
+    assert!(
+        fixture.socket_path.exists(),
+        "launch agent did not make bundled daemon available"
+    );
+
+    let launchctl_log = fixture.state_log("launchctl.log");
+    assert!(
+        launchctl_log.contains("bootstrap"),
+        "build-app-bundle should bootstrap LaunchAgent when not loaded: {launchctl_log}"
+    );
+
+    let codesign_log = fixture.state_log("codesign.log");
+    assert!(
+        codesign_log.contains(&fixture.app_bundle_path.display().to_string()),
+        "build-app-bundle should sign app bundle: {codesign_log}"
+    );
+
+    let plist = fs::read_to_string(&fixture.app_bundle_info_plist_path)?;
+    assert!(
+        plist.contains("com.user.voiceinput"),
+        "Info.plist should include the bundle identifier: {plist}"
+    );
+
+    Ok(())
+}
+
+/// cleanup-app-bundle は app bundle を削除し TCC を reset する
+#[test]
+#[cfg(feature = "ci-test")]
+fn cleanup_app_bundle_removes_bundle_and_resets_tcc() -> Result<(), Box<dyn Error>> {
+    let fixture = ScriptFixture::new()?;
+
+    let setup_output = fixture.command_for_script("setup-app-bundle.sh").output()?;
+    assert!(
+        setup_output.status.success(),
+        "setup-app-bundle failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&setup_output.stdout),
+        String::from_utf8_lossy(&setup_output.stderr)
+    );
+
+    let build_output = fixture.command_for_script("build-app-bundle.sh").output()?;
+    assert!(
+        build_output.status.success(),
+        "build-app-bundle failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&build_output.stdout),
+        String::from_utf8_lossy(&build_output.stderr)
+    );
+
+    let cleanup_output = fixture
+        .command_for_script("cleanup-app-bundle.sh")
+        .output()?;
+    assert!(
+        cleanup_output.status.success(),
+        "cleanup-app-bundle failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&cleanup_output.stdout),
+        String::from_utf8_lossy(&cleanup_output.stderr)
+    );
+
+    assert!(
+        !fixture.app_bundle_path.exists(),
+        "cleanup-app-bundle should remove app bundle"
+    );
+
+    let tccutil_log = fixture.state_log("tccutil.log");
+    assert!(
+        tccutil_log.contains("reset Microphone com.user.voiceinput"),
+        "cleanup-app-bundle should reset microphone permission: {tccutil_log}"
+    );
+    assert!(
+        tccutil_log.contains("reset Accessibility com.user.voiceinput"),
+        "cleanup-app-bundle should reset accessibility permission: {tccutil_log}"
     );
 
     Ok(())
