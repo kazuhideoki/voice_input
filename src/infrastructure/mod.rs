@@ -4,5 +4,6 @@ pub mod config;
 pub mod dict;
 pub mod external;
 pub mod media_control_service;
+pub mod runtime_recovery;
 pub mod service_container;
 pub mod transcription_worker;

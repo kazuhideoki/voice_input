@@ -420,6 +420,16 @@ fn device_list_label(description: &DeviceDescription) -> String {
 
 // =============== WAVヘッダー生成機能 ================================
 impl CpalAudioBackend {
+    fn invalidate_input_stream(&self) {
+        if let Some(state) = self.recording_state.lock().unwrap().take() {
+            state.accepting_input.store(false, Ordering::SeqCst);
+        }
+        self.capture_generation.fetch_add(1, Ordering::SeqCst);
+        *self.stream.lock().unwrap() = None;
+        self.input_setup_cache.value.lock().unwrap().take();
+        self.stream_needs_rebuild.store(true, Ordering::SeqCst);
+    }
+
     fn resolve_cached_input_setup(&self) -> Result<CachedInputSetup, Box<dyn Error>> {
         self.input_setup_cache
             .get_or_try_init_if(input_setup_matches_current_selection, || {
@@ -1121,6 +1131,15 @@ impl AudioBackend for CpalAudioBackend {
     /// 録音中かどうかを確認します。
     fn is_recording(&self) -> bool {
         self.recording.load(Ordering::SeqCst)
+    }
+
+    fn recover_after_wake(&self) -> Result<(), AudioBackendError> {
+        if self.is_recording() {
+            return Ok(());
+        }
+
+        self.invalidate_input_stream();
+        self.warm_up()
     }
 }
 

@@ -327,6 +327,18 @@ impl<T: AudioBackend> RecordingService<T> {
         ctx.state.set_music_was_playing(was_playing);
         Ok(())
     }
+
+    /// スリープ復帰後に録音系リソースを回復する
+    pub fn recover_after_wake(&self) -> Result<()> {
+        if self.is_recording() {
+            return Ok(());
+        }
+
+        self.recorder
+            .borrow()
+            .recover_after_wake()
+            .map_err(VoiceInputError::from)
+    }
 }
 
 #[cfg(test)]
@@ -354,10 +366,24 @@ mod tests {
         is_recording: Arc<AtomicBool>,
     }
 
+    struct RecoverableAudioBackend {
+        is_recording: Arc<AtomicBool>,
+        recover_calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
     impl FailingStopAudioBackend {
         fn new() -> Self {
             Self {
                 is_recording: Arc::new(AtomicBool::new(false)),
+            }
+        }
+    }
+
+    impl RecoverableAudioBackend {
+        fn new() -> Self {
+            Self {
+                is_recording: Arc::new(AtomicBool::new(false)),
+                recover_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             }
         }
     }
@@ -404,6 +430,37 @@ mod tests {
 
         fn is_recording(&self) -> bool {
             self.is_recording.load(Ordering::SeqCst)
+        }
+    }
+
+    impl crate::application::AudioBackend for RecoverableAudioBackend {
+        fn start_recording(
+            &self,
+        ) -> std::result::Result<(), crate::application::AudioBackendError> {
+            self.is_recording.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn stop_recording(
+            &self,
+        ) -> std::result::Result<AudioData, crate::application::AudioBackendError> {
+            self.is_recording.store(false, Ordering::SeqCst);
+            Ok(AudioData {
+                bytes: vec![0u8; 100],
+                mime_type: "audio/wav",
+                file_name: "audio.wav".to_string(),
+            })
+        }
+
+        fn is_recording(&self) -> bool {
+            self.is_recording.load(Ordering::SeqCst)
+        }
+
+        fn recover_after_wake(
+            &self,
+        ) -> std::result::Result<(), crate::application::AudioBackendError> {
+            self.recover_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         }
     }
 
@@ -487,6 +544,43 @@ mod tests {
                 "Should not be recording after stop"
             );
         }
+    }
+
+    /// 待機中に復帰回復を呼ぶとバックエンドに委譲する
+    #[test]
+    fn recover_after_wake_delegates_to_backend_while_idle() {
+        let backend = RecoverableAudioBackend::new();
+        let recover_calls = backend.recover_calls.clone();
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
+        let config = RecordingConfig {
+            max_duration_secs: 30,
+        };
+        let service = RecordingService::new(recorder, config);
+
+        service.recover_after_wake().unwrap();
+
+        assert_eq!(recover_calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// 録音中は復帰回復をスキップする
+    #[tokio::test]
+    async fn recover_after_wake_skips_backend_while_recording() {
+        let backend = RecoverableAudioBackend::new();
+        let recover_calls = backend.recover_calls.clone();
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
+        let config = RecordingConfig {
+            max_duration_secs: 30,
+        };
+        let service = RecordingService::new(recorder, config);
+
+        service
+            .start_recording(RecordingOptions { prompt: None })
+            .await
+            .unwrap();
+
+        service.recover_after_wake().unwrap();
+
+        assert_eq!(recover_calls.load(Ordering::SeqCst), 0);
     }
 
     /// コンテキスト状態が期待通りに遷移する

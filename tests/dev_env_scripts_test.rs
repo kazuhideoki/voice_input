@@ -19,7 +19,6 @@ struct ScriptFixture {
     stderr_path: PathBuf,
     build_cli_path: PathBuf,
     build_daemon_path: PathBuf,
-    installed_daemon_path: PathBuf,
     app_bundle_path: PathBuf,
     app_bundle_info_plist_path: PathBuf,
     bundled_cli_path: PathBuf,
@@ -41,8 +40,6 @@ impl ScriptFixture {
         let stderr_path = root.join("runtime/voice_inputd.err");
         let build_cli_path = repo_root.join("target/release/voice_input");
         let build_daemon_path = repo_root.join("target/release/voice_inputd");
-        let installed_daemon_path =
-            home_dir.join("Library/Application Support/voice_input/bin/voice_inputd");
         let app_bundle_path = home_dir.join("Applications/VoiceInput.app");
         let app_bundle_info_plist_path = app_bundle_path.join("Contents/Info.plist");
         let bundled_cli_path = app_bundle_path.join("Contents/MacOS/voice_input");
@@ -72,9 +69,7 @@ case "$1" in
     ;;
   bootstrap|kickstart)
     touch "$FAKE_STATE_DIR/launch_agent_loaded"
-    if [ -x "$VOICE_INPUT_INSTALLED_DAEMON_PATH" ]; then
-      "$VOICE_INPUT_INSTALLED_DAEMON_PATH"
-    elif [ -x "$VOICE_INPUT_BUNDLED_DAEMON_PATH" ]; then
+    if [ -x "$VOICE_INPUT_BUNDLED_DAEMON_PATH" ]; then
       "$VOICE_INPUT_BUNDLED_DAEMON_PATH"
     fi
     exit 0
@@ -150,7 +145,6 @@ exit 0
             stderr_path,
             build_cli_path,
             build_daemon_path,
-            installed_daemon_path,
             app_bundle_path,
             app_bundle_info_plist_path,
             bundled_cli_path,
@@ -179,10 +173,6 @@ exit 0
         command.env("VOICE_INPUT_STDOUT_PATH", &self.stdout_path);
         command.env("VOICE_INPUT_STDERR_PATH", &self.stderr_path);
         command.env("VOICE_INPUT_BUILD_CLI_PATH", &self.build_cli_path);
-        command.env(
-            "VOICE_INPUT_INSTALLED_DAEMON_PATH",
-            &self.installed_daemon_path,
-        );
         command.env("VOICE_INPUT_APP_BUNDLE_PATH", &self.app_bundle_path);
         command.env(
             "VOICE_INPUT_APP_BUNDLE_INFO_PLIST_PATH",
@@ -204,45 +194,6 @@ fn write_executable(path: &Path, body: &str) -> Result<(), Box<dyn Error>> {
     let mut permissions = fs::metadata(path)?.permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions)?;
-    Ok(())
-}
-
-/// setup-dev-env は固定配置先を使う LaunchAgent plist を作成する
-#[test]
-#[cfg(feature = "ci-test")]
-fn setup_creates_launch_agent_for_installed_daemon() -> Result<(), Box<dyn Error>> {
-    let fixture = ScriptFixture::new()?;
-
-    let setup_output = fixture.command_for_script("setup-dev-env.sh").output()?;
-    assert!(
-        setup_output.status.success(),
-        "setup failed: stdout={}, stderr={}",
-        String::from_utf8_lossy(&setup_output.stdout),
-        String::from_utf8_lossy(&setup_output.stderr)
-    );
-
-    let plist = fs::read_to_string(&fixture.plist_path)?;
-    assert!(
-        plist.contains(&fixture.installed_daemon_path.display().to_string()),
-        "setup should point LaunchAgent to installed daemon path: {plist}"
-    );
-    assert!(
-        plist.contains("<key>RunAtLoad</key>"),
-        "setup should enable RunAtLoad: {plist}"
-    );
-    assert!(
-        plist.contains("<key>KeepAlive</key>"),
-        "setup should enable KeepAlive: {plist}"
-    );
-    assert!(
-        !plist.contains(&fixture.fake_bin_dir.display().to_string()),
-        "setup should not bake caller PATH into LaunchAgent environment: {plist}"
-    );
-    assert!(
-        !plist.contains(&fixture.user_python_bin_dir.display().to_string()),
-        "setup should not include user Python bin directories in LaunchAgent PATH: {plist}"
-    );
-
     Ok(())
 }
 
@@ -280,61 +231,6 @@ fn setup_app_bundle_creates_launch_agent_for_bundled_daemon() -> Result<(), Box<
     assert!(
         !plist.contains(&fixture.user_python_bin_dir.display().to_string()),
         "setup-app-bundle should not include user Python bin directories in LaunchAgent PATH: {plist}"
-    );
-
-    Ok(())
-}
-
-/// setup-dev-env の後に dev-build を実行すると固定配置先へ反映され LaunchAgent で利用可能になる
-#[test]
-#[cfg(feature = "ci-test")]
-fn setup_then_dev_build_installs_daemon_and_bootstraps_launch_agent() -> Result<(), Box<dyn Error>>
-{
-    let fixture = ScriptFixture::new()?;
-
-    let setup_output = fixture.command_for_script("setup-dev-env.sh").output()?;
-    assert!(
-        setup_output.status.success(),
-        "setup failed: stdout={}, stderr={}",
-        String::from_utf8_lossy(&setup_output.stdout),
-        String::from_utf8_lossy(&setup_output.stderr)
-    );
-
-    let build_output = fixture.command_for_script("dev-build.sh").output()?;
-    assert!(
-        build_output.status.success(),
-        "dev-build failed: stdout={}, stderr={}",
-        String::from_utf8_lossy(&build_output.stdout),
-        String::from_utf8_lossy(&build_output.stderr)
-    );
-
-    assert!(
-        fixture.build_daemon_path.exists(),
-        "release daemon was not built"
-    );
-    assert!(
-        fixture.installed_daemon_path.exists(),
-        "installed daemon was not created"
-    );
-    assert!(
-        fixture.socket_path.exists(),
-        "launch agent did not make daemon available"
-    );
-
-    let launchctl_log = fixture.state_log("launchctl.log");
-    assert!(
-        launchctl_log.contains("bootstrap"),
-        "dev-build should bootstrap LaunchAgent when not loaded: {launchctl_log}"
-    );
-    assert!(
-        !launchctl_log.contains("bootout"),
-        "fresh setup -> dev-build should not boot out LaunchAgent again: {launchctl_log}"
-    );
-
-    let codesign_log = fixture.state_log("codesign.log");
-    assert!(
-        codesign_log.contains(&fixture.installed_daemon_path.display().to_string()),
-        "dev-build should sign installed daemon: {codesign_log}"
     );
 
     Ok(())

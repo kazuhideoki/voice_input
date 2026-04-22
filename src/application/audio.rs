@@ -33,6 +33,11 @@ pub trait AudioBackend {
 
     /// 現在録音中であれば `true`。
     fn is_recording(&self) -> bool;
+
+    /// スリープ復帰後に録音デバイスやストリームを回復する。
+    fn recover_after_wake(&self) -> Result<(), AudioBackendError> {
+        Ok(())
+    }
 }
 
 /// `AudioBackend` の薄いラッパ。録音 port をアプリケーション層へ提供する。
@@ -59,6 +64,11 @@ impl<T: AudioBackend> Recorder<T> {
     /// 録音中かどうかを返します。
     pub fn is_recording(&self) -> bool {
         self.backend.is_recording()
+    }
+
+    /// スリープ復帰後にバックエンド回復を行います。
+    pub fn recover_after_wake(&self) -> Result<(), AudioBackendError> {
+        self.backend.recover_after_wake()
     }
 }
 

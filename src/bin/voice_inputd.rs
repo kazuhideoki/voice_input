@@ -11,7 +11,11 @@
 
 #![allow(clippy::await_holding_refcell_ref)]
 
-use std::{error::Error, fs};
+use std::{
+    error::Error,
+    fs, process,
+    time::{Duration, Instant},
+};
 
 use futures::{SinkExt, StreamExt};
 use tokio::{
@@ -24,7 +28,8 @@ use voice_input::{
     error::{Result, VoiceInputError},
     infrastructure::{
         audio::CpalAudioBackend, command_handler::CommandHandler, external::text_input,
-        service_container::ServiceContainer, transcription_worker::spawn_transcription_worker,
+        runtime_recovery::SleepWakeDetector, service_container::ServiceContainer,
+        transcription_worker::spawn_transcription_worker,
     },
     ipc::{IpcCmd, IpcResp, socket_path},
     load_env,
@@ -74,6 +79,7 @@ async fn async_main() -> Result<()> {
     let transcription_service = container.transcription_service.clone();
 
     text_input::init_worker().map_err(|e| VoiceInputError::SystemError(e.to_string()))?;
+    spawn_runtime_recovery_monitor(recording_service.clone());
 
     spawn_local(spawn_transcription_worker(
         semaphore.clone(),
@@ -93,6 +99,73 @@ async fn async_main() -> Result<()> {
             let _ = handle_client(stream, handler).await;
         });
     }
+}
+
+fn spawn_runtime_recovery_monitor(
+    recording_service: std::rc::Rc<
+        std::cell::RefCell<voice_input::application::RecordingService<CpalAudioBackend>>,
+    >,
+) {
+    const CHECK_INTERVAL: Duration = Duration::from_secs(15);
+    const WAKE_THRESHOLD: Duration = Duration::from_secs(45);
+    const RECOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(2);
+    const MAX_RECOVERY_ATTEMPTS: usize = 3;
+
+    spawn_local(async move {
+        let mut detector = SleepWakeDetector::new(Instant::now(), WAKE_THRESHOLD);
+        let mut ticker = tokio::time::interval(CHECK_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            ticker.tick().await;
+            if !detector.record_tick(Instant::now()) {
+                continue;
+            }
+
+            if recording_service.borrow().is_recording() {
+                eprintln!("Wake detected while recording; deferred runtime recovery.");
+                continue;
+            }
+
+            let mut recovered = false;
+            for attempt in 1..=MAX_RECOVERY_ATTEMPTS {
+                let audio_result = recording_service.borrow().recover_after_wake();
+                let text_result = text_input::recover_after_wake()
+                    .map_err(|e| VoiceInputError::SystemError(e.to_string()));
+
+                match (audio_result, text_result) {
+                    (Ok(()), Ok(())) => {
+                        recovered = true;
+                        println!("Recovered runtime resources after wake.");
+                        break;
+                    }
+                    (audio_result, text_result) => {
+                        if let Err(err) = audio_result {
+                            eprintln!(
+                                "Wake recovery attempt {} failed for audio backend: {}",
+                                attempt, err
+                            );
+                        }
+                        if let Err(err) = text_result {
+                            eprintln!(
+                                "Wake recovery attempt {} failed for text input worker: {}",
+                                attempt, err
+                            );
+                        }
+                    }
+                }
+
+                tokio::time::sleep(RECOVERY_RETRY_INTERVAL).await;
+            }
+
+            if recovered {
+                continue;
+            }
+
+            eprintln!("Wake recovery failed; exiting to let LaunchAgent restart the daemon.");
+            process::exit(75);
+        }
+    });
 }
 
 /// 1 クライアントとの IPC セッションを処理します。

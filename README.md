@@ -71,44 +71,36 @@ cargo build --release
 
 ### デプロイ方式
 
-現在は 2 つのデプロイ方式を選べます。
+現在は `app bundle` 方式のみをサポートします。
 
-- **legacy**: 固定配置した `voice_inputd` を LaunchAgent で起動
-- **app bundle**: `VoiceInput.app` を構築し、その bundle 内の `voice_inputd` を LaunchAgent で起動
-
-既存の `setup-dev-env.sh` / `dev-build.sh` / `cleanup-dev-env.sh` はそのまま利用できます。
-比較用に `setup-app-bundle.sh` / `build-app-bundle.sh` / `restart-app-bundle.sh` / `cleanup-app-bundle.sh` も追加されています。
-
-どちらもデフォルトでは同じ LaunchAgent label と socket path を使うため、**同時常駐ではなく切り替えて比較する前提**です。
+- `VoiceInput.app` を構築し、その bundle 内の `voice_inputd` を LaunchAgent で起動します。
+- 権限の付与対象を `VoiceInput.app` に固定し、再ビルド後も権限の再設定が発生しにくい構成です。
 
 ### 初回セットアップ
 
-1. **開発環境セットアップ（LaunchAgent 常駐方式）**
+1. **app bundle 配置**
 
    ```sh
-   ./scripts/setup-dev-env.sh
+   ./scripts/setup-app-bundle.sh
+   ./scripts/build-app-bundle.sh
    ```
 
    このスクリプトは個人用の開発環境を前提に絶対パスを書き込むため、リポジトリ配置先が異なる場合は中身を調整してから実行してください。
    実行すると以下を自動で行います：
 
    - `~/Library/LaunchAgents/com.user.voiceinputd.plist` を作成
-   - LaunchAgent が固定配置先の `voice_inputd` を起動するよう設定
+   - LaunchAgent が `~/Applications/VoiceInput.app/Contents/MacOS/voice_inputd` を起動するよう設定
    - `.env` の読み込み先を `VOICE_INPUT_ENV_PATH` で固定
 
 2. **権限の付与**
    - システム設定 → プライバシーとセキュリティ → マイク
-   - `~/Library/Application Support/voice_input/bin/voice_inputd` を有効化
+   - `VoiceInput.app` を有効化
    - システム設定 → プライバシーとセキュリティ → アクセシビリティ
-   - `~/Library/Application Support/voice_input/bin/voice_inputd` を有効化
+   - `VoiceInput.app` を有効化
 
-### App Bundle 方式
-
-比較用に app bundle 方式も利用できます。
+3. **権限反映後の再起動**
 
 ```sh
-./scripts/setup-app-bundle.sh
-./scripts/build-app-bundle.sh
 ./scripts/restart-app-bundle.sh
 ```
 
@@ -119,16 +111,16 @@ cargo build --release
 
 ### 開発時の再ビルド
 
-固定配置先の daemon を LaunchAgent で起動するため、再ビルド時の権限再設定は不要です：
+app bundle を LaunchAgent で起動するため、再ビルド時の権限再設定は不要です：
 
 ```sh
-./scripts/dev-build.sh
+./scripts/build-app-bundle.sh
 ```
 
 通常はこのコマンドだけで十分です。以下をまとめて行います：
 
 - リリースビルドを実行
-- `~/Library/Application Support/voice_input/bin/voice_inputd` へ反映
+- `~/Applications/VoiceInput.app` を更新
 - `com.user.voiceinputd` を再起動
 - **権限の再設定は不要**
 - ログイン後は LaunchAgent が自動起動するため、通常は再実行不要
@@ -137,16 +129,17 @@ cargo build --release
 
 - macOS に再ログインした後は LaunchAgent が自動で `voice_inputd` を起動します
 - `voice_inputd` が異常終了した場合は `KeepAlive` により自動で再起動されます
-- 長時間スリープ後にプロセスが落ちた場合も、LaunchAgent が再起動を試みます
+- 長時間スリープ後は daemon が wake を検知して音声入力ストリームとテキスト入力ワーカーの再初期化を試みます
+- wake 復旧が連続で失敗した場合は daemon が終了し、LaunchAgent が再起動します
 
 ### 仕組み
 
-macOSのTCCシステムは実行ファイルのハッシュ値で権限を管理するため、再ビルドすると権限が失われます。
+macOS の TCC システムは実行ファイルや bundle identity を基準に権限を管理するため、起動対象がぶれると再ビルド後に権限が不安定になりやすくなります。
 この開発環境では：
 
-1. ビルド結果を固定配置先（`~/Library/Application Support/voice_input/bin/voice_inputd`）へコピー
-2. その固定配置先の実行ファイルを同じ identifier で再署名
-3. LaunchAgent が常にその固定配置先を起動するため、再ビルド後も同じ権限対象を維持しやすい
+1. `VoiceInput.app` を固定の bundle identifier (`com.user.voiceinput`) で生成
+2. LaunchAgent が常に bundle 内の `voice_inputd` を起動
+3. wake 復帰時は内部リソースを再初期化し、回復不能ならプロセスを落として LaunchAgent に再起動させる
 
 ### トラブルシューティング
 
@@ -157,7 +150,7 @@ macOSのTCCシステムは実行ファイルのハッシュ値で権限を管理
 tail -f /tmp/voice_inputd.err
 
 # まず通常の再ビルド兼再起動を試す
-./scripts/dev-build.sh
+./scripts/build-app-bundle.sh
 
 # LaunchAgent を明示的に再起動
 launchctl kickstart -k gui/$(id -u)/com.user.voiceinputd
@@ -166,7 +159,7 @@ launchctl kickstart -k gui/$(id -u)/com.user.voiceinputd
 開発環境自体を解除したい場合は、以下を実行してください。
 
 ```sh
-./scripts/cleanup-dev-env.sh
+./scripts/cleanup-app-bundle.sh
 ```
 
 ビルド生成物まで消したい場合は、別途 `cargo clean` を実行してください。
