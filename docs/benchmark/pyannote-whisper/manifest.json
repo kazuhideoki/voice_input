@@ -1,0 +1,38 @@
+{
+  "run_id": "3a501672c21942c3ac8843ad51637c95",
+  "audio_files": [
+    {
+      "path": "/Users/kazuhideoki/diarize-log-storage/storage/runs/20260421T150358_264+0900/audios/capture-000001.wav",
+      "bytes": 7028266,
+      "duration_seconds": 146.42129166666666
+    },
+    {
+      "path": "/Users/kazuhideoki/diarize-log-storage/storage/runs/20260421T150358_264+0900/audios/capture-000002.wav",
+      "bytes": 6982700,
+      "duration_seconds": 145.472
+    },
+    {
+      "path": "/Users/kazuhideoki/diarize-log-storage/storage/runs/20260421T150358_264+0900/audios/capture-000003.wav",
+      "bytes": 6912044,
+      "duration_seconds": 144.0
+    },
+    {
+      "path": "/Users/kazuhideoki/diarize-log-storage/storage/runs/20260421T150358_264+0900/audios/capture-000004.wav",
+      "bytes": 6913068,
+      "duration_seconds": 144.02133333333333
+    },
+    {
+      "path": "/Users/kazuhideoki/diarize-log-storage/storage/runs/20260421T150358_264+0900/audios/capture-000005.wav",
+      "bytes": 6912044,
+      "duration_seconds": 144.0
+    },
+    {
+      "path": "/Users/kazuhideoki/diarize-log-storage/storage/runs/20260421T150358_264+0900/audios/capture-000006.wav",
+      "bytes": 6912044,
+      "duration_seconds": 144.0
+    }
+  ],
+  "repetitions": 5,
+  "openai_model": "gpt-4o-transcribe",
+  "pyannote_model": "faster-whisper-large-v3-turbo"
+}

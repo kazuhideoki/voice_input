@@ -1,0 +1,23 @@
+{
+  "run_id": "a70bedd56fe443658c2957b6693f9353",
+  "audio_files": [
+    {
+      "path": "/Users/kazuhideoki/diarize-log-storage/storage/runs/20260421T150358_264+0900/audios/capture-000004.wav",
+      "bytes": 6913068,
+      "duration_seconds": 144.02133333333333
+    },
+    {
+      "path": "/Users/kazuhideoki/diarize-log-storage/storage/runs/20260421T150358_264+0900/audios/capture-000005.wav",
+      "bytes": 6912044,
+      "duration_seconds": 144.0
+    },
+    {
+      "path": "/Users/kazuhideoki/diarize-log-storage/storage/runs/20260421T150358_264+0900/audios/capture-000006.wav",
+      "bytes": 6912044,
+      "duration_seconds": 144.0
+    }
+  ],
+  "repetitions": 5,
+  "openai_model": "gpt-4o-transcribe",
+  "pyannote_model": "parakeet-tdt-0.6b-v3"
+}
