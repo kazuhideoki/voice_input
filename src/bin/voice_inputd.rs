@@ -14,7 +14,7 @@
 use std::{
     error::Error,
     fs, process,
-    time::{Duration, Instant},
+    time::{Duration, SystemTime},
 };
 
 use futures::{SinkExt, StreamExt};
@@ -112,13 +112,13 @@ fn spawn_runtime_recovery_monitor(
     const MAX_RECOVERY_ATTEMPTS: usize = 3;
 
     spawn_local(async move {
-        let mut detector = SleepWakeDetector::new(Instant::now(), WAKE_THRESHOLD);
+        let mut detector = SleepWakeDetector::new(SystemTime::now(), WAKE_THRESHOLD);
         let mut ticker = tokio::time::interval(CHECK_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             ticker.tick().await;
-            if !detector.record_tick(Instant::now()) {
+            if !detector.record_tick(SystemTime::now()) {
                 continue;
             }
 
