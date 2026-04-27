@@ -26,6 +26,9 @@ pub enum VoiceInputError {
         AudioBackendError,
     ),
 
+    #[error("{0}")]
+    NoAudioCaptured(String),
+
     // ========================================
     // 転写関連エラー
     // ========================================

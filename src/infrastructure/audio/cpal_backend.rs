@@ -60,6 +60,9 @@ type CaptureTarget = (Arc<Mutex<Vec<i16>>>, Arc<AtomicBool>, u64);
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 const MIN_RESAMPLE_FRAMES: usize = 256;
 const INPUT_SETUP_REVALIDATION_INTERVAL: Duration = Duration::from_secs(2);
+const INPUT_READINESS_TIMEOUT: Duration = Duration::from_millis(80);
+const INPUT_READINESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const MIN_CAPTURE_DURATION: Duration = Duration::from_millis(100);
 
 /// Audio processing errors
 #[derive(Debug, thiserror::Error)]
@@ -297,6 +300,16 @@ fn should_rebuild_input_stream(
     needs_rebuild || !matches!(existing_identity, Some(identity) if identity == desired_identity)
 }
 
+fn min_capture_samples(sample_rate: u32, channels: u16, duration: Duration) -> usize {
+    let channels = channels.max(1) as usize;
+    let millis = duration.as_millis() as usize;
+    ((sample_rate as usize * channels * millis) / 1000).max(channels)
+}
+
+fn has_minimum_capture(samples_len: usize, sample_rate: u32, channels: u16) -> bool {
+    samples_len >= min_capture_samples(sample_rate, channels, MIN_CAPTURE_DURATION)
+}
+
 fn try_capture_buffer(
     recording: &AtomicBool,
     capture_generation: &AtomicU64,
@@ -508,6 +521,53 @@ impl CpalAudioBackend {
             .map_err(|error| AudioBackendError::StreamOperation {
                 message: error.to_string(),
             })
+    }
+
+    fn start_capture_state(&self, input_setup: &CachedInputSetup) -> u64 {
+        let config: StreamConfig = input_setup.supported_config.clone().into();
+        let sample_rate = config.sample_rate;
+        let channels = config.channels;
+        let capacity = Self::estimate_buffer_size(30, sample_rate, channels);
+        let buffer = Arc::new(Mutex::new(Vec::with_capacity(capacity)));
+        let generation = self.capture_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        *self.recording_state.lock().unwrap() = Some(MemoryRecordingState {
+            buffer,
+            sample_rate,
+            channels,
+            generation,
+            accepting_input: Arc::new(AtomicBool::new(true)),
+        });
+        self.recording.store(true, Ordering::SeqCst);
+        generation
+    }
+
+    fn wait_for_input_samples(&self, generation: u64, timeout: Duration) -> bool {
+        let started_at = Instant::now();
+        loop {
+            let has_samples = {
+                let state = self.recording_state.lock().unwrap();
+                state
+                    .as_ref()
+                    .filter(|state| state.generation == generation)
+                    .map(|state| !state.buffer.lock().unwrap().is_empty())
+                    .unwrap_or(false)
+            };
+            if has_samples {
+                return true;
+            }
+            if started_at.elapsed() >= timeout {
+                return false;
+            }
+            std::thread::sleep(INPUT_READINESS_POLL_INTERVAL);
+        }
+    }
+
+    fn stop_accepting_current_capture(&self) {
+        if let Some(state) = self.recording_state.lock().unwrap().take() {
+            state.accepting_input.store(false, Ordering::SeqCst);
+        }
+        self.recording.store(false, Ordering::SeqCst);
+        self.capture_generation.fetch_add(1, Ordering::SeqCst);
     }
 
     fn preferred_format() -> AudioFormat {
@@ -960,20 +1020,30 @@ impl AudioBackend for CpalAudioBackend {
                 .map_err(|error| AudioBackendError::StreamOperation {
                     message: error.to_string(),
                 })?;
-        let config: StreamConfig = input_setup.supported_config.clone().into();
-        let sample_rate = config.sample_rate;
-        let channels = config.channels;
-        let capacity = Self::estimate_buffer_size(30, sample_rate, channels);
-        let buffer = Arc::new(Mutex::new(Vec::with_capacity(capacity)));
-        let generation = self.capture_generation.fetch_add(1, Ordering::SeqCst) + 1;
-        *self.recording_state.lock().unwrap() = Some(MemoryRecordingState {
-            buffer,
-            sample_rate,
-            channels,
-            generation,
-            accepting_input: Arc::new(AtomicBool::new(true)),
-        });
-        self.recording.store(true, Ordering::SeqCst);
+        let generation = self.start_capture_state(&input_setup);
+        if self.wait_for_input_samples(generation, INPUT_READINESS_TIMEOUT) {
+            return Ok(());
+        }
+
+        eprintln!("Audio input produced no samples at recording start; rebuilding input stream.");
+        self.stop_accepting_current_capture();
+        self.invalidate_input_stream();
+
+        let input_setup =
+            self.ensure_input_stream()
+                .map_err(|error| AudioBackendError::StreamOperation {
+                    message: format!("audio input rebuild failed: {}", error),
+                })?;
+        let generation = self.start_capture_state(&input_setup);
+        if !self.wait_for_input_samples(generation, INPUT_READINESS_TIMEOUT) {
+            self.stop_accepting_current_capture();
+            self.invalidate_input_stream();
+            return Err(AudioBackendError::NoAudioCaptured {
+                message: "no audio captured; audio input unavailable".to_string(),
+            });
+        }
+
+        eprintln!("Audio input recovered after stream rebuild.");
         Ok(())
     }
 
@@ -1002,6 +1072,26 @@ impl AudioBackend for CpalAudioBackend {
         // メモリモード: バッファからエンコード（既定: FLAC）
         let samples = state.buffer.lock().unwrap();
         let samples_len = samples.len();
+        if !has_minimum_capture(samples_len, state.sample_rate, state.channels) {
+            drop(samples);
+            eprintln!(
+                "Audio stream produced too little data; samples={} rate={} ch={}. Rebuilding input stream.",
+                samples_len, state.sample_rate, state.channels
+            );
+            self.invalidate_input_stream();
+            if let Err(err) = self.warm_up() {
+                eprintln!("Audio input recovery after empty capture failed: {}", err);
+                return Err(AudioBackendError::NoAudioCaptured {
+                    message: "recording stopped; no audio captured; audio input recovery failed"
+                        .to_string(),
+                });
+            }
+            eprintln!("Audio input recovered after empty capture.");
+            return Err(AudioBackendError::NoAudioCaptured {
+                message: "recording stopped; no audio captured; audio input recovered; retry"
+                    .to_string(),
+            });
+        }
         let trim_timer = profiling::Timer::start("audio.trim_silence");
         let trimmed = Self::trim_silence(&samples, state.sample_rate, state.channels);
         if profiling::enabled() {
@@ -1510,6 +1600,24 @@ mod tests {
         assert!(should_rebuild);
     }
 
+    /// 100ms未満の入力は有効な録音として扱わない
+    #[test]
+    fn short_capture_is_rejected_before_transcription() {
+        let minimum = min_capture_samples(48_000, 1, MIN_CAPTURE_DURATION);
+
+        assert!(!has_minimum_capture(minimum - 1, 48_000, 1));
+        assert!(has_minimum_capture(minimum, 48_000, 1));
+    }
+
+    /// チャンネル数を含めて最低サンプル数を計算する
+    #[test]
+    fn minimum_capture_samples_include_channels() {
+        assert_eq!(
+            min_capture_samples(48_000, 2, Duration::from_millis(100)),
+            9_600
+        );
+    }
+
     /// 世代が切り替わった callback は停止後の buffer に追記しない
     #[test]
     fn stale_generation_does_not_append_after_stop() {
@@ -2016,7 +2124,10 @@ mod tests {
         let backend = CpalAudioBackend::default();
 
         // テスト用のMemoryRecordingStateを設定
-        let buffer = Arc::new(Mutex::new(vec![100i16, -100, 0, 1000, -1000]));
+        let samples = (0..min_capture_samples(48_000, 1, MIN_CAPTURE_DURATION))
+            .map(|i| if i % 2 == 0 { 1000i16 } else { -1000i16 })
+            .collect();
+        let buffer = Arc::new(Mutex::new(samples));
         *backend.recording_state.lock().unwrap() = Some(MemoryRecordingState {
             buffer: buffer.clone(),
             sample_rate: 48000,
@@ -2043,9 +2154,9 @@ mod tests {
         assert!(backend.recording_state.lock().unwrap().is_none());
     }
 
-    /// 空バッファでも停止時にFLACヘッダーが返る
+    /// 空バッファは転写キューへ渡さず再試行を促す
     #[test]
-    fn stop_recording_handles_empty_buffer() {
+    fn stop_recording_rejects_empty_buffer() {
         init_env_config_for_test();
         // 空のバッファでの動作をテスト
         let backend = CpalAudioBackend::default();
@@ -2065,12 +2176,12 @@ mod tests {
         backend.recording.store(true, Ordering::SeqCst);
 
         // stop_recordingを実行
-        let result = backend.stop_recording().unwrap();
+        let result = backend.stop_recording();
 
-        // 空のデータでもFLACヘッダーは生成される
-        assert_eq!(result.mime_type, "audio/flac");
-        assert!(result.bytes.len() > 4);
-        assert_eq!(&result.bytes[0..4], b"fLaC");
+        assert!(matches!(
+            result,
+            Err(AudioBackendError::NoAudioCaptured { .. })
+        ));
 
         // 録音状態がクリアされていることを確認
         assert!(!backend.is_recording());

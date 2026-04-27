@@ -20,6 +20,8 @@ pub enum AudioBackendError {
     StreamOperation { message: String },
     #[error("audio processing failed: {message}")]
     Processing { message: String },
+    #[error("{message}")]
+    NoAudioCaptured { message: String },
 }
 
 /// 録音デバイス抽象。
