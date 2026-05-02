@@ -1,5 +1,22 @@
 use std::time::{Duration, SystemTime};
 
+/// wake 復旧の再試行方針
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WakeRecoveryRetryPolicy {
+    pub max_attempts: usize,
+    pub retry_interval: Duration,
+}
+
+impl WakeRecoveryRetryPolicy {
+    /// macOS の wake 直後に音声デバイスが stream 作成可能になるまで待つ既定値を返す
+    pub fn after_wake() -> Self {
+        Self {
+            max_attempts: 30,
+            retry_interval: Duration::from_secs(2),
+        }
+    }
+}
+
 /// スリープ復帰を検知するための tick 遅延検出器
 #[derive(Debug)]
 pub struct SleepWakeDetector {
@@ -28,7 +45,7 @@ impl SleepWakeDetector {
 
 #[cfg(test)]
 mod tests {
-    use super::SleepWakeDetector;
+    use super::{SleepWakeDetector, WakeRecoveryRetryPolicy};
     use std::time::{Duration, SystemTime};
 
     /// 間隔内の tick では wake を検知しない
@@ -56,5 +73,14 @@ mod tests {
         let mut detector = SleepWakeDetector::new(start, Duration::from_secs(30));
 
         assert!(!detector.record_tick(start - Duration::from_secs(10)));
+    }
+
+    /// wake 復帰直後の音声デバイス再接続を待てる再試行幅を持つ
+    #[test]
+    fn wake_recovery_retry_policy_waits_for_audio_device_reconnection() {
+        let policy = WakeRecoveryRetryPolicy::after_wake();
+
+        assert_eq!(policy.max_attempts, 30);
+        assert_eq!(policy.retry_interval, Duration::from_secs(2));
     }
 }

@@ -27,8 +27,11 @@ use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 use voice_input::{
     error::{Result, VoiceInputError},
     infrastructure::{
-        audio::CpalAudioBackend, command_handler::CommandHandler, external::text_input,
-        runtime_recovery::SleepWakeDetector, service_container::ServiceContainer,
+        audio::CpalAudioBackend,
+        command_handler::CommandHandler,
+        external::text_input,
+        runtime_recovery::{SleepWakeDetector, WakeRecoveryRetryPolicy},
+        service_container::ServiceContainer,
         transcription_worker::spawn_transcription_worker,
     },
     ipc::{IpcCmd, IpcResp, socket_path},
@@ -108,11 +111,10 @@ fn spawn_runtime_recovery_monitor(
 ) {
     const CHECK_INTERVAL: Duration = Duration::from_secs(15);
     const WAKE_THRESHOLD: Duration = Duration::from_secs(45);
-    const RECOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(2);
-    const MAX_RECOVERY_ATTEMPTS: usize = 3;
 
     spawn_local(async move {
         let mut detector = SleepWakeDetector::new(SystemTime::now(), WAKE_THRESHOLD);
+        let retry_policy = WakeRecoveryRetryPolicy::after_wake();
         let mut ticker = tokio::time::interval(CHECK_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -128,7 +130,7 @@ fn spawn_runtime_recovery_monitor(
             }
 
             let mut recovered = false;
-            for attempt in 1..=MAX_RECOVERY_ATTEMPTS {
+            for attempt in 1..=retry_policy.max_attempts {
                 let audio_result = recording_service.borrow().recover_after_wake();
                 let text_result = text_input::recover_after_wake()
                     .map_err(|e| VoiceInputError::SystemError(e.to_string()));
@@ -155,7 +157,7 @@ fn spawn_runtime_recovery_monitor(
                     }
                 }
 
-                tokio::time::sleep(RECOVERY_RETRY_INTERVAL).await;
+                tokio::time::sleep(retry_policy.retry_interval).await;
             }
 
             if recovered {
