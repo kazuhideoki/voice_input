@@ -34,6 +34,7 @@ cp .env.example .env
 - VOICE_INPUT_SOCKET_PATH=/custom/path/voice_input.sock
 - VOICE_INPUT_SOCKET_DIR=/custom/socket/dir # `VOICE_INPUT_SOCKET_PATH` 未設定時のみ有効
 - XDG_DATA_HOME=/custom/xdg/data
+- VOICE_INPUT_STOP_POST_ROLL_MS=300 # 停止要求後に追加で録音する時間（末尾切れ対策）
 
 `.env` はデフォルトでカレントディレクトリから読み込まれ、`VOICE_INPUT_ENV_PATH` が設定されている場合はそのパスが優先されます。
 環境変数は `src/utils/config.rs` の `EnvConfig` で起動時に一度だけ読み込まれます。

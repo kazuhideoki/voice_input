@@ -6,3 +6,5 @@ AGENTS.override.md
 .codex
 logprob.jsonl
 .venv
+__pycache__/
+survey/runs/
