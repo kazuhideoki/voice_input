@@ -16,10 +16,11 @@ use voice_input::{
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     load_env();
 
-    // 環境変数設定を初期化
-    EnvConfig::init()?;
-
     let cli = Cli::parse();
+    let max_secs_override = cli.cmd.as_ref().and_then(command_max_secs);
+
+    // 環境変数設定を初期化。--max-secs は VOICE_INPUT_MAX_SECS より優先する。
+    EnvConfig::init_with_recording_max_duration_secs(max_secs_override)?;
 
     /* ── 追加: デバイス一覧フラグ ── */
     if cli.list_devices {
@@ -35,6 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.cmd.unwrap_or(Cmd::Toggle {
         prompt: None,
         save_audio: None,
+        max_secs: None,
         input_file: None,
         transcription_provider: None,
         transcription_model: None,
@@ -43,6 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Start {
             prompt,
             save_audio,
+            max_secs,
             input_file,
             transcription_provider,
             transcription_model,
@@ -51,6 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(input_file_path) => IpcCmd::StartWithInputFile {
                     prompt,
                     save_audio_path: save_audio,
+                    max_duration_secs: max_secs,
                     input_file_path,
                     transcription_provider,
                     transcription_model,
@@ -58,6 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None => IpcCmd::Start {
                     prompt,
                     save_audio_path: save_audio,
+                    max_duration_secs: max_secs,
                     transcription_provider,
                     transcription_model,
                 },
@@ -68,6 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Toggle {
             prompt,
             save_audio,
+            max_secs,
             input_file,
             transcription_provider,
             transcription_model,
@@ -76,6 +82,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(input_file_path) => IpcCmd::ToggleWithInputFile {
                     prompt,
                     save_audio_path: save_audio,
+                    max_duration_secs: max_secs,
                     input_file_path,
                     transcription_provider,
                     transcription_model,
@@ -83,6 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 None => IpcCmd::Toggle {
                     prompt,
                     save_audio_path: save_audio,
+                    max_duration_secs: max_secs,
                     transcription_provider,
                     transcription_model,
                 },
@@ -139,6 +147,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     }
     Ok(())
+}
+
+fn command_max_secs(cmd: &Cmd) -> Option<u64> {
+    match cmd {
+        Cmd::Start { max_secs, .. } | Cmd::Toggle { max_secs, .. } => *max_secs,
+        Cmd::Stop | Cmd::Status | Cmd::Health | Cmd::Dict { .. } | Cmd::Config { .. } => None,
+    }
 }
 
 fn relay(cmd: IpcCmd) -> Result<(), Box<dyn std::error::Error>> {

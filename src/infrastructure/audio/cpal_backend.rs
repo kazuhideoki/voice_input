@@ -1,7 +1,7 @@
 use super::encoder::{self, AudioFormat};
 use super::{AudioBackend, AudioBackendError};
 use crate::application::{AudioData, AudioDataFormat, AudioFrame, AudioInputSource, CapturedAudio};
-use crate::utils::config::EnvConfig;
+use crate::utils::config::{DEFAULT_MAX_RECORDING_DURATION_SECS, EnvConfig};
 use crate::utils::profiling;
 use audioadapter_buffers::SizeError;
 use cpal::{
@@ -576,7 +576,8 @@ impl CpalAudioBackend {
         let config: StreamConfig = input_setup.supported_config.clone().into();
         let sample_rate = config.sample_rate;
         let channels = config.channels;
-        let capacity = Self::estimate_buffer_size(30, sample_rate, channels);
+        let capacity =
+            Self::estimate_buffer_size(DEFAULT_MAX_RECORDING_DURATION_SECS, sample_rate, channels);
         let buffer = Arc::new(Mutex::new(Vec::with_capacity(capacity)));
         let generation = self.capture_generation.fetch_add(1, Ordering::SeqCst) + 1;
         *self.recording_state.lock().unwrap() = Some(MemoryRecordingState {
@@ -598,7 +599,11 @@ impl CpalAudioBackend {
         sample_count: usize,
         frame_tx: Option<tokio::sync::mpsc::UnboundedSender<AudioFrame>>,
     ) -> u64 {
-        let capacity = sample_count.max(Self::estimate_buffer_size(30, sample_rate, channels));
+        let capacity = sample_count.max(Self::estimate_buffer_size(
+            DEFAULT_MAX_RECORDING_DURATION_SECS,
+            sample_rate,
+            channels,
+        ));
         let buffer = Arc::new(Mutex::new(Vec::with_capacity(capacity)));
         let generation = self.capture_generation.fetch_add(1, Ordering::SeqCst) + 1;
         *self.recording_state.lock().unwrap() = Some(MemoryRecordingState {
@@ -899,7 +904,7 @@ impl CpalAudioBackend {
 
     /// メモリバッファのサイズ見積もり
     /// 録音時間に基づいて必要なバッファサイズを計算
-    fn estimate_buffer_size(duration_secs: u32, sample_rate: u32, channels: u16) -> usize {
+    fn estimate_buffer_size(duration_secs: u64, sample_rate: u32, channels: u16) -> usize {
         // samples = sample_rate * channels * duration
         sample_rate as usize * channels as usize * duration_secs as usize
     }

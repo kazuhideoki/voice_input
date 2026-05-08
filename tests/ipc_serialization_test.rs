@@ -8,6 +8,7 @@ fn start_command_serializes_roundtrip() {
     let start_cmd = IpcCmd::Start {
         prompt: Some("test prompt".to_string()),
         save_audio_path: None,
+        max_duration_secs: None,
         transcription_provider: None,
         transcription_model: None,
     };
@@ -29,6 +30,7 @@ fn toggle_command_serializes_roundtrip() {
     let toggle_cmd = IpcCmd::Toggle {
         prompt: None,
         save_audio_path: None,
+        max_duration_secs: None,
         transcription_provider: None,
         transcription_model: None,
     };
@@ -52,24 +54,28 @@ fn ipc_cmds_roundtrip_via_json() {
         IpcCmd::Start {
             prompt: None,
             save_audio_path: None,
+            max_duration_secs: None,
             transcription_provider: None,
             transcription_model: None,
         },
         IpcCmd::Start {
             prompt: Some("hello".to_string()),
             save_audio_path: None,
+            max_duration_secs: None,
             transcription_provider: None,
             transcription_model: None,
         },
         IpcCmd::Toggle {
             prompt: Some("world".to_string()),
             save_audio_path: None,
+            max_duration_secs: None,
             transcription_provider: None,
             transcription_model: None,
         },
         IpcCmd::StartWithInputFile {
             prompt: Some("file".to_string()),
             save_audio_path: None,
+            max_duration_secs: None,
             input_file_path: PathBuf::from("/tmp/sample.wav"),
             transcription_provider: None,
             transcription_model: None,
@@ -77,6 +83,7 @@ fn ipc_cmds_roundtrip_via_json() {
         IpcCmd::ToggleWithInputFile {
             prompt: Some("file".to_string()),
             save_audio_path: None,
+            max_duration_secs: None,
             input_file_path: PathBuf::from("/tmp/sample.wav"),
             transcription_provider: None,
             transcription_model: None,
@@ -104,6 +111,7 @@ fn start_command_json_format_contains_prompt() {
     let cmd = IpcCmd::Start {
         prompt: Some("test".to_string()),
         save_audio_path: None,
+        max_duration_secs: None,
         transcription_provider: None,
         transcription_model: None,
     };
@@ -119,6 +127,7 @@ fn start_command_preserves_audio_save_path() {
     let cmd = IpcCmd::Start {
         prompt: None,
         save_audio_path: Some(PathBuf::from("/tmp/debug.wav")),
+        max_duration_secs: None,
         transcription_provider: None,
         transcription_model: None,
     };
@@ -136,12 +145,39 @@ fn start_command_preserves_audio_save_path() {
     }
 }
 
+/// Startコマンドが最大録音秒数をJSONで保持する
+#[test]
+fn start_command_preserves_max_duration_secs() {
+    let cmd = IpcCmd::Start {
+        prompt: None,
+        save_audio_path: None,
+        max_duration_secs: Some(120),
+        transcription_provider: None,
+        transcription_model: None,
+    };
+
+    let json = serde_json::to_string(&cmd).unwrap();
+    assert!(json.contains(r#""max_duration_secs":120"#));
+
+    let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
+
+    match deserialized {
+        IpcCmd::Start {
+            max_duration_secs, ..
+        } => {
+            assert_eq!(max_duration_secs, Some(120));
+        }
+        _ => panic!("Expected Start command"),
+    }
+}
+
 /// Startコマンドが入力ファイルパスをJSONで保持する
 #[test]
 fn start_command_preserves_input_file_path() {
     let cmd = IpcCmd::StartWithInputFile {
         prompt: None,
         save_audio_path: None,
+        max_duration_secs: None,
         input_file_path: PathBuf::from("/tmp/sample.wav"),
         transcription_provider: None,
         transcription_model: None,
@@ -166,6 +202,7 @@ fn toggle_with_input_file_command_preserves_input_file_path() {
     let cmd = IpcCmd::ToggleWithInputFile {
         prompt: None,
         save_audio_path: None,
+        max_duration_secs: None,
         input_file_path: PathBuf::from("/tmp/sample.wav"),
         transcription_provider: None,
         transcription_model: None,
@@ -190,6 +227,7 @@ fn start_command_preserves_transcription_provider() {
     let cmd = IpcCmd::Start {
         prompt: None,
         save_audio_path: None,
+        max_duration_secs: None,
         transcription_provider: Some(TranscriptionProvider::MlxQwen3Asr),
         transcription_model: None,
     };
@@ -217,6 +255,7 @@ fn start_command_preserves_realtime_whisper_transcription_provider() {
     let cmd = IpcCmd::Start {
         prompt: None,
         save_audio_path: None,
+        max_duration_secs: None,
         transcription_provider: Some(TranscriptionProvider::OpenAiRealtimeWhisper),
         transcription_model: None,
     };
@@ -246,6 +285,7 @@ fn start_command_preserves_transcription_model() {
     let cmd = IpcCmd::Start {
         prompt: None,
         save_audio_path: None,
+        max_duration_secs: None,
         transcription_provider: Some(TranscriptionProvider::OpenAi4o),
         transcription_model: Some("gpt-4o-mini-transcribe".to_string()),
     };
