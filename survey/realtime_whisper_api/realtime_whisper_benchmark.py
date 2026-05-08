@@ -561,6 +561,7 @@ def stream_realtime_whisper(
         "event_count": event_count,
         "chunks": len(chunks),
         "sample_rate": REALTIME_SAMPLE_RATE,
+        "completed_seconds": completed_seconds,
     }
     return transcript, first_delta, source_audio_sent_seconds or audio_sent_seconds, audio_sent_seconds, metadata
 
@@ -702,11 +703,14 @@ def run_provider(
     elapsed = time.monotonic() - started
     wer, cer = error_rates(reference, transcript)
     tail_seconds = None
+    completed_seconds = metadata.get("completed_seconds")
+    if not isinstance(completed_seconds, int | float):
+        completed_seconds = elapsed
     if audio_sent_seconds is not None:
-        tail_seconds = elapsed - audio_sent_seconds
+        tail_seconds = completed_seconds - audio_sent_seconds
     tail_after_source_audio_sent_seconds = None
     if source_audio_sent_seconds is not None:
-        tail_after_source_audio_sent_seconds = elapsed - source_audio_sent_seconds
+        tail_after_source_audio_sent_seconds = completed_seconds - source_audio_sent_seconds
     real_time_factor = elapsed / audio_duration if audio_duration else None
 
     return BenchmarkResult(

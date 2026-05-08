@@ -1,0 +1,10 @@
+file,pattern,start_seconds,duration_seconds
+survey/realtime_whisper_api/samples/p1_2s.wav,p1,1.2,2
+survey/realtime_whisper_api/samples/p1_5s.wav,p1,1.2,5
+survey/realtime_whisper_api/samples/p1_10s.wav,p1,1.2,10
+survey/realtime_whisper_api/samples/p2_2s.wav,p2,7.8,2
+survey/realtime_whisper_api/samples/p2_5s.wav,p2,7.8,5
+survey/realtime_whisper_api/samples/p2_10s.wav,p2,7.8,10
+survey/realtime_whisper_api/samples/p3_2s.wav,p3,17.2,2
+survey/realtime_whisper_api/samples/p3_5s.wav,p3,17.2,5
+survey/realtime_whisper_api/samples/p3_10s.wav,p3,17.2,10
