@@ -237,14 +237,22 @@ async fn process_streaming_events(
     while let Some(event) = event_rx.recv().await {
         match event {
             TranscriptionEvent::Delta(delta) => {
+                let delta = if rendered_text.is_empty() {
+                    delta.trim_start()
+                } else {
+                    delta.as_str()
+                };
+                if delta.is_empty() {
+                    continue;
+                }
                 if input_succeeded {
                     if rendered_text.is_empty() {
-                        input_succeeded = text_applier.type_text(&delta).await;
+                        input_succeeded = text_applier.type_text(delta).await;
                     } else {
-                        input_succeeded = text_applier.type_text_continuous(&delta).await;
+                        input_succeeded = text_applier.type_text_continuous(delta).await;
                     }
                 }
-                rendered_text.push_str(&delta);
+                rendered_text.push_str(delta);
             }
             TranscriptionEvent::Completed(finalized) if rendered_text.is_empty() => {
                 if input_succeeded {
@@ -478,6 +486,147 @@ mod tests {
             Some((
                 FinalizedTranscription {
                     text: "これはtestです".to_string(),
+                    low_confidence_selection: None,
+                },
+                true,
+            ))
+        );
+    }
+
+    /// 初回Deltaの先頭空白は途中入力に反映しない
+    #[tokio::test]
+    async fn streaming_events_trim_leading_space_from_first_delta_input() {
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        struct MockTextApplier {
+            calls: Rc<RefCell<Vec<String>>>,
+        }
+
+        #[async_trait(?Send)]
+        impl TextApplier for MockTextApplier {
+            async fn type_text(&self, text: &str) -> bool {
+                self.calls.borrow_mut().push(format!("type:{text}"));
+                true
+            }
+
+            async fn type_text_continuous(&self, text: &str) -> bool {
+                self.calls
+                    .borrow_mut()
+                    .push(format!("type_continuous:{text}"));
+                true
+            }
+
+            async fn patch_text_continuous(&self, current: &str, next: &str) -> bool {
+                self.calls
+                    .borrow_mut()
+                    .push(format!("patch_continuous:{current}->{next}"));
+                true
+            }
+        }
+
+        let calls = Rc::new(RefCell::new(Vec::<String>::new()));
+        let text_applier = MockTextApplier {
+            calls: calls.clone(),
+        };
+
+        event_tx
+            .send(TranscriptionEvent::Delta(" これは".to_string()))
+            .unwrap();
+        event_tx
+            .send(TranscriptionEvent::Delta("テストです".to_string()))
+            .unwrap();
+        event_tx
+            .send(TranscriptionEvent::Completed(FinalizedTranscription {
+                text: "これはテストです".to_string(),
+                low_confidence_selection: None,
+            }))
+            .unwrap();
+        drop(event_tx);
+
+        let finalized = process_streaming_events(&mut event_rx, &text_applier).await;
+
+        assert_eq!(
+            *calls.borrow(),
+            vec![
+                "type:これは".to_string(),
+                "type_continuous:テストです".to_string(),
+                "patch_continuous:これはテストです->これはテストです".to_string()
+            ]
+        );
+        assert_eq!(
+            finalized,
+            Some((
+                FinalizedTranscription {
+                    text: "これはテストです".to_string(),
+                    low_confidence_selection: None,
+                },
+                true,
+            ))
+        );
+    }
+
+    /// 空白だけの初回Deltaは入力せず後続Deltaを初回入力として扱う
+    #[tokio::test]
+    async fn streaming_events_skip_initial_whitespace_only_delta() {
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        struct MockTextApplier {
+            calls: Rc<RefCell<Vec<String>>>,
+        }
+
+        #[async_trait(?Send)]
+        impl TextApplier for MockTextApplier {
+            async fn type_text(&self, text: &str) -> bool {
+                self.calls.borrow_mut().push(format!("type:{text}"));
+                true
+            }
+
+            async fn type_text_continuous(&self, text: &str) -> bool {
+                self.calls
+                    .borrow_mut()
+                    .push(format!("type_continuous:{text}"));
+                true
+            }
+
+            async fn patch_text_continuous(&self, current: &str, next: &str) -> bool {
+                self.calls
+                    .borrow_mut()
+                    .push(format!("patch_continuous:{current}->{next}"));
+                true
+            }
+        }
+
+        let calls = Rc::new(RefCell::new(Vec::<String>::new()));
+        let text_applier = MockTextApplier {
+            calls: calls.clone(),
+        };
+
+        event_tx
+            .send(TranscriptionEvent::Delta(" ".to_string()))
+            .unwrap();
+        event_tx
+            .send(TranscriptionEvent::Delta("これは".to_string()))
+            .unwrap();
+        event_tx
+            .send(TranscriptionEvent::Completed(FinalizedTranscription {
+                text: "これは".to_string(),
+                low_confidence_selection: None,
+            }))
+            .unwrap();
+        drop(event_tx);
+
+        let finalized = process_streaming_events(&mut event_rx, &text_applier).await;
+
+        assert_eq!(
+            *calls.borrow(),
+            vec![
+                "type:これは".to_string(),
+                "patch_continuous:これは->これは".to_string()
+            ]
+        );
+        assert_eq!(
+            finalized,
+            Some((
+                FinalizedTranscription {
+                    text: "これは".to_string(),
                     low_confidence_selection: None,
                 },
                 true,
