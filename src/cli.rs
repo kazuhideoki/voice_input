@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use crate::utils::config::TranscriptionProvider;
+
 #[derive(Parser)]
 #[command(author, version, about = "Voice Input client (daemon control + dict)")]
 pub struct Cli {
@@ -22,6 +24,9 @@ pub enum Cmd {
         /// 録音後の音声データを指定パスへ保存
         #[arg(long, value_name = "PATH")]
         save_audio: Option<PathBuf>,
+        /// 転写バックエンド（4o/mlx-qwen3-asr）
+        #[arg(long, value_name = "PROVIDER", value_parser = parse_transcription_provider)]
+        transcription_provider: Option<TranscriptionProvider>,
     },
     /// 録音停止
     Stop,
@@ -32,6 +37,9 @@ pub enum Cmd {
         /// 録音後の音声データを指定パスへ保存
         #[arg(long, value_name = "PATH")]
         save_audio: Option<PathBuf>,
+        /// 転写バックエンド（4o/mlx-qwen3-asr）
+        #[arg(long, value_name = "PROVIDER", value_parser = parse_transcription_provider)]
+        transcription_provider: Option<TranscriptionProvider>,
     },
     /// デーモン状態取得
     Status,
@@ -76,4 +84,8 @@ pub enum ConfigField {
     /// 辞書ファイルの保存先を指定
     #[command(name = "dict-path")]
     DictPath { path: String },
+}
+
+fn parse_transcription_provider(value: &str) -> Result<TranscriptionProvider, String> {
+    TranscriptionProvider::parse(value).map_err(|error| error.to_string())
 }

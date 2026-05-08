@@ -15,7 +15,8 @@ use tokio::task::spawn_local;
 use tokio::time::Duration;
 
 use crate::application::{
-    AudioData, RecordedAudio, RecordingOptions, RecordingService, TranscriptionService,
+    AudioData, AudioDataFormat, RecordedAudio, RecordingOptions, RecordingService,
+    TranscriptionService,
 };
 use crate::error::{Result, VoiceInputError};
 use crate::infrastructure::{
@@ -24,7 +25,7 @@ use crate::infrastructure::{
     media_control_service::MediaControlService,
 };
 use crate::ipc::{IpcCmd, IpcResp};
-use crate::utils::config::EnvConfig;
+use crate::utils::config::{EnvConfig, TranscriptionProvider};
 use crate::utils::profiling;
 
 /// 転写メッセージ
@@ -33,6 +34,7 @@ pub struct TranscriptionMessage {
     pub result: RecordedAudio,
     pub resume_music: bool,
     pub session_id: u64,
+    pub provider: TranscriptionProvider,
 }
 
 /// コマンドハンドラー
@@ -66,16 +68,22 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             IpcCmd::Start {
                 prompt,
                 save_audio_path,
-            } => self.handle_start(prompt, save_audio_path).await,
+                transcription_provider,
+            } => {
+                self.handle_start(prompt, save_audio_path, transcription_provider)
+                    .await
+            }
             IpcCmd::Stop => self.handle_stop().await,
             IpcCmd::Toggle {
                 prompt,
                 save_audio_path,
+                transcription_provider,
             } => {
                 if self.recording.borrow().is_recording() {
                     self.handle_stop().await
                 } else {
-                    self.handle_start(prompt, save_audio_path).await
+                    self.handle_start(prompt, save_audio_path, transcription_provider)
+                        .await
                 }
             }
             IpcCmd::Status => self.handle_status(),
@@ -89,14 +97,18 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         &self,
         prompt: Option<String>,
         save_audio_path: Option<std::path::PathBuf>,
+        transcription_provider: Option<TranscriptionProvider>,
     ) -> Result<IpcResp> {
         // 体感開始時間を縮めるため、開始音は録音開始前に鳴らす
         play_start_sound();
 
+        let provider = transcription_provider.unwrap_or(TranscriptionProvider::DEFAULT);
         // 録音オプションを構築
         let options = RecordingOptions {
             prompt,
             save_audio_path,
+            transcription_provider: provider,
+            requested_audio_format: requested_audio_format(provider),
         };
 
         // 録音を開始
@@ -183,6 +195,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 result: outcome.result,
                 resume_music: outcome.context.music_was_playing,
                 session_id: outcome.context.session_id,
+                provider: outcome.context.transcription_provider,
             })
             .map_err(|e| {
                 VoiceInputError::SystemError(format!(
@@ -258,7 +271,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             crate::utils::config::TranscriptionProvider::OpenAi => {
                 match transcription.api_key.clone() {
                     Some(key) => {
-                        lines.push("TRANSCRIPTION_PROVIDER: openai".to_string());
+                        lines.push("TRANSCRIPTION_PROVIDER: 4o".to_string());
                         lines.push("TRANSCRIPTION_API_KEY: present".to_string());
                         let client = reqwest::Client::new();
                         match client
@@ -281,7 +294,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                         }
                     }
                     None => {
-                        lines.push("TRANSCRIPTION_PROVIDER: openai".to_string());
+                        lines.push("TRANSCRIPTION_PROVIDER: 4o".to_string());
                         lines.push("TRANSCRIPTION_API_KEY: missing".to_string());
                         ok = false;
                     }
@@ -352,6 +365,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                                     result: outcome.result,
                                     resume_music: outcome.context.music_was_playing,
                                     session_id: outcome.context.session_id,
+                                    provider: outcome.context.transcription_provider,
                                 });
                             }
                         }
@@ -365,6 +379,13 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 println!("Warning: Could not set up auto-stop timer - no cancel receiver");
             }
         });
+    }
+}
+
+fn requested_audio_format(provider: TranscriptionProvider) -> Option<AudioDataFormat> {
+    match provider {
+        TranscriptionProvider::OpenAi => None,
+        TranscriptionProvider::MlxQwen3Asr => Some(AudioDataFormat::Wav),
     }
 }
 
@@ -420,7 +441,7 @@ mod tests {
     use super::*;
     use crate::application::RecordingConfig;
     use crate::application::TranscriptionClient;
-    use crate::application::{AudioData, DictRepository, Recorder};
+    use crate::application::{AudioData, DictRepository, Recorder, TranscriptionClientOptions};
     use crate::domain::dict::WordEntry;
     use crate::domain::transcription::TranscriptionOutput;
     use crate::infrastructure::external::sound::{clear_test_sound_runner, set_test_sound_runner};
@@ -455,7 +476,7 @@ mod tests {
         async fn transcribe(
             &self,
             _audio: AudioData,
-            _language: &str,
+            _options: &TranscriptionClientOptions,
         ) -> crate::error::Result<TranscriptionOutput> {
             Ok(TranscriptionOutput::from_text(String::new()))
         }
@@ -491,6 +512,59 @@ mod tests {
             self.started.store(false, Ordering::SeqCst);
             Ok(AudioData {
                 bytes: vec![0u8; 16],
+                mime_type: "audio/wav",
+                file_name: "audio.wav".to_string(),
+            })
+        }
+
+        fn is_recording(&self) -> bool {
+            self.started.load(Ordering::SeqCst)
+        }
+    }
+
+    struct FormatObservedBackend {
+        started: Arc<AtomicBool>,
+        requested_format: Arc<StdMutex<Option<AudioDataFormat>>>,
+    }
+
+    impl FormatObservedBackend {
+        fn new() -> Self {
+            Self {
+                started: Arc::new(AtomicBool::new(false)),
+                requested_format: Arc::new(StdMutex::new(None)),
+            }
+        }
+    }
+
+    impl AudioBackend for FormatObservedBackend {
+        fn start_recording(
+            &self,
+        ) -> std::result::Result<(), crate::infrastructure::audio::AudioBackendError> {
+            self.started.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn stop_recording(
+            &self,
+        ) -> std::result::Result<AudioData, crate::infrastructure::audio::AudioBackendError>
+        {
+            self.started.store(false, Ordering::SeqCst);
+            Ok(AudioData {
+                bytes: b"fLaC".to_vec(),
+                mime_type: "audio/flac",
+                file_name: "audio.flac".to_string(),
+            })
+        }
+
+        fn stop_recording_as(
+            &self,
+            format: AudioDataFormat,
+        ) -> std::result::Result<AudioData, crate::infrastructure::audio::AudioBackendError>
+        {
+            *self.requested_format.lock().unwrap() = Some(format);
+            self.started.store(false, Ordering::SeqCst);
+            Ok(AudioData {
+                bytes: b"RIFF".to_vec(),
                 mime_type: "audio/wav",
                 file_name: "audio.wav".to_string(),
             })
@@ -710,6 +784,7 @@ mod tests {
         IpcCmd::Start {
             prompt: None,
             save_audio_path: None,
+            transcription_provider: None,
         }
     }
 
@@ -737,6 +812,42 @@ mod tests {
             .await;
     }
 
+    /// mlx-qwen3-asr指定の録音はWAV音声とproviderを転写キューへ渡す
+    #[tokio::test(flavor = "current_thread")]
+    async fn mlx_provider_start_requests_wav_and_queues_provider() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let backend = FormatObservedBackend::new();
+                let requested_format = backend.requested_format.clone();
+                let media_control = MediaControlService::with_controller(Box::new(
+                    DelayedMediaController::new(false, Duration::from_millis(0)),
+                ));
+                let (handler, _recording, _media_control, mut rx) =
+                    build_handler(backend, media_control);
+
+                handler
+                    .handle(IpcCmd::Start {
+                        prompt: None,
+                        save_audio_path: None,
+                        transcription_provider: Some(TranscriptionProvider::MlxQwen3Asr),
+                    })
+                    .await
+                    .unwrap();
+                handler.handle(IpcCmd::Stop).await.unwrap();
+
+                let message = rx.recv().await.expect("transcription should be queued");
+                assert_eq!(message.provider, TranscriptionProvider::MlxQwen3Asr);
+                assert_eq!(
+                    *requested_format.lock().unwrap(),
+                    Some(AudioDataFormat::Wav)
+                );
+                assert_eq!(message.result.audio_data.mime_type, "audio/wav");
+            })
+            .await;
+    }
+
     /// 保存パスが指定された録音は停止時に音声バイト列を書き出す
     #[tokio::test(flavor = "current_thread")]
     async fn stop_persists_audio_bytes_when_save_path_is_configured() {
@@ -757,6 +868,7 @@ mod tests {
                     .handle(IpcCmd::Start {
                         prompt: None,
                         save_audio_path: Some(save_path.clone()),
+                        transcription_provider: None,
                     })
                     .await
                     .unwrap();

@@ -15,7 +15,7 @@ use crate::domain::transcription::{
     FinalizedTranscription, TranscriptionOutput, TranscriptionToken, plan_low_confidence_selection,
 };
 use crate::error::{Result, VoiceInputError};
-use crate::utils::config::EnvConfig;
+use crate::utils::config::{EnvConfig, TranscriptionProvider};
 use crate::utils::profiling;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -52,17 +52,30 @@ pub trait TranscriptionLogWriter: Send + Sync {
 #[async_trait]
 pub trait TranscriptionClient: Send + Sync {
     /// 音声データを文字起こし
-    async fn transcribe(&self, audio: AudioData, language: &str) -> Result<TranscriptionOutput>;
+    async fn transcribe(
+        &self,
+        audio: AudioData,
+        options: &TranscriptionClientOptions,
+    ) -> Result<TranscriptionOutput>;
 
     /// 音声データをストリーミングで文字起こしする
     async fn transcribe_streaming(
         &self,
         audio: AudioData,
-        language: &str,
+        options: &TranscriptionClientOptions,
         _event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
     ) -> Result<TranscriptionOutput> {
-        self.transcribe(audio, language).await
+        self.transcribe(audio, options).await
     }
+}
+
+/// 転写クライアントへ渡す実行時オプション
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TranscriptionClientOptions {
+    /// 言語設定
+    pub language: String,
+    /// 転写バックエンド
+    pub provider: TranscriptionProvider,
 }
 
 /// ストリーミング転写イベント
@@ -81,6 +94,8 @@ pub struct TranscriptionOptions {
     pub language: String,
     /// プロンプト（コンテキスト）
     pub prompt: Option<String>,
+    /// 転写バックエンド
+    pub provider: TranscriptionProvider,
 }
 
 impl Default for TranscriptionOptions {
@@ -88,6 +103,7 @@ impl Default for TranscriptionOptions {
         Self {
             language: "ja".to_string(),
             prompt: None,
+            provider: TranscriptionProvider::DEFAULT,
         }
     }
 }
@@ -151,7 +167,11 @@ impl TranscriptionService {
 
         // 転写実行
         let api_timer = profiling::Timer::start("transcription.api");
-        let output = self.client.transcribe(audio, &options.language).await?;
+        let client_options = TranscriptionClientOptions {
+            language: options.language.clone(),
+            provider: options.provider,
+        };
+        let output = self.client.transcribe(audio, &client_options).await?;
         api_timer.log();
 
         // 辞書変換を適用
@@ -192,9 +212,13 @@ impl TranscriptionService {
         })?;
 
         let api_timer = profiling::Timer::start("transcription.streaming_api");
+        let client_options = TranscriptionClientOptions {
+            language: options.language.clone(),
+            provider: options.provider,
+        };
         let output = self
             .client
-            .transcribe_streaming(audio, &options.language, event_tx.clone())
+            .transcribe_streaming(audio, &client_options, event_tx.clone())
             .await?;
         api_timer.log();
 
@@ -330,7 +354,7 @@ mod tests {
         async fn transcribe(
             &self,
             _audio: AudioData,
-            _language: &str,
+            _options: &TranscriptionClientOptions,
         ) -> Result<TranscriptionOutput> {
             *self.call_count.lock().unwrap() += 1;
             Ok(TranscriptionOutput::from_text(self.response.clone()))
@@ -511,7 +535,7 @@ mod tests {
             async fn transcribe(
                 &self,
                 _audio: AudioData,
-                _language: &str,
+                _options: &TranscriptionClientOptions,
             ) -> Result<TranscriptionOutput> {
                 Ok(TranscriptionOutput::from_text(
                     "これはテストです".to_string(),
@@ -521,7 +545,7 @@ mod tests {
             async fn transcribe_streaming(
                 &self,
                 _audio: AudioData,
-                _language: &str,
+                _options: &TranscriptionClientOptions,
                 event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
             ) -> Result<TranscriptionOutput> {
                 let _ = event_tx.send(TranscriptionEvent::Delta("これは".to_string()));
@@ -580,7 +604,7 @@ mod tests {
             async fn transcribe(
                 &self,
                 _audio: AudioData,
-                _language: &str,
+                _options: &TranscriptionClientOptions,
             ) -> Result<TranscriptionOutput> {
                 Ok(TranscriptionOutput {
                     text: "これはテストです".to_string(),

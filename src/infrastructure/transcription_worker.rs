@@ -20,7 +20,7 @@ use crate::domain::transcription::{FinalizedTranscription, LowConfidenceSelectio
 use crate::error::Result;
 use crate::infrastructure::command_handler::TranscriptionMessage;
 use crate::infrastructure::external::{sound::resume_apple_music, text_input};
-use crate::utils::config::EnvConfig;
+use crate::utils::config::{EnvConfig, TranscriptionProvider};
 use crate::utils::profiling;
 use async_trait::async_trait;
 
@@ -29,6 +29,7 @@ pub async fn handle_transcription<T: AudioBackend>(
     result: RecordedAudio,
     resume_music: bool,
     session_id: u64,
+    provider: TranscriptionProvider,
     recording_service: Rc<RefCell<RecordingService<T>>>,
     transcription_service: Rc<RefCell<TranscriptionService>>,
 ) -> Result<()> {
@@ -48,9 +49,12 @@ pub async fn handle_transcription<T: AudioBackend>(
     let options = TranscriptionOptions {
         language: "ja".to_string(),
         prompt: None, // メモリモードではプロンプトファイルを使用しない
+        provider,
     };
 
-    let finalized = if EnvConfig::get().transcription.streaming_enabled {
+    let finalized = if provider == TranscriptionProvider::OpenAi
+        && EnvConfig::get().transcription.streaming_enabled
+    {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
         let input_task = tokio::task::spawn_local(async move {
             process_streaming_events(&mut event_rx, &ProfiledTextApplier).await
@@ -284,6 +288,7 @@ pub async fn spawn_transcription_worker<T: AudioBackend + 'static>(
                 message.result,
                 message.resume_music,
                 message.session_id,
+                message.provider,
                 recording_service,
                 transcription_service,
             )

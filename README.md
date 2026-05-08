@@ -24,9 +24,10 @@ Rust 製の **音声録音・文字起こし CLI / デーモン** です。
 cp .env.example .env
 ```
 
-- TRANSCRIPTION_PROVIDER=openai # または mlx-qwen3-asr
+- TRANSCRIPTION_PROVIDER=4o # 起動時バリデーション用。転写バックエンドの実行時切り替えには使いません
 - TRANSCRIPTION_API_KEY=your_openai_api_key_here # OpenAI 利用時のみ
-- TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe # OpenAI: gpt-4o-mini-transcribe / gpt-4o-transcribe, mlx: 例 Qwen/Qwen3-ASR-1.7B
+- TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe # OpenAI: gpt-4o-mini-transcribe / gpt-4o-transcribe
+- MLX_QWEN3_ASR_MODEL=Qwen/Qwen3-ASR-1.7B
 - OPENAI_TRANSCRIBE_STREAMING=false
 - MLX_QWEN3_ASR_COMMAND=mlx-qwen3-asr
 - INPUT_DEVICE_PRIORITY="device1,device2,device3"
@@ -38,8 +39,10 @@ cp .env.example .env
 
 `.env` はデフォルトでカレントディレクトリから読み込まれ、`VOICE_INPUT_ENV_PATH` が設定されている場合はそのパスが優先されます。
 環境変数は `src/utils/config.rs` の `EnvConfig` で起動時に一度だけ読み込まれます。
-`TRANSCRIPTION_PROVIDER=openai` のときに `TRANSCRIPTION_MODEL` へ `whisper-1` など未対応モデルを指定した場合は、起動時にエラーになります。
-`TRANSCRIPTION_PROVIDER=mlx-qwen3-asr` のときは `mlx-qwen3-asr` コマンドが必要で、録音データは CLI 連携のため一時ファイル経由で渡します。
+`TRANSCRIPTION_PROVIDER` は起動時バリデーションの互換性維持用で、実際の転写バックエンド切り替えには使いません。
+転写バックエンドは `voice_input start --transcription-provider 4o` または `voice_input start --transcription-provider mlx-qwen3-asr` のようにクライアントから指定します。`toggle` でも同じフラグを使えます。
+`TRANSCRIPTION_PROVIDER=4o` のときに `TRANSCRIPTION_MODEL` へ `whisper-1` など未対応モデルを指定した場合は、起動時にエラーになります。
+`mlx-qwen3-asr` 指定時は `MLX_QWEN3_ASR_COMMAND` のコマンドを使い、録音データは CLI 連携のため一時ファイル経由で渡します。
 
 ## 音声処理
 

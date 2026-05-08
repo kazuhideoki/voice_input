@@ -2,7 +2,9 @@
 //! Application層のTranscriptionClientトレイトを実装
 
 use crate::application::AudioData;
-use crate::application::{TranscriptionClient, TranscriptionClientError, TranscriptionEvent};
+use crate::application::{
+    TranscriptionClient, TranscriptionClientError, TranscriptionClientOptions, TranscriptionEvent,
+};
 use crate::domain::transcription::TranscriptionOutput;
 use crate::error::Result;
 use crate::infrastructure::external::openai::OpenAiClient;
@@ -25,11 +27,20 @@ impl OpenAiTranscriptionAdapter {
             })?,
         })
     }
+
+    /// 設定済みの OpenAI クライアントからアダプターを作成
+    pub fn from_client(client: OpenAiClient) -> Self {
+        Self { client }
+    }
 }
 
 #[async_trait]
 impl TranscriptionClient for OpenAiTranscriptionAdapter {
-    async fn transcribe(&self, audio: AudioData, _language: &str) -> Result<TranscriptionOutput> {
+    async fn transcribe(
+        &self,
+        audio: AudioData,
+        _options: &TranscriptionClientOptions,
+    ) -> Result<TranscriptionOutput> {
         self.client.transcribe_audio(audio).await.map_err(|error| {
             crate::error::VoiceInputError::from(TranscriptionClientError::Request {
                 message: error.to_string(),
@@ -40,7 +51,7 @@ impl TranscriptionClient for OpenAiTranscriptionAdapter {
     async fn transcribe_streaming(
         &self,
         audio: AudioData,
-        _language: &str,
+        _options: &TranscriptionClientOptions,
         event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
     ) -> Result<TranscriptionOutput> {
         self.client

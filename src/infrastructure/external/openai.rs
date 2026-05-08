@@ -4,7 +4,7 @@
 use crate::application::AudioData;
 use crate::application::TranscriptionEvent;
 use crate::domain::transcription::{TranscriptionOutput, TranscriptionToken};
-use crate::utils::config::EnvConfig;
+use crate::utils::config::{EnvConfig, TranscriptionConfig};
 use crate::utils::profiling;
 use reqwest::{Client, Proxy, multipart};
 use serde::Deserialize;
@@ -100,13 +100,13 @@ impl OpenAiClient {
     /// Create a new OpenAI client
     pub fn new() -> Result<Self, OpenAiError> {
         let config = EnvConfig::get();
-        let api_key = config
-            .transcription
-            .api_key
-            .clone()
-            .ok_or(OpenAiError::MissingApiKey)?;
+        Self::from_config(&config.transcription)
+    }
 
-        let model = config.transcription.model.clone();
+    /// Create a new OpenAI client from transcription config
+    pub fn from_config(config: &TranscriptionConfig) -> Result<Self, OpenAiError> {
+        let api_key = config.api_key.clone().ok_or(OpenAiError::MissingApiKey)?;
+        let model = config.model.clone();
 
         let client = build_http_client().map_err(OpenAiError::HttpClientBuild)?;
 

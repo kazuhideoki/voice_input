@@ -34,16 +34,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.cmd.unwrap_or(Cmd::Toggle {
         prompt: None,
         save_audio: None,
+        transcription_provider: None,
     }) {
         /* 録音系 → IPC */
-        Cmd::Start { prompt, save_audio } => relay(IpcCmd::Start {
+        Cmd::Start {
+            prompt,
+            save_audio,
+            transcription_provider,
+        } => relay(IpcCmd::Start {
             prompt,
             save_audio_path: save_audio,
+            transcription_provider,
         })?,
         Cmd::Stop => relay(IpcCmd::Stop)?,
-        Cmd::Toggle { prompt, save_audio } => relay(IpcCmd::Toggle {
+        Cmd::Toggle {
+            prompt,
+            save_audio,
+            transcription_provider,
+        } => relay(IpcCmd::Toggle {
             prompt,
             save_audio_path: save_audio,
+            transcription_provider,
         })?,
         Cmd::Status => relay(IpcCmd::Status)?,
         Cmd::Health => relay(IpcCmd::Health)?,

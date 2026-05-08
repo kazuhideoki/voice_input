@@ -18,14 +18,12 @@ use crate::infrastructure::{
     command_handler::{CommandHandler, TranscriptionMessage},
     dict::JsonFileDictRepo,
     external::{
-        mlx_qwen3_asr_adapter::MlxQwen3AsrTranscriptionAdapter,
-        openai_adapter::OpenAiTranscriptionAdapter,
+        routing_transcription_adapter::RoutingTranscriptionAdapter,
         transcription_log::NonBlockingTranscriptionLogWriter,
     },
     media_control_service::MediaControlService,
 };
 use crate::utils::config::EnvConfig;
-use crate::utils::config::TranscriptionProvider;
 
 /// アプリケーション設定
 #[derive(Clone, Debug)]
@@ -88,12 +86,9 @@ fn build_transcription_service(
 }
 
 fn build_default_transcription_client(config: &EnvConfig) -> Result<Box<dyn TranscriptionClient>> {
-    match config.transcription.provider {
-        TranscriptionProvider::OpenAi => Ok(Box::new(OpenAiTranscriptionAdapter::new()?)),
-        TranscriptionProvider::MlxQwen3Asr => Ok(Box::new(
-            MlxQwen3AsrTranscriptionAdapter::from_config(&config.transcription),
-        )),
-    }
+    Ok(Box::new(RoutingTranscriptionAdapter::from_config(
+        &config.transcription,
+    )))
 }
 
 impl ServiceContainer<CpalAudioBackend> {
@@ -185,7 +180,9 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
 #[cfg(test)]
 pub mod test_helpers {
     use super::*;
-    use crate::application::{AudioData, RecordingConfig, RecordingService};
+    use crate::application::{
+        AudioData, RecordingConfig, RecordingService, TranscriptionClientOptions,
+    };
     use crate::domain::transcription::TranscriptionOutput;
     use crate::infrastructure::command_handler::CommandHandler;
     use crate::infrastructure::media_control_service::MediaControlService;
@@ -250,7 +247,7 @@ pub mod test_helpers {
         async fn transcribe(
             &self,
             _audio: AudioData,
-            _language: &str,
+            _options: &TranscriptionClientOptions,
         ) -> Result<TranscriptionOutput> {
             Ok(TranscriptionOutput::from_text(self.response.clone()))
         }
@@ -353,7 +350,8 @@ mod tests {
             transcription: TranscriptionConfig {
                 provider: TranscriptionProvider::MlxQwen3Asr,
                 api_key: None,
-                model: "Qwen/Qwen3-ASR-1.7B".to_string(),
+                model: "gpt-4o-mini-transcribe".to_string(),
+                mlx_qwen3_asr_model: "Qwen/Qwen3-ASR-1.7B".to_string(),
                 streaming_enabled: false,
                 log_path: None,
                 low_confidence_selection_enabled: false,

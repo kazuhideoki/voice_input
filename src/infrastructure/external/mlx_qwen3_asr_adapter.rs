@@ -2,7 +2,9 @@
 //! Application層のTranscriptionClientトレイトを実装
 
 use crate::application::AudioData;
-use crate::application::{TranscriptionClient, TranscriptionClientError};
+use crate::application::{
+    TranscriptionClient, TranscriptionClientError, TranscriptionClientOptions,
+};
 use crate::domain::transcription::TranscriptionOutput;
 use crate::error::Result;
 use crate::utils::config::{EnvConfig, TranscriptionConfig};
@@ -39,7 +41,7 @@ impl MlxQwen3AsrTranscriptionAdapter {
     pub fn from_config(config: &TranscriptionConfig) -> Self {
         Self {
             command: config.mlx_qwen3_asr_command.clone(),
-            model: config.model.clone(),
+            model: config.mlx_qwen3_asr_model.clone(),
         }
     }
 
@@ -84,7 +86,11 @@ impl Default for MlxQwen3AsrTranscriptionAdapter {
 
 #[async_trait]
 impl TranscriptionClient for MlxQwen3AsrTranscriptionAdapter {
-    async fn transcribe(&self, audio: AudioData, _language: &str) -> Result<TranscriptionOutput> {
+    async fn transcribe(
+        &self,
+        audio: AudioData,
+        _options: &TranscriptionClientOptions,
+    ) -> Result<TranscriptionOutput> {
         self.transcribe_audio(audio).await
     }
 }
@@ -150,6 +156,7 @@ fn file_extension(audio: &AudioData) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::config::TranscriptionProvider;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
@@ -192,6 +199,13 @@ mod tests {
         }
     }
 
+    fn client_options() -> TranscriptionClientOptions {
+        TranscriptionClientOptions {
+            language: "ja".to_string(),
+            provider: TranscriptionProvider::MlxQwen3Asr,
+        }
+    }
+
     /// CLI が標準出力へ返した文字列を転写結果として扱える
     #[tokio::test]
     async fn cli_stdout_can_be_used_as_transcription_text() {
@@ -203,7 +217,7 @@ printf "音声テキスト"
 
         let result = fixture
             .adapter()
-            .transcribe(sample_audio_data(), "ja")
+            .transcribe(sample_audio_data(), &client_options())
             .await
             .expect("transcription should succeed");
 
@@ -229,7 +243,7 @@ exit 0
 
         let result = fixture
             .adapter()
-            .transcribe(sample_audio_data(), "ja")
+            .transcribe(sample_audio_data(), &client_options())
             .await
             .expect("transcription should succeed");
 
@@ -248,7 +262,7 @@ exit 1
 
         let error = fixture
             .adapter()
-            .transcribe(sample_audio_data(), "ja")
+            .transcribe(sample_audio_data(), &client_options())
             .await
             .expect_err("transcription should fail");
 

@@ -30,7 +30,7 @@ pub(crate) fn lock_test_env() -> std::sync::MutexGuard<'static, ()> {
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ConfigError {
     #[error(
-        "TRANSCRIPTION_PROVIDER={value} is unsupported. Supported providers: openai, mlx-qwen3-asr"
+        "TRANSCRIPTION_PROVIDER={value} is unsupported. Supported providers: 4o, mlx-qwen3-asr"
     )]
     UnsupportedTranscriptionProvider { value: String },
     #[error(
@@ -54,14 +54,16 @@ pub enum ConfigError {
 }
 
 /// 転写バックエンド種別
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TranscriptionProvider {
+    #[serde(rename = "4o")]
     OpenAi,
+    #[serde(rename = "mlx-qwen3-asr")]
     MlxQwen3Asr,
 }
 
 impl TranscriptionProvider {
-    const DEFAULT: Self = Self::OpenAi;
+    pub const DEFAULT: Self = Self::OpenAi;
 
     /// 環境変数から転写バックエンド設定を生成
     pub fn from_env() -> Result<Self, ConfigError> {
@@ -74,7 +76,7 @@ impl TranscriptionProvider {
     /// 文字列から転写バックエンド設定を生成
     pub fn parse(value: &str) -> Result<Self, ConfigError> {
         match value {
-            "openai" => Ok(Self::OpenAi),
+            "4o" => Ok(Self::OpenAi),
             "mlx-qwen3-asr" => Ok(Self::MlxQwen3Asr),
             unsupported => Err(ConfigError::UnsupportedTranscriptionProvider {
                 value: unsupported.to_string(),
@@ -107,7 +109,7 @@ impl TranscriptionProvider {
     /// バックエンド名を文字列で取得
     pub fn as_str(&self) -> &str {
         match self {
-            Self::OpenAi => "openai",
+            Self::OpenAi => "4o",
             Self::MlxQwen3Asr => "mlx-qwen3-asr",
         }
     }
@@ -122,6 +124,8 @@ pub struct TranscriptionConfig {
     pub api_key: Option<String>,
     /// 転写モデル名
     pub model: String,
+    /// mlx-qwen3-asr のモデル名
+    pub mlx_qwen3_asr_model: String,
     /// ストリーミング直接入力を有効にする
     pub streaming_enabled: bool,
     /// 転写ログ保存先パス
@@ -229,11 +233,13 @@ pub struct EnvConfig {
 impl EnvConfig {
     /// 環境変数から設定を構築し、妥当性を検証する
     pub(crate) fn from_env() -> Result<Self, ConfigError> {
-        let provider = TranscriptionProvider::from_env()?;
-        let model = load_transcription_model(provider)?;
+        let env_provider = TranscriptionProvider::from_env()?;
+        let provider = TranscriptionProvider::DEFAULT;
+        let model = load_openai_transcription_model(env_provider)?;
+        let mlx_qwen3_asr_model = load_mlx_qwen3_asr_model(env_provider);
         let streaming_enabled = parse_bool_env("OPENAI_TRANSCRIBE_STREAMING")?;
         let mlx_qwen3_asr_command = load_mlx_qwen3_asr_command();
-        let preferred_format = PreferredAudioFormat::from_env(provider)?;
+        let preferred_format = PreferredAudioFormat::from_env(env_provider)?;
         let max_duration_secs = match std::env::var("VOICE_INPUT_MAX_SECS") {
             Ok(value) => value
                 .parse()
@@ -252,6 +258,7 @@ impl EnvConfig {
                 api_key: non_empty_env("TRANSCRIPTION_API_KEY")
                     .or_else(|| non_empty_env("OPENAI_API_KEY")),
                 model,
+                mlx_qwen3_asr_model,
                 streaming_enabled,
                 log_path: non_empty_env("OPENAI_TRANSCRIPTION_LOG_PATH").map(PathBuf::from),
                 low_confidence_selection_enabled: parse_bool_env(
@@ -365,15 +372,34 @@ fn csv_env(name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn load_transcription_model(provider: TranscriptionProvider) -> Result<String, ConfigError> {
-    let value = non_empty_env("TRANSCRIPTION_MODEL").or_else(|| match provider {
-        TranscriptionProvider::OpenAi => non_empty_env("OPENAI_TRANSCRIBE_MODEL"),
-        TranscriptionProvider::MlxQwen3Asr => None,
-    });
+fn load_openai_transcription_model(
+    env_provider: TranscriptionProvider,
+) -> Result<String, ConfigError> {
+    let value = if env_provider == TranscriptionProvider::OpenAi {
+        non_empty_env("TRANSCRIPTION_MODEL").or_else(|| non_empty_env("OPENAI_TRANSCRIBE_MODEL"))
+    } else {
+        non_empty_env("OPENAI_TRANSCRIBE_MODEL")
+    };
 
-    let model = value.unwrap_or_else(|| provider.default_model().to_string());
-    provider.validate_model(&model)?;
+    let model = value.unwrap_or_else(|| TranscriptionProvider::OpenAi.default_model().to_string());
+    TranscriptionProvider::OpenAi.validate_model(&model)?;
     Ok(model)
+}
+
+fn load_mlx_qwen3_asr_model(env_provider: TranscriptionProvider) -> String {
+    non_empty_env("MLX_QWEN3_ASR_MODEL")
+        .or_else(|| {
+            if env_provider == TranscriptionProvider::MlxQwen3Asr {
+                non_empty_env("TRANSCRIPTION_MODEL")
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| {
+            TranscriptionProvider::MlxQwen3Asr
+                .default_model()
+                .to_string()
+        })
 }
 
 fn load_mlx_qwen3_asr_command() -> String {
@@ -466,6 +492,7 @@ mod tests {
             provider: TranscriptionProvider::OpenAi,
             api_key: None,
             model: "gpt-4o-mini-transcribe".to_string(),
+            mlx_qwen3_asr_model: "Qwen/Qwen3-ASR-1.7B".to_string(),
             streaming_enabled: false,
             log_path: None,
             low_confidence_selection_enabled: false,
@@ -477,7 +504,7 @@ mod tests {
     #[test]
     fn supported_transcription_providers_are_parsed() {
         assert_eq!(
-            TranscriptionProvider::parse("openai").unwrap(),
+            TranscriptionProvider::parse("4o").unwrap(),
             TranscriptionProvider::OpenAi
         );
         assert_eq!(
@@ -495,7 +522,7 @@ mod tests {
         assert_eq!(
             error,
             ConfigError::UnsupportedTranscriptionModel {
-                provider: "openai".to_string(),
+                provider: "4o".to_string(),
                 value: "whisper-1".to_string(),
             }
         );
@@ -624,7 +651,7 @@ mod tests {
     fn unsupported_openai_model_in_env_fails_config_loading() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("TRANSCRIPTION_PROVIDER", "openai");
+            std::env::set_var("TRANSCRIPTION_PROVIDER", "4o");
             std::env::set_var("OPENAI_TRANSCRIBE_MODEL", "whisper-1");
         }
 
@@ -633,7 +660,7 @@ mod tests {
         assert_eq!(
             result,
             Err(ConfigError::UnsupportedTranscriptionModel {
-                provider: "openai".to_string(),
+                provider: "4o".to_string(),
                 value: "whisper-1".to_string(),
             })
         );
@@ -644,22 +671,25 @@ mod tests {
         }
     }
 
-    /// mlx-qwen3-asr 指定時は既定モデルを自動設定する
+    /// provider環境変数は検証だけ行い既定の実行バックエンドは変更しない
     #[test]
-    fn mlx_qwen3_asr_uses_default_model_when_model_env_is_missing() {
+    fn provider_env_does_not_change_default_transcription_provider() {
         let _lock = lock_test_env();
         unsafe {
             std::env::set_var("TRANSCRIPTION_PROVIDER", "mlx-qwen3-asr");
             std::env::remove_var("TRANSCRIPTION_MODEL");
+            std::env::remove_var("OPENAI_TRANSCRIBE_MODEL");
+            std::env::remove_var("MLX_QWEN3_ASR_MODEL");
         }
 
         let config = EnvConfig::from_env().unwrap();
 
+        assert_eq!(config.transcription.provider, TranscriptionProvider::OpenAi);
+        assert_eq!(config.transcription.model, "gpt-4o-mini-transcribe");
         assert_eq!(
-            config.transcription.provider,
-            TranscriptionProvider::MlxQwen3Asr
+            config.transcription.mlx_qwen3_asr_model,
+            "Qwen/Qwen3-ASR-1.7B"
         );
-        assert_eq!(config.transcription.model, "Qwen/Qwen3-ASR-1.7B");
         assert_eq!(config.transcription.mlx_qwen3_asr_command, "mlx-qwen3-asr");
 
         unsafe {

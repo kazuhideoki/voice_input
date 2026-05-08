@@ -1,11 +1,13 @@
 use std::process::Command;
 
 fn run_cmd(args: &[&str]) -> std::process::Output {
-    Command::new("cargo")
+    let mut command = Command::new("cargo");
+    command
+        .env("TRANSCRIPTION_PROVIDER", "4o")
+        .env("TRANSCRIPTION_MODEL", "gpt-4o-transcribe")
         .args(["run", "--bin", "voice_input", "--"])
-        .args(args)
-        .output()
-        .expect("Failed to run command")
+        .args(args);
+    command.output().expect("Failed to run command")
 }
 
 /// 廃止されたcopy-and-pasteフラグは拒否される
@@ -58,4 +60,30 @@ fn toggle_command_accepts_audio_save_path() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("error: unexpected argument"));
     assert!(!stderr.contains("error: invalid value"));
+}
+
+/// startコマンドでMLX転写バックエンドを指定できる
+#[test]
+fn start_command_accepts_mlx_transcription_provider() {
+    let output = run_cmd(&["start", "--transcription-provider", "mlx-qwen3-asr"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("error: unexpected argument"));
+    assert!(!stderr.contains("error: invalid value"));
+}
+
+/// toggleコマンドで4o転写バックエンドを指定できる
+#[test]
+fn toggle_command_accepts_4o_transcription_provider() {
+    let output = run_cmd(&["toggle", "--transcription-provider", "4o"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("error: unexpected argument"));
+    assert!(!stderr.contains("error: invalid value"));
+}
+
+/// startコマンドは旧OpenAI別名を受け付けない
+#[test]
+fn start_command_rejects_openai_transcription_provider_alias() {
+    let output = run_cmd(&["start", "--transcription-provider", "openai"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid value"));
 }

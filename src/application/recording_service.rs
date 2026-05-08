@@ -13,6 +13,7 @@ use tokio::sync::oneshot;
 
 use crate::application::{AudioBackend, AudioData, AudioDataFormat, Recorder};
 use crate::error::{Result, VoiceInputError};
+use crate::utils::config::TranscriptionProvider;
 
 /// 録音状態
 #[derive(Debug)]
@@ -36,6 +37,10 @@ pub struct ActiveRecordingSession {
     pub start_prompt: Option<String>,
     /// 録音停止後に音声データを保存するパス
     pub save_audio_path: Option<PathBuf>,
+    /// 録音停止後に使う転写バックエンド
+    pub transcription_provider: TranscriptionProvider,
+    /// 転写バックエンドが要求する音声形式
+    pub requested_audio_format: Option<AudioDataFormat>,
 }
 
 impl ActiveRecordingSession {
@@ -47,6 +52,8 @@ impl ActiveRecordingSession {
             music_was_playing: false,
             start_prompt: options.prompt,
             save_audio_path: options.save_audio_path,
+            transcription_provider: options.transcription_provider,
+            requested_audio_format: options.requested_audio_format,
         }
     }
 }
@@ -109,6 +116,8 @@ impl RecordingState {
                 start_prompt: session.start_prompt.clone(),
                 music_was_playing: session.music_was_playing,
                 save_audio_path: session.save_audio_path.clone(),
+                transcription_provider: session.transcription_provider,
+                requested_audio_format: session.requested_audio_format,
             }),
         }
     }
@@ -121,6 +130,8 @@ pub struct StoppedSessionContext {
     pub start_prompt: Option<String>,
     pub music_was_playing: bool,
     pub save_audio_path: Option<PathBuf>,
+    pub transcription_provider: TranscriptionProvider,
+    pub requested_audio_format: Option<AudioDataFormat>,
 }
 
 /// 録音停止結果
@@ -153,12 +164,27 @@ impl Default for RecordingConfig {
 }
 
 /// 録音オプション
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct RecordingOptions {
     /// 録音開始時のプロンプト
     pub prompt: Option<String>,
     /// 録音停止後に音声データを保存するパス
     pub save_audio_path: Option<PathBuf>,
+    /// 録音停止後に使う転写バックエンド
+    pub transcription_provider: TranscriptionProvider,
+    /// 転写バックエンドが要求する音声形式
+    pub requested_audio_format: Option<AudioDataFormat>,
+}
+
+impl Default for RecordingOptions {
+    fn default() -> Self {
+        Self {
+            prompt: None,
+            save_audio_path: None,
+            transcription_provider: TranscriptionProvider::DEFAULT,
+            requested_audio_format: None,
+        }
+    }
 }
 
 /// 録音コンテキスト情報
@@ -261,7 +287,8 @@ impl<T: AudioBackend> RecordingService<T> {
         let requested_format = stopped_context
             .save_audio_path
             .as_deref()
-            .and_then(audio_format_from_path);
+            .and_then(audio_format_from_path)
+            .or(stopped_context.requested_audio_format);
 
         // レコーダーを停止
         let stop_result = match requested_format {
@@ -636,6 +663,7 @@ mod tests {
             let options = RecordingOptions {
                 prompt: Some(format!("Test {}", i)),
                 save_audio_path: None,
+                ..RecordingOptions::default()
             };
             let session_id = service.start_recording(options).await.unwrap();
             assert!(session_id > 0, "Session ID should be positive");
@@ -706,6 +734,7 @@ mod tests {
             .start_recording(RecordingOptions {
                 prompt: None,
                 save_audio_path: Some(PathBuf::from("sample.wav")),
+                ..RecordingOptions::default()
             })
             .await
             .unwrap();
@@ -784,6 +813,7 @@ mod tests {
                 .start_recording(RecordingOptions {
                     prompt: Some("prompt".to_string()),
                     save_audio_path: None,
+                    ..RecordingOptions::default()
                 })
                 .await
                 .unwrap();
@@ -867,6 +897,7 @@ mod tests {
             .start_recording(RecordingOptions {
                 prompt: Some("prompt".to_string()),
                 save_audio_path: None,
+                ..RecordingOptions::default()
             })
             .await
             .unwrap();

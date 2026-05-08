@@ -2,6 +2,7 @@
 //! `voice_input` CLI ↔ `voice_inputd` デーモン間の通信で利用します。
 use crate::application::AudioData;
 use crate::utils::config::EnvConfig;
+use crate::utils::config::TranscriptionProvider;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -40,6 +41,8 @@ pub enum IpcCmd {
         prompt: Option<String>,
         #[serde(default)]
         save_audio_path: Option<PathBuf>,
+        #[serde(default)]
+        transcription_provider: Option<TranscriptionProvider>,
     },
     /// 録音停止
     Stop,
@@ -49,6 +52,8 @@ pub enum IpcCmd {
         prompt: Option<String>,
         #[serde(default)]
         save_audio_path: Option<PathBuf>,
+        #[serde(default)]
+        transcription_provider: Option<TranscriptionProvider>,
     },
     /// ステータス取得
     Status,
@@ -325,6 +330,7 @@ mod tests {
         let cmd = IpcCmd::Start {
             prompt: Some("test prompt".to_string()),
             save_audio_path: None,
+            transcription_provider: None,
         };
 
         let json = serde_json::to_string(&cmd).unwrap();
@@ -357,6 +363,7 @@ mod tests {
         let cmd = IpcCmd::Start {
             prompt: None,
             save_audio_path: None,
+            transcription_provider: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("Start"));
@@ -370,6 +377,7 @@ mod tests {
         let cmd = IpcCmd::Toggle {
             prompt: Some("test".to_string()),
             save_audio_path: None,
+            transcription_provider: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
