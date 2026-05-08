@@ -1,6 +1,6 @@
 use super::encoder::{self, AudioFormat};
 use super::{AudioBackend, AudioBackendError};
-use crate::application::{AudioData, AudioDataFormat, AudioFrame, CapturedAudio};
+use crate::application::{AudioData, AudioDataFormat, AudioFrame, AudioInputSource, CapturedAudio};
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use audioadapter_buffers::SizeError;
@@ -15,10 +15,13 @@ use rubato::{
 use std::{
     borrow::Cow,
     error::Error,
+    fs,
+    path::Path,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    thread,
     time::{Duration, Instant},
 };
 
@@ -71,6 +74,7 @@ const INPUT_SETUP_REVALIDATION_INTERVAL: Duration = Duration::from_secs(2);
 const INPUT_READINESS_TIMEOUT: Duration = Duration::from_millis(80);
 const INPUT_READINESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const MIN_CAPTURE_DURATION: Duration = Duration::from_millis(100);
+const FILE_INPUT_CHUNK_DURATION: Duration = Duration::from_millis(20);
 
 /// Audio processing errors
 #[derive(Debug, thiserror::Error)]
@@ -587,6 +591,28 @@ impl CpalAudioBackend {
         generation
     }
 
+    fn start_file_capture_state(
+        &self,
+        sample_rate: u32,
+        channels: u16,
+        sample_count: usize,
+        frame_tx: Option<tokio::sync::mpsc::UnboundedSender<AudioFrame>>,
+    ) -> u64 {
+        let capacity = sample_count.max(Self::estimate_buffer_size(30, sample_rate, channels));
+        let buffer = Arc::new(Mutex::new(Vec::with_capacity(capacity)));
+        let generation = self.capture_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        *self.recording_state.lock().unwrap() = Some(MemoryRecordingState {
+            buffer,
+            sample_rate,
+            channels,
+            generation,
+            accepting_input: Arc::new(AtomicBool::new(true)),
+            frame_tx,
+        });
+        self.recording.store(true, Ordering::SeqCst);
+        generation
+    }
+
     fn wait_for_input_samples(&self, generation: u64, timeout: Duration) -> bool {
         let started_at = Instant::now();
         loop {
@@ -739,6 +765,128 @@ impl CpalAudioBackend {
         }
 
         Ok(wav_data)
+    }
+
+    fn read_wav_file(path: &Path) -> Result<CapturedAudio, AudioBackendError> {
+        let bytes = fs::read(path).map_err(|error| AudioBackendError::AudioData {
+            message: format!(
+                "failed to read input audio file {}: {}",
+                path.display(),
+                error
+            ),
+        })?;
+        Self::decode_wav_pcm16(&bytes)
+    }
+
+    fn decode_wav_pcm16(bytes: &[u8]) -> Result<CapturedAudio, AudioBackendError> {
+        if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+            return Err(AudioBackendError::AudioData {
+                message: "input audio file must be a RIFF/WAVE file".to_string(),
+            });
+        }
+
+        let mut offset = 12usize;
+        let mut channels = None;
+        let mut sample_rate = None;
+        let mut bits_per_sample = None;
+        let mut audio_format = None;
+        let mut data_range = None;
+
+        while offset + 8 <= bytes.len() {
+            let chunk_id = &bytes[offset..offset + 4];
+            let chunk_size = u32::from_le_bytes([
+                bytes[offset + 4],
+                bytes[offset + 5],
+                bytes[offset + 6],
+                bytes[offset + 7],
+            ]) as usize;
+            offset += 8;
+
+            if offset + chunk_size > bytes.len() {
+                return Err(AudioBackendError::AudioData {
+                    message: "input WAV file has a truncated chunk".to_string(),
+                });
+            }
+
+            match chunk_id {
+                b"fmt " => {
+                    if chunk_size < 16 {
+                        return Err(AudioBackendError::AudioData {
+                            message: "input WAV fmt chunk is too small".to_string(),
+                        });
+                    }
+                    audio_format = Some(u16::from_le_bytes([bytes[offset], bytes[offset + 1]]));
+                    channels = Some(u16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]]));
+                    sample_rate = Some(u32::from_le_bytes([
+                        bytes[offset + 4],
+                        bytes[offset + 5],
+                        bytes[offset + 6],
+                        bytes[offset + 7],
+                    ]));
+                    bits_per_sample =
+                        Some(u16::from_le_bytes([bytes[offset + 14], bytes[offset + 15]]));
+                }
+                b"data" => {
+                    data_range = Some(offset..offset + chunk_size);
+                }
+                _ => {}
+            }
+
+            offset += chunk_size + (chunk_size % 2);
+        }
+
+        let audio_format = audio_format.ok_or_else(|| AudioBackendError::AudioData {
+            message: "input WAV file has no fmt chunk".to_string(),
+        })?;
+        let channels = channels.ok_or_else(|| AudioBackendError::AudioData {
+            message: "input WAV file has no channel count".to_string(),
+        })?;
+        let sample_rate = sample_rate.ok_or_else(|| AudioBackendError::AudioData {
+            message: "input WAV file has no sample rate".to_string(),
+        })?;
+        let bits_per_sample = bits_per_sample.ok_or_else(|| AudioBackendError::AudioData {
+            message: "input WAV file has no bits-per-sample field".to_string(),
+        })?;
+        let data_range = data_range.ok_or_else(|| AudioBackendError::AudioData {
+            message: "input WAV file has no data chunk".to_string(),
+        })?;
+
+        if audio_format != 1 || bits_per_sample != 16 {
+            return Err(AudioBackendError::AudioData {
+                message: format!(
+                    "input WAV file must be 16-bit PCM (format={}, bits={})",
+                    audio_format, bits_per_sample
+                ),
+            });
+        }
+        if channels == 0 || sample_rate == 0 {
+            return Err(AudioBackendError::AudioData {
+                message: "input WAV file has invalid sample rate or channels".to_string(),
+            });
+        }
+
+        let data = &bytes[data_range];
+        if data.len() % 2 != 0 {
+            return Err(AudioBackendError::AudioData {
+                message: "input WAV data length is not aligned to 16-bit samples".to_string(),
+            });
+        }
+
+        let samples: Vec<i16> = data
+            .chunks_exact(2)
+            .map(|sample| i16::from_le_bytes([sample[0], sample[1]]))
+            .collect();
+        if samples.len() % channels as usize != 0 {
+            return Err(AudioBackendError::AudioData {
+                message: "input WAV data length is not aligned to channel frames".to_string(),
+            });
+        }
+
+        Ok(CapturedAudio {
+            samples,
+            sample_rate,
+            channels,
+        })
     }
 }
 
@@ -1086,6 +1234,79 @@ impl CpalAudioBackend {
         Ok(())
     }
 
+    fn start_file_recording(
+        &self,
+        path: &Path,
+        frame_tx: Option<tokio::sync::mpsc::UnboundedSender<AudioFrame>>,
+    ) -> Result<(), AudioBackendError> {
+        if self.is_recording() {
+            return Err(CpalBackendError::AlreadyRecording.into());
+        }
+
+        let capture = Self::read_wav_file(path)?;
+        if !has_minimum_capture(capture.samples.len(), capture.sample_rate, capture.channels) {
+            return Err(AudioBackendError::NoAudioCaptured {
+                message: format!("input audio file is too short: {}", path.display()),
+            });
+        }
+
+        let generation = self.start_file_capture_state(
+            capture.sample_rate,
+            capture.channels,
+            capture.samples.len(),
+            frame_tx,
+        );
+        self.spawn_file_playback(capture, generation);
+
+        if !self.wait_for_input_samples(generation, INPUT_READINESS_TIMEOUT) {
+            self.stop_accepting_current_capture();
+            return Err(AudioBackendError::NoAudioCaptured {
+                message: format!("input audio file produced no samples: {}", path.display()),
+            });
+        }
+
+        Ok(())
+    }
+
+    fn spawn_file_playback(&self, capture: CapturedAudio, generation: u64) {
+        let recording = self.recording.clone();
+        let capture_generation = self.capture_generation.clone();
+        let recording_state = self.recording_state.clone();
+
+        let _ = thread::spawn(move || {
+            let channels = capture.channels.max(1) as usize;
+            let frames_per_chunk =
+                ((capture.sample_rate as u128 * FILE_INPUT_CHUNK_DURATION.as_millis()) / 1000)
+                    .max(1) as usize;
+            let samples_per_chunk = frames_per_chunk.saturating_mul(channels).max(channels);
+            let started_at = Instant::now();
+            let mut played_frames = 0usize;
+
+            for chunk in capture.samples.chunks(samples_per_chunk) {
+                if !recording.load(Ordering::SeqCst)
+                    || capture_generation.load(Ordering::SeqCst) != generation
+                {
+                    break;
+                }
+
+                append_input_i16(
+                    recording.as_ref(),
+                    capture_generation.as_ref(),
+                    &recording_state,
+                    chunk,
+                );
+
+                played_frames += chunk.len() / channels;
+                let target_elapsed = Duration::from_secs_f64(
+                    played_frames as f64 / capture.sample_rate.max(1) as f64,
+                );
+                if let Some(remaining) = target_elapsed.checked_sub(started_at.elapsed()) {
+                    thread::sleep(remaining);
+                }
+            }
+        });
+    }
+
     fn stop_capture_data(&self) -> Result<CapturedAudio, AudioBackendError> {
         let overall_timer = profiling::Timer::start("audio.stop_capture");
         if !self.is_recording() {
@@ -1330,6 +1551,17 @@ impl AudioBackend for CpalAudioBackend {
         frame_tx: Option<tokio::sync::mpsc::UnboundedSender<AudioFrame>>,
     ) -> Result<(), AudioBackendError> {
         CpalAudioBackend::start_recording_inner(self, frame_tx)
+    }
+
+    fn start_recording_with_input_source(
+        &self,
+        input_source: AudioInputSource,
+        frame_tx: Option<tokio::sync::mpsc::UnboundedSender<AudioFrame>>,
+    ) -> Result<(), AudioBackendError> {
+        match input_source {
+            AudioInputSource::Microphone => CpalAudioBackend::start_recording_inner(self, frame_tx),
+            AudioInputSource::File(path) => self.start_file_recording(&path, frame_tx),
+        }
     }
 
     fn stop_recording(&self) -> Result<AudioData, AudioBackendError> {
@@ -2161,6 +2393,52 @@ mod tests {
         assert_eq!(&result[46..48], &[156u8, 255]); // R: -100
         assert_eq!(&result[48..50], &[200u8, 0]); // L: 200
         assert_eq!(&result[50..52], &[56u8, 255]); // R: -200
+    }
+
+    /// WAVファイル入力用のデコードでPCM16サンプルを復元できる
+    #[test]
+    fn file_input_wav_decoder_restores_pcm16_samples() {
+        let pcm_data: Vec<i16> = vec![100, -100, 200, -200];
+        let wav_data = CpalAudioBackend::combine_wav_data(&pcm_data, 48_000, 2).unwrap();
+
+        let captured = CpalAudioBackend::decode_wav_pcm16(&wav_data).unwrap();
+
+        assert_eq!(captured.samples, pcm_data);
+        assert_eq!(captured.sample_rate, 48_000);
+        assert_eq!(captured.channels, 2);
+    }
+
+    /// WAV以外の入力ファイルはデバッグ入力として拒否する
+    #[test]
+    fn file_input_wav_decoder_rejects_non_wave_data() {
+        let error = CpalAudioBackend::decode_wav_pcm16(b"not a wav").unwrap_err();
+
+        assert!(matches!(error, AudioBackendError::AudioData { .. }));
+    }
+
+    /// ファイル入力はWAVを実時間チャンクとして録音バッファへ流し込む
+    #[test]
+    fn file_input_source_feeds_capture_buffer_as_chunks() {
+        init_env_config_for_test();
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let input_path = temp_dir.path().join("sample.wav");
+        let samples = vec![1_000i16; 4_800];
+        let wav_data = CpalAudioBackend::combine_wav_data(&samples, 48_000, 1).unwrap();
+        fs::write(&input_path, wav_data).unwrap();
+        let backend = CpalAudioBackend::default();
+        let (frame_tx, mut frame_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        backend
+            .start_recording_with_input_source(AudioInputSource::File(input_path), Some(frame_tx))
+            .unwrap();
+
+        thread::sleep(Duration::from_millis(150));
+        let capture = backend.stop_capture().unwrap();
+
+        assert_eq!(capture.samples, samples);
+        assert_eq!(capture.sample_rate, 48_000);
+        assert_eq!(capture.channels, 1);
+        assert!(frame_rx.try_recv().is_ok());
     }
 
     /// バックエンド初期状態で録音は開始されていない

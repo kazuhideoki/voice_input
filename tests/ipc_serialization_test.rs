@@ -67,6 +67,20 @@ fn ipc_cmds_roundtrip_via_json() {
             transcription_provider: None,
             transcription_model: None,
         },
+        IpcCmd::StartWithInputFile {
+            prompt: Some("file".to_string()),
+            save_audio_path: None,
+            input_file_path: PathBuf::from("/tmp/sample.wav"),
+            transcription_provider: None,
+            transcription_model: None,
+        },
+        IpcCmd::ToggleWithInputFile {
+            prompt: Some("file".to_string()),
+            save_audio_path: None,
+            input_file_path: PathBuf::from("/tmp/sample.wav"),
+            transcription_provider: None,
+            transcription_model: None,
+        },
         IpcCmd::Stop,
         IpcCmd::Status,
         IpcCmd::Health,
@@ -119,6 +133,54 @@ fn start_command_preserves_audio_save_path() {
             assert_eq!(save_audio_path, Some(PathBuf::from("/tmp/debug.wav")));
         }
         _ => panic!("Expected Start command"),
+    }
+}
+
+/// Startコマンドが入力ファイルパスをJSONで保持する
+#[test]
+fn start_command_preserves_input_file_path() {
+    let cmd = IpcCmd::StartWithInputFile {
+        prompt: None,
+        save_audio_path: None,
+        input_file_path: PathBuf::from("/tmp/sample.wav"),
+        transcription_provider: None,
+        transcription_model: None,
+    };
+
+    let json = serde_json::to_string(&cmd).unwrap();
+    let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
+
+    match deserialized {
+        IpcCmd::StartWithInputFile {
+            input_file_path, ..
+        } => {
+            assert_eq!(input_file_path, PathBuf::from("/tmp/sample.wav"));
+        }
+        _ => panic!("Expected StartWithInputFile command"),
+    }
+}
+
+/// ToggleWithInputFileコマンドが入力ファイルパスをJSONで保持する
+#[test]
+fn toggle_with_input_file_command_preserves_input_file_path() {
+    let cmd = IpcCmd::ToggleWithInputFile {
+        prompt: None,
+        save_audio_path: None,
+        input_file_path: PathBuf::from("/tmp/sample.wav"),
+        transcription_provider: None,
+        transcription_model: None,
+    };
+
+    let json = serde_json::to_string(&cmd).unwrap();
+    let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
+
+    match deserialized {
+        IpcCmd::ToggleWithInputFile {
+            input_file_path, ..
+        } => {
+            assert_eq!(input_file_path, PathBuf::from("/tmp/sample.wav"));
+        }
+        _ => panic!("Expected ToggleWithInputFile command"),
     }
 }
 

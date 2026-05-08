@@ -13,7 +13,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use crate::application::{
-    AudioBackend, AudioData, AudioDataFormat, AudioFrame, CapturedAudio, Recorder,
+    AudioBackend, AudioData, AudioDataFormat, AudioFrame, AudioInputSource, CapturedAudio, Recorder,
 };
 use crate::error::{Result, VoiceInputError};
 use crate::utils::config::TranscriptionProvider;
@@ -193,6 +193,8 @@ pub struct RecordingOptions {
     pub requested_audio_format: Option<AudioDataFormat>,
     /// 録音中 PCM フレームの送信先
     pub audio_frame_tx: Option<mpsc::UnboundedSender<AudioFrame>>,
+    /// デバッグ用にマイクの代わりへ流し込む音声ファイル
+    pub input_file_path: Option<PathBuf>,
 }
 
 impl Default for RecordingOptions {
@@ -204,6 +206,7 @@ impl Default for RecordingOptions {
             transcription_model: None,
             requested_audio_format: None,
             audio_frame_tx: None,
+            input_file_path: None,
         }
     }
 }
@@ -280,9 +283,14 @@ impl<T: AudioBackend> RecordingService<T> {
 
         // レコーダーを開始
         let audio_frame_tx = options.audio_frame_tx.clone();
+        let input_source = options
+            .input_file_path
+            .clone()
+            .map(AudioInputSource::File)
+            .unwrap_or(AudioInputSource::Microphone);
         self.recorder
             .borrow_mut()
-            .start_with_frame_tx(audio_frame_tx)
+            .start_with_input_source(input_source, audio_frame_tx)
             .map_err(VoiceInputError::from)?;
 
         ctx.state = RecordingState::Recording(ActiveRecordingSession::new(session_id, options));

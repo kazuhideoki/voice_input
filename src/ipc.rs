@@ -46,6 +46,18 @@ pub enum IpcCmd {
         #[serde(default)]
         transcription_model: Option<String>,
     },
+    /// ファイル入力で録音開始
+    StartWithInputFile {
+        #[serde(default)]
+        prompt: Option<String>,
+        #[serde(default)]
+        save_audio_path: Option<PathBuf>,
+        input_file_path: PathBuf,
+        #[serde(default)]
+        transcription_provider: Option<TranscriptionProvider>,
+        #[serde(default)]
+        transcription_model: Option<String>,
+    },
     /// 録音停止
     Stop,
     /// 録音トグル
@@ -54,6 +66,18 @@ pub enum IpcCmd {
         prompt: Option<String>,
         #[serde(default)]
         save_audio_path: Option<PathBuf>,
+        #[serde(default)]
+        transcription_provider: Option<TranscriptionProvider>,
+        #[serde(default)]
+        transcription_model: Option<String>,
+    },
+    /// ファイル入力で録音開始 / 停止トグル
+    ToggleWithInputFile {
+        #[serde(default)]
+        prompt: Option<String>,
+        #[serde(default)]
+        save_audio_path: Option<PathBuf>,
+        input_file_path: PathBuf,
         #[serde(default)]
         transcription_provider: Option<TranscriptionProvider>,
         #[serde(default)]
