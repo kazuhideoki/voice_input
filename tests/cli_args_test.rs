@@ -8,6 +8,15 @@ fn run_cmd(args: &[&str]) -> std::process::Output {
     command.output().expect("Failed to run command")
 }
 
+fn run_cmd_with_env(args: &[&str], key: &str, value: &str) -> std::process::Output {
+    let mut command = Command::new("cargo");
+    command
+        .args(["run", "--bin", "voice_input", "--"])
+        .args(args)
+        .env(key, value);
+    command.output().expect("Failed to run command")
+}
+
 /// 廃止されたcopy-and-pasteフラグは拒否される
 #[test]
 fn copy_and_paste_flag_is_rejected() {
@@ -51,6 +60,43 @@ fn start_command_accepts_audio_save_path() {
     assert!(!stderr.contains("error: invalid value"));
 }
 
+/// startコマンドで最大録音秒数を指定できる
+#[test]
+fn start_command_accepts_max_secs() {
+    let output = run_cmd(&["start", "--max-secs", "120"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("error: unexpected argument"));
+    assert!(!stderr.contains("error: invalid value"));
+}
+
+/// startコマンドは0秒の最大録音秒数を拒否する
+#[test]
+fn start_command_rejects_zero_max_secs() {
+    let output = run_cmd(&["start", "--max-secs", "0"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid value"));
+}
+
+/// startコマンドは負数の最大録音秒数を拒否する
+#[test]
+fn start_command_rejects_negative_max_secs() {
+    let output = run_cmd(&["start", "--max-secs=-1"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid value"));
+}
+
+/// startコマンドの最大録音秒数は不正な環境変数より優先される
+#[test]
+fn start_command_max_secs_overrides_invalid_env() {
+    let output = run_cmd_with_env(
+        &["start", "--max-secs", "120"],
+        "VOICE_INPUT_MAX_SECS",
+        "abc",
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("VOICE_INPUT_MAX_SECS must be a positive integer"));
+}
+
 /// startコマンドで入力ファイルパスを指定できる
 #[test]
 fn start_command_accepts_input_file_path() {
@@ -64,6 +110,15 @@ fn start_command_accepts_input_file_path() {
 #[test]
 fn toggle_command_accepts_audio_save_path() {
     let output = run_cmd(&["toggle", "--save-audio", "/tmp/voice-input-debug.wav"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("error: unexpected argument"));
+    assert!(!stderr.contains("error: invalid value"));
+}
+
+/// toggleコマンドで最大録音秒数を指定できる
+#[test]
+fn toggle_command_accepts_max_secs() {
+    let output = run_cmd(&["toggle", "--max-secs", "90"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("error: unexpected argument"));
     assert!(!stderr.contains("error: invalid value"));

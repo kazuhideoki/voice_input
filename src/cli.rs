@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use crate::utils::config::TranscriptionProvider;
+use crate::utils::config::{TranscriptionProvider, parse_max_duration_secs};
 
 #[derive(Parser)]
 #[command(author, version, about = "Voice Input client (daemon control + dict)")]
@@ -24,6 +24,9 @@ pub enum Cmd {
         /// 録音後の音声データを指定パスへ保存
         #[arg(long, value_name = "PATH")]
         save_audio: Option<PathBuf>,
+        /// 最大録音時間（秒）
+        #[arg(long, value_name = "SECS", value_parser = parse_max_duration_secs_arg)]
+        max_secs: Option<u64>,
         /// デバッグ用にマイク入力の代わりへ流すWAVファイル
         #[arg(long, value_name = "PATH")]
         input_file: Option<PathBuf>,
@@ -43,6 +46,9 @@ pub enum Cmd {
         /// 録音後の音声データを指定パスへ保存
         #[arg(long, value_name = "PATH")]
         save_audio: Option<PathBuf>,
+        /// 最大録音時間（秒）
+        #[arg(long, value_name = "SECS", value_parser = parse_max_duration_secs_arg)]
+        max_secs: Option<u64>,
         /// デバッグ用にマイク入力の代わりへ流すWAVファイル
         #[arg(long, value_name = "PATH")]
         input_file: Option<PathBuf>,
@@ -107,4 +113,8 @@ fn parse_transcription_model(value: &str) -> Result<String, String> {
         .validate_model(value)
         .map(|()| value.to_string())
         .map_err(|error| error.to_string())
+}
+
+fn parse_max_duration_secs_arg(value: &str) -> Result<u64, String> {
+    parse_max_duration_secs(value).map_err(|error| error.to_string())
 }

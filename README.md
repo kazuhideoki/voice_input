@@ -173,6 +173,15 @@ voice_input stop
 voice_input toggle --prompt "固有名詞の補助プロンプト"
 ```
 
+最大録音時間はデフォルト 30 秒です。コマンドごとに変える場合は `--max-secs` を指定します。
+
+```sh
+voice_input start --max-secs 120
+voice_input toggle --max-secs 90
+```
+
+常に変更したい場合は CLI とデーモンの両方に `VOICE_INPUT_MAX_SECS` を設定してください。
+
 利用可能な入力デバイスを一覧表示
 
 ```sh

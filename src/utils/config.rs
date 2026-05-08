@@ -13,6 +13,12 @@ use std::sync::Arc;
 /// グローバル環境変数設定
 static ENV_CONFIG: OnceCell<Arc<EnvConfig>> = OnceCell::new();
 
+/// 最大録音時間のデフォルト値（秒）
+pub const DEFAULT_MAX_RECORDING_DURATION_SECS: u64 = 30;
+
+/// 最大録音時間を指定する環境変数名
+pub const MAX_RECORDING_DURATION_SECS_ENV: &str = "VOICE_INPUT_MAX_SECS";
+
 #[cfg(test)]
 use std::sync::Mutex;
 
@@ -37,7 +43,7 @@ pub enum ConfigError {
         "transcription model '{value}' is unsupported for provider {provider}. Supported models: gpt-4o-mini-transcribe, gpt-4o-transcribe, gpt-realtime-whisper"
     )]
     UnsupportedTranscriptionModel { provider: String, value: String },
-    #[error("VOICE_INPUT_MAX_SECS must be an integer: {value}")]
+    #[error("VOICE_INPUT_MAX_SECS must be a positive integer: {value}")]
     InvalidMaxDurationSecs { value: String },
     #[error("{name} must be either 'true' or 'false': {value}")]
     InvalidBooleanEnv { name: &'static str, value: String },
@@ -234,6 +240,13 @@ pub struct EnvConfig {
 impl EnvConfig {
     /// 環境変数から設定を構築し、妥当性を検証する
     pub(crate) fn from_env() -> Result<Self, ConfigError> {
+        Self::from_env_with_recording_max_duration_secs(None)
+    }
+
+    /// 環境変数から設定を構築し、録音最大秒数だけ明示値で上書きする
+    pub(crate) fn from_env_with_recording_max_duration_secs(
+        max_duration_secs_override: Option<u64>,
+    ) -> Result<Self, ConfigError> {
         let provider = TranscriptionProvider::DEFAULT;
         let model = TranscriptionProvider::OpenAi4o.default_model().to_string();
         let realtime_whisper_model = load_realtime_whisper_model()?;
@@ -242,11 +255,17 @@ impl EnvConfig {
             .to_string();
         let streaming_enabled = parse_bool_env("OPENAI_TRANSCRIBE_STREAMING")?;
         let mlx_qwen3_asr_command = "mlx-qwen3-asr".to_string();
-        let max_duration_secs = match std::env::var("VOICE_INPUT_MAX_SECS") {
-            Ok(value) => value
-                .parse()
-                .map_err(|_| ConfigError::InvalidMaxDurationSecs { value })?,
-            Err(_) => 30,
+        let max_duration_secs = match max_duration_secs_override {
+            Some(value) if value > 0 => value,
+            Some(value) => {
+                return Err(ConfigError::InvalidMaxDurationSecs {
+                    value: value.to_string(),
+                });
+            }
+            None => match std::env::var(MAX_RECORDING_DURATION_SECS_ENV) {
+                Ok(value) => parse_max_duration_secs(&value)?,
+                Err(_) => DEFAULT_MAX_RECORDING_DURATION_SECS,
+            },
         };
 
         Ok(Self {
@@ -290,6 +309,13 @@ impl EnvConfig {
         Self::from_env()
     }
 
+    /// 環境変数から設定を構築し、録音最大秒数だけ明示値で上書きする
+    pub fn try_from_env_with_recording_max_duration_secs(
+        max_duration_secs_override: Option<u64>,
+    ) -> Result<Self, ConfigError> {
+        Self::from_env_with_recording_max_duration_secs(max_duration_secs_override)
+    }
+
     /// 転写の推奨同時実行数を返す
     pub fn recommended_transcription_parallelism(&self) -> usize {
         self.transcription.recommended_parallelism()
@@ -300,11 +326,19 @@ impl EnvConfig {
     /// アプリケーション起動時に呼び出す。
     /// 既に初期化済みの場合は何もせずOkを返す（冪等性を保証）。
     pub fn init() -> Result<(), ConfigError> {
+        Self::init_with_recording_max_duration_secs(None)
+    }
+
+    /// 環境変数から設定を初期化し、録音最大秒数だけ明示値で上書きする
+    pub fn init_with_recording_max_duration_secs(
+        max_duration_secs_override: Option<u64>,
+    ) -> Result<(), ConfigError> {
         if ENV_CONFIG.get().is_some() {
             return Ok(());
         }
 
-        let config = EnvConfig::from_env()?;
+        let config =
+            EnvConfig::from_env_with_recording_max_duration_secs(max_duration_secs_override)?;
 
         // 並列実行時の競合を考慮：既に他のスレッドが初期化していても成功とする
         let _ = ENV_CONFIG.set(Arc::new(config));
@@ -383,6 +417,21 @@ fn load_realtime_whisper_model() -> Result<String, ConfigError> {
     Ok(model)
 }
 
+/// 最大録音時間の秒数を検証して返す
+pub fn parse_max_duration_secs(value: &str) -> Result<u64, ConfigError> {
+    let secs = value
+        .parse()
+        .map_err(|_| ConfigError::InvalidMaxDurationSecs {
+            value: value.to_string(),
+        })?;
+    if secs == 0 {
+        return Err(ConfigError::InvalidMaxDurationSecs {
+            value: value.to_string(),
+        });
+    }
+    Ok(secs)
+}
+
 fn parse_bool_env(name: &'static str) -> Result<bool, ConfigError> {
     match std::env::var(name) {
         Ok(value) => match value.as_str() {
@@ -397,8 +446,9 @@ fn parse_bool_env(name: &'static str) -> Result<bool, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioConfig, ConfigError, EnvConfig, PathConfig, PreferredAudioFormat, ProfilingConfig,
-        ProxyConfig, RecordingConfig, TranscriptionConfig, TranscriptionProvider, lock_test_env,
+        AudioConfig, ConfigError, DEFAULT_MAX_RECORDING_DURATION_SECS, EnvConfig, PathConfig,
+        PreferredAudioFormat, ProfilingConfig, ProxyConfig, RecordingConfig, TranscriptionConfig,
+        TranscriptionProvider, lock_test_env,
     };
     use std::path::PathBuf;
 
@@ -420,7 +470,7 @@ mod tests {
                 preferred_format: PreferredAudioFormat::Flac,
             },
             recording: RecordingConfig {
-                max_duration_secs: 30,
+                max_duration_secs: DEFAULT_MAX_RECORDING_DURATION_SECS,
             },
             profiling: ProfilingConfig { enabled: false },
         }
@@ -696,6 +746,81 @@ mod tests {
         unsafe {
             std::env::remove_var("VOICE_INPUT_MAX_SECS");
         }
+    }
+
+    /// 録音最大秒数が0の場合は設定エラーになる
+    #[test]
+    fn try_from_env_rejects_zero_max_duration_secs() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_MAX_SECS", "0");
+        }
+
+        let result = EnvConfig::try_from_env();
+
+        assert_eq!(
+            result,
+            Err(ConfigError::InvalidMaxDurationSecs {
+                value: "0".to_string(),
+            })
+        );
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_MAX_SECS");
+        }
+    }
+
+    /// 録音最大秒数が負数の場合は設定エラーになる
+    #[test]
+    fn try_from_env_rejects_negative_max_duration_secs() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_MAX_SECS", "-1");
+        }
+
+        let result = EnvConfig::try_from_env();
+
+        assert_eq!(
+            result,
+            Err(ConfigError::InvalidMaxDurationSecs {
+                value: "-1".to_string(),
+            })
+        );
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_MAX_SECS");
+        }
+    }
+
+    /// 明示指定された録音最大秒数は不正な環境変数より優先される
+    #[test]
+    fn explicit_max_duration_secs_overrides_invalid_environment() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_MAX_SECS", "abc");
+        }
+
+        let config = EnvConfig::try_from_env_with_recording_max_duration_secs(Some(120))
+            .expect("explicit max duration should override env");
+
+        assert_eq!(config.recording.max_duration_secs, 120);
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_MAX_SECS");
+        }
+    }
+
+    /// 明示指定された録音最大秒数でも0は拒否する
+    #[test]
+    fn explicit_max_duration_secs_rejects_zero() {
+        let result = EnvConfig::try_from_env_with_recording_max_duration_secs(Some(0));
+
+        assert_eq!(
+            result,
+            Err(ConfigError::InvalidMaxDurationSecs {
+                value: "0".to_string(),
+            })
+        );
     }
 
     /// ストリーミング設定はtrue/false以外を許可しない

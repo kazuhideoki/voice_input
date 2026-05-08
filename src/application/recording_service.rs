@@ -16,7 +16,9 @@ use crate::application::{
     AudioBackend, AudioData, AudioDataFormat, AudioFrame, AudioInputSource, CapturedAudio, Recorder,
 };
 use crate::error::{Result, VoiceInputError};
-use crate::utils::config::TranscriptionProvider;
+use crate::utils::config::{
+    DEFAULT_MAX_RECORDING_DURATION_SECS, TranscriptionProvider, parse_max_duration_secs,
+};
 
 /// 録音状態
 #[derive(Debug)]
@@ -46,11 +48,16 @@ pub struct ActiveRecordingSession {
     pub transcription_model: Option<String>,
     /// 転写バックエンドが要求する音声形式
     pub requested_audio_format: Option<AudioDataFormat>,
+    /// このセッションの最大録音時間（秒）
+    pub max_duration_secs: u64,
 }
 
 impl ActiveRecordingSession {
-    fn new(session_id: u64, options: RecordingOptions) -> Self {
+    fn new(session_id: u64, options: RecordingOptions, default_max_duration_secs: u64) -> Self {
         let (cancel, _cancel_rx) = oneshot::channel::<()>();
+        let max_duration_secs = options
+            .max_duration_secs
+            .unwrap_or(default_max_duration_secs);
         Self {
             session_id,
             cancel: Some(cancel),
@@ -60,6 +67,7 @@ impl ActiveRecordingSession {
             transcription_provider: options.transcription_provider,
             transcription_model: options.transcription_model,
             requested_audio_format: options.requested_audio_format,
+            max_duration_secs,
         }
     }
 }
@@ -128,6 +136,13 @@ impl RecordingState {
             }),
         }
     }
+
+    fn active_max_duration_secs(&self) -> Option<u64> {
+        match self {
+            Self::Idle => None,
+            Self::Recording(session) => Some(session.max_duration_secs),
+        }
+    }
 }
 
 /// 停止済み録音セッションの文脈
@@ -173,7 +188,7 @@ pub struct RecordingConfig {
 impl Default for RecordingConfig {
     fn default() -> Self {
         Self {
-            max_duration_secs: 30,
+            max_duration_secs: DEFAULT_MAX_RECORDING_DURATION_SECS,
         }
     }
 }
@@ -195,6 +210,8 @@ pub struct RecordingOptions {
     pub audio_frame_tx: Option<mpsc::UnboundedSender<AudioFrame>>,
     /// デバッグ用にマイクの代わりへ流し込む音声ファイル
     pub input_file_path: Option<PathBuf>,
+    /// この録音だけに適用する最大録音時間（秒）
+    pub max_duration_secs: Option<u64>,
 }
 
 impl Default for RecordingOptions {
@@ -207,6 +224,7 @@ impl Default for RecordingOptions {
             requested_audio_format: None,
             audio_frame_tx: None,
             input_file_path: None,
+            max_duration_secs: None,
         }
     }
 }
@@ -262,6 +280,12 @@ impl<T: AudioBackend> RecordingService<T> {
 
     /// 録音を開始
     pub async fn start_recording(&self, options: RecordingOptions) -> Result<u64> {
+        if let Some(max_duration_secs) = options.max_duration_secs {
+            parse_max_duration_secs(&max_duration_secs.to_string()).map_err(|error| {
+                VoiceInputError::ConfigInitError(format!("invalid recording max duration: {error}"))
+            })?;
+        }
+
         let mut ctx = self
             .context
             .lock()
@@ -293,7 +317,11 @@ impl<T: AudioBackend> RecordingService<T> {
             .start_with_input_source(input_source, audio_frame_tx)
             .map_err(VoiceInputError::from)?;
 
-        ctx.state = RecordingState::Recording(ActiveRecordingSession::new(session_id, options));
+        ctx.state = RecordingState::Recording(ActiveRecordingSession::new(
+            session_id,
+            options,
+            self.config.max_duration_secs,
+        ));
 
         // タイマー処理は呼び出し元で実装（spawn_localの制約のため）
 
@@ -427,6 +455,14 @@ impl<T: AudioBackend> RecordingService<T> {
     /// 設定を取得
     pub fn config(&self) -> &RecordingConfig {
         &self.config
+    }
+
+    /// 現在の録音セッションに適用されている最大録音時間を返す
+    pub fn active_max_duration_secs(&self) -> Option<u64> {
+        self.context
+            .lock()
+            .ok()
+            .and_then(|ctx| ctx.state.active_max_duration_secs())
     }
 
     /// 録音コンテキストの情報を取得
@@ -764,6 +800,73 @@ mod tests {
                 "Should not be recording after stop"
             );
         }
+    }
+
+    /// 録音オプションの最大録音時間は現在のセッションに反映される
+    #[tokio::test]
+    async fn active_session_uses_option_max_duration_secs() {
+        let backend = MockAudioBackend::new();
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
+        let service = RecordingService::new(
+            recorder,
+            RecordingConfig {
+                max_duration_secs: 30,
+            },
+        );
+
+        service
+            .start_recording(RecordingOptions {
+                max_duration_secs: Some(120),
+                ..RecordingOptions::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(service.active_max_duration_secs(), Some(120));
+    }
+
+    /// 録音オプション未指定時は設定の最大録音時間が現在のセッションに反映される
+    #[tokio::test]
+    async fn active_session_uses_config_max_duration_secs_by_default() {
+        let backend = MockAudioBackend::new();
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
+        let service = RecordingService::new(
+            recorder,
+            RecordingConfig {
+                max_duration_secs: 45,
+            },
+        );
+
+        service
+            .start_recording(RecordingOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(service.active_max_duration_secs(), Some(45));
+    }
+
+    /// 録音サービスは0秒の最大録音時間を拒否する
+    #[tokio::test]
+    async fn start_recording_rejects_zero_max_duration_secs() {
+        let backend = MockAudioBackend::new();
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
+        let service = RecordingService::new(
+            recorder,
+            RecordingConfig {
+                max_duration_secs: 30,
+            },
+        );
+
+        let error = service
+            .start_recording(RecordingOptions {
+                max_duration_secs: Some(0),
+                ..RecordingOptions::default()
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, VoiceInputError::ConfigInitError(_)));
+        assert!(!service.is_recording());
     }
 
     /// 音声未取得で停止した場合は録音状態を解除して再試行できる

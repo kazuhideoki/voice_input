@@ -42,6 +42,8 @@ pub enum IpcCmd {
         #[serde(default)]
         save_audio_path: Option<PathBuf>,
         #[serde(default)]
+        max_duration_secs: Option<u64>,
+        #[serde(default)]
         transcription_provider: Option<TranscriptionProvider>,
         #[serde(default)]
         transcription_model: Option<String>,
@@ -52,6 +54,8 @@ pub enum IpcCmd {
         prompt: Option<String>,
         #[serde(default)]
         save_audio_path: Option<PathBuf>,
+        #[serde(default)]
+        max_duration_secs: Option<u64>,
         input_file_path: PathBuf,
         #[serde(default)]
         transcription_provider: Option<TranscriptionProvider>,
@@ -67,6 +71,8 @@ pub enum IpcCmd {
         #[serde(default)]
         save_audio_path: Option<PathBuf>,
         #[serde(default)]
+        max_duration_secs: Option<u64>,
+        #[serde(default)]
         transcription_provider: Option<TranscriptionProvider>,
         #[serde(default)]
         transcription_model: Option<String>,
@@ -77,6 +83,8 @@ pub enum IpcCmd {
         prompt: Option<String>,
         #[serde(default)]
         save_audio_path: Option<PathBuf>,
+        #[serde(default)]
+        max_duration_secs: Option<u64>,
         input_file_path: PathBuf,
         #[serde(default)]
         transcription_provider: Option<TranscriptionProvider>,
@@ -358,6 +366,7 @@ mod tests {
         let cmd = IpcCmd::Start {
             prompt: Some("test prompt".to_string()),
             save_audio_path: None,
+            max_duration_secs: None,
             transcription_provider: None,
             transcription_model: None,
         };
@@ -392,6 +401,7 @@ mod tests {
         let cmd = IpcCmd::Start {
             prompt: None,
             save_audio_path: None,
+            max_duration_secs: None,
             transcription_provider: None,
             transcription_model: None,
         };
@@ -407,6 +417,7 @@ mod tests {
         let cmd = IpcCmd::Toggle {
             prompt: Some("test".to_string()),
             save_audio_path: None,
+            max_duration_secs: None,
             transcription_provider: None,
             transcription_model: None,
         };

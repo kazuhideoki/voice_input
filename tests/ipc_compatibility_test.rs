@@ -27,6 +27,23 @@ fn backward_compatibility_without_audio_save_path() {
     }
 }
 
+/// 最大録音秒数が省略された旧形式でもデシリアライズできる
+#[test]
+fn backward_compatibility_without_max_duration_secs() {
+    let old_json = r#"{"Start":{"prompt":"test"}}"#;
+
+    let cmd: IpcCmd = serde_json::from_str(old_json).unwrap();
+
+    match cmd {
+        IpcCmd::Start {
+            max_duration_secs, ..
+        } => {
+            assert_eq!(max_duration_secs, None);
+        }
+        _ => panic!("Expected Start command"),
+    }
+}
+
 /// 旧クライアント由来の余計なフィールドを無視して受け入れる
 #[test]
 fn backward_compatibility_with_extra_fields() {

@@ -89,12 +89,14 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             IpcCmd::Start {
                 prompt,
                 save_audio_path,
+                max_duration_secs,
                 transcription_provider,
                 transcription_model,
             } => {
                 self.handle_start(
                     prompt,
                     save_audio_path,
+                    max_duration_secs,
                     None,
                     transcription_provider,
                     transcription_model,
@@ -104,6 +106,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             IpcCmd::StartWithInputFile {
                 prompt,
                 save_audio_path,
+                max_duration_secs,
                 input_file_path,
                 transcription_provider,
                 transcription_model,
@@ -111,6 +114,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 self.handle_start(
                     prompt,
                     save_audio_path,
+                    max_duration_secs,
                     Some(input_file_path),
                     transcription_provider,
                     transcription_model,
@@ -121,6 +125,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             IpcCmd::Toggle {
                 prompt,
                 save_audio_path,
+                max_duration_secs,
                 transcription_provider,
                 transcription_model,
             } => {
@@ -130,6 +135,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                     self.handle_start(
                         prompt,
                         save_audio_path,
+                        max_duration_secs,
                         None,
                         transcription_provider,
                         transcription_model,
@@ -140,6 +146,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             IpcCmd::ToggleWithInputFile {
                 prompt,
                 save_audio_path,
+                max_duration_secs,
                 input_file_path,
                 transcription_provider,
                 transcription_model,
@@ -150,6 +157,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                     self.handle_start(
                         prompt,
                         save_audio_path,
+                        max_duration_secs,
                         Some(input_file_path),
                         transcription_provider,
                         transcription_model,
@@ -168,10 +176,17 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         &self,
         prompt: Option<String>,
         save_audio_path: Option<std::path::PathBuf>,
+        max_duration_secs: Option<u64>,
         input_file_path: Option<std::path::PathBuf>,
         transcription_provider: Option<TranscriptionProvider>,
         transcription_model: Option<String>,
     ) -> Result<IpcResp> {
+        if matches!(max_duration_secs, Some(0)) {
+            return Err(VoiceInputError::ConfigInitError(
+                "--max-secs must be a positive integer".to_string(),
+            ));
+        }
+
         let provider = transcription_provider.unwrap_or(TranscriptionProvider::DEFAULT);
         let model = resolve_transcription_model(provider, transcription_model)?;
 
@@ -196,6 +211,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             requested_audio_format: requested_audio_format(provider),
             audio_frame_tx,
             input_file_path,
+            max_duration_secs,
         };
 
         // 録音を開始
@@ -219,10 +235,15 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         // Apple Music の pause は録音開始後に非同期で行う
         self.spawn_pause_if_needed(session_id);
 
-        // 自動停止タイマーを設定
-        self.setup_auto_stop_timer();
+        let max_secs = self
+            .recording
+            .borrow()
+            .active_max_duration_secs()
+            .unwrap_or_else(|| self.recording.borrow().config().max_duration_secs);
 
-        let max_secs = self.recording.borrow().config().max_duration_secs;
+        // 自動停止タイマーを設定
+        self.setup_auto_stop_timer(max_secs);
+
         Ok(IpcResp {
             ok: true,
             msg: format!("recording started (auto-stop in {}s)", max_secs),
@@ -502,12 +523,11 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     }
 
     /// 自動停止タイマーをセットアップ
-    fn setup_auto_stop_timer(&self) {
+    fn setup_auto_stop_timer(&self, max_secs: u64) {
         let recording = self.recording.clone();
         let transcription = self.transcription.clone();
         let realtime_session = self.realtime_session.clone();
         let tx = self.transcription_tx.clone();
-        let max_secs = recording.borrow().config().max_duration_secs;
 
         spawn_local(async move {
             // RecordingServiceからキャンセルレシーバーを取得
@@ -516,7 +536,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             if let Some(cancel_rx) = cancel_rx {
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_secs(max_secs)) => {
-                        // 30秒経過による自動停止
+                        // 設定された最大録音時間の経過による自動停止
                         if recording.borrow().is_recording() {
                             println!("Auto-stop timer triggered after {}s", max_secs);
                             play_stop_sound();
@@ -1065,9 +1085,7 @@ mod tests {
         let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
         let recording = Rc::new(RefCell::new(RecordingService::new(
             recorder,
-            RecordingConfig {
-                max_duration_secs: 30,
-            },
+            RecordingConfig::default(),
         )));
         let transcription = Rc::new(RefCell::new(TranscriptionService::new(
             Box::new(NoopTranscriptionClient),
@@ -1089,6 +1107,7 @@ mod tests {
         IpcCmd::Start {
             prompt: None,
             save_audio_path: None,
+            max_duration_secs: None,
             transcription_provider: None,
             transcription_model: None,
         }
@@ -1119,6 +1138,37 @@ mod tests {
             .await;
     }
 
+    /// 開始コマンドの最大録音時間は開始レスポンスに反映される
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn start_response_uses_command_max_duration_secs() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+                let media_control = MediaControlService::with_controller(Box::new(
+                    DelayedMediaController::new(false, Duration::from_millis(0)),
+                ));
+                let (handler, _recording, _media_control, _rx) =
+                    build_handler(backend, media_control);
+
+                let response = handler
+                    .handle(IpcCmd::Start {
+                        prompt: None,
+                        save_audio_path: None,
+                        max_duration_secs: Some(120),
+                        transcription_provider: None,
+                        transcription_model: None,
+                    })
+                    .await
+                    .unwrap();
+
+                assert_eq!(response.msg, "recording started (auto-stop in 120s)");
+            })
+            .await;
+    }
+
     /// 4o mini指定の録音は転写キューへモデルを渡す
     #[tokio::test(flavor = "current_thread")]
     async fn four_o_mini_model_is_queued_for_transcription() {
@@ -1137,6 +1187,7 @@ mod tests {
                     .handle(IpcCmd::Start {
                         prompt: None,
                         save_audio_path: None,
+                        max_duration_secs: None,
                         transcription_provider: Some(TranscriptionProvider::OpenAi4o),
                         transcription_model: Some("gpt-4o-mini-transcribe".to_string()),
                     })
@@ -1169,6 +1220,7 @@ mod tests {
                     .handle(IpcCmd::Start {
                         prompt: None,
                         save_audio_path: None,
+                        max_duration_secs: None,
                         transcription_provider: Some(TranscriptionProvider::MlxQwen3Asr),
                         transcription_model: Some("gpt-4o-mini-transcribe".to_string()),
                     })
@@ -1198,6 +1250,7 @@ mod tests {
                     .handle(IpcCmd::Start {
                         prompt: None,
                         save_audio_path: None,
+                        max_duration_secs: None,
                         transcription_provider: Some(TranscriptionProvider::MlxQwen3Asr),
                         transcription_model: None,
                     })
@@ -1237,6 +1290,7 @@ mod tests {
                     .handle(IpcCmd::Start {
                         prompt: None,
                         save_audio_path: Some(save_path.clone()),
+                        max_duration_secs: None,
                         transcription_provider: None,
                         transcription_model: None,
                     })
