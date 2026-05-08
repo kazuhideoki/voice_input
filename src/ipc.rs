@@ -38,6 +38,8 @@ pub enum IpcCmd {
     Start {
         #[serde(default)]
         prompt: Option<String>,
+        #[serde(default)]
+        save_audio_path: Option<PathBuf>,
     },
     /// 録音停止
     Stop,
@@ -45,6 +47,8 @@ pub enum IpcCmd {
     Toggle {
         #[serde(default)]
         prompt: Option<String>,
+        #[serde(default)]
+        save_audio_path: Option<PathBuf>,
     },
     /// ステータス取得
     Status,
@@ -320,13 +324,14 @@ mod tests {
         // Test that existing IPC commands still work
         let cmd = IpcCmd::Start {
             prompt: Some("test prompt".to_string()),
+            save_audio_path: None,
         };
 
         let json = serde_json::to_string(&cmd).unwrap();
         let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
 
         match deserialized {
-            IpcCmd::Start { prompt } => {
+            IpcCmd::Start { prompt, .. } => {
                 assert_eq!(prompt, Some("test prompt".to_string()));
             }
             _ => panic!("Expected Start command"),
@@ -349,7 +354,10 @@ mod tests {
     #[test]
     fn ipc_commands_remain_backward_compatible() {
         // 既存のIPCコマンドが引き続き動作することを確認
-        let cmd = IpcCmd::Start { prompt: None };
+        let cmd = IpcCmd::Start {
+            prompt: None,
+            save_audio_path: None,
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("Start"));
 
@@ -361,11 +369,12 @@ mod tests {
 
         let cmd = IpcCmd::Toggle {
             prompt: Some("test".to_string()),
+            save_audio_path: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
         match deserialized {
-            IpcCmd::Toggle { prompt } => {
+            IpcCmd::Toggle { prompt, .. } => {
                 assert_eq!(prompt, Some("test".to_string()));
             }
             _ => panic!("Expected Toggle command"),

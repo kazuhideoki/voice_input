@@ -6,6 +6,7 @@
 //! - 自動停止タイマーの管理
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
@@ -33,6 +34,8 @@ pub struct ActiveRecordingSession {
     pub music_was_playing: bool,
     /// 録音開始時点で取得した選択テキストまたはCLIプロンプト
     pub start_prompt: Option<String>,
+    /// 録音停止後に音声データを保存するパス
+    pub save_audio_path: Option<PathBuf>,
 }
 
 impl ActiveRecordingSession {
@@ -43,6 +46,7 @@ impl ActiveRecordingSession {
             cancel: Some(cancel),
             music_was_playing: false,
             start_prompt: options.prompt,
+            save_audio_path: options.save_audio_path,
         }
     }
 }
@@ -104,6 +108,7 @@ impl RecordingState {
                 session_id: session.session_id,
                 start_prompt: session.start_prompt.clone(),
                 music_was_playing: session.music_was_playing,
+                save_audio_path: session.save_audio_path.clone(),
             }),
         }
     }
@@ -115,6 +120,7 @@ pub struct StoppedSessionContext {
     pub session_id: u64,
     pub start_prompt: Option<String>,
     pub music_was_playing: bool,
+    pub save_audio_path: Option<PathBuf>,
 }
 
 /// 録音停止結果
@@ -151,6 +157,17 @@ impl Default for RecordingConfig {
 pub struct RecordingOptions {
     /// 録音開始時のプロンプト
     pub prompt: Option<String>,
+    /// 録音停止後に音声データを保存するパス
+    pub save_audio_path: Option<PathBuf>,
+}
+
+impl Default for RecordingOptions {
+    fn default() -> Self {
+        Self {
+            prompt: None,
+            save_audio_path: None,
+        }
+    }
 }
 
 /// 録音コンテキスト情報
@@ -514,7 +531,7 @@ mod tests {
         let service = RecordingService::new(recorder, config);
 
         // 録音開始
-        let options = RecordingOptions { prompt: None };
+        let options = RecordingOptions::default();
         service.start_recording(options).await.unwrap();
 
         // キャンセルレシーバーを取得
@@ -555,6 +572,7 @@ mod tests {
             // 録音開始
             let options = RecordingOptions {
                 prompt: Some(format!("Test {}", i)),
+                save_audio_path: None,
             };
             let session_id = service.start_recording(options).await.unwrap();
             assert!(session_id > 0, "Session ID should be positive");
@@ -595,7 +613,7 @@ mod tests {
         let service = RecordingService::new(recorder, config);
 
         service
-            .start_recording(RecordingOptions { prompt: None })
+            .start_recording(RecordingOptions::default())
             .await
             .unwrap();
 
@@ -604,7 +622,7 @@ mod tests {
         assert!(matches!(error, VoiceInputError::NoAudioCaptured(_)));
         assert!(!service.is_recording());
         service
-            .start_recording(RecordingOptions { prompt: None })
+            .start_recording(RecordingOptions::default())
             .await
             .unwrap();
         assert!(service.is_recording());
@@ -638,7 +656,7 @@ mod tests {
         let service = RecordingService::new(recorder, config);
 
         service
-            .start_recording(RecordingOptions { prompt: None })
+            .start_recording(RecordingOptions::default())
             .await
             .unwrap();
 
@@ -673,6 +691,7 @@ mod tests {
             service
                 .start_recording(RecordingOptions {
                     prompt: Some("prompt".to_string()),
+                    save_audio_path: None,
                 })
                 .await
                 .unwrap();
@@ -695,7 +714,7 @@ mod tests {
         let service = RecordingService::new(recorder, config);
 
         let first_session = service
-            .start_recording(RecordingOptions { prompt: None })
+            .start_recording(RecordingOptions::default())
             .await
             .unwrap();
         assert!(service.is_active_session(first_session).unwrap());
@@ -705,7 +724,7 @@ mod tests {
         assert!(!service.is_active_session(first_session).unwrap());
 
         let second_session = service
-            .start_recording(RecordingOptions { prompt: None })
+            .start_recording(RecordingOptions::default())
             .await
             .unwrap();
         assert_ne!(first_session, second_session);
@@ -724,7 +743,7 @@ mod tests {
         let service = RecordingService::new(recorder, config);
 
         let first_session = service
-            .start_recording(RecordingOptions { prompt: None })
+            .start_recording(RecordingOptions::default())
             .await
             .unwrap();
         assert!(!service.has_started_newer_session(first_session).unwrap());
@@ -733,7 +752,7 @@ mod tests {
         assert!(!service.has_started_newer_session(first_session).unwrap());
 
         let second_session = service
-            .start_recording(RecordingOptions { prompt: None })
+            .start_recording(RecordingOptions::default())
             .await
             .unwrap();
 
@@ -755,6 +774,7 @@ mod tests {
         let session_id = service
             .start_recording(RecordingOptions {
                 prompt: Some("prompt".to_string()),
+                save_audio_path: None,
             })
             .await
             .unwrap();

@@ -41,3 +41,21 @@ fn start_command_accepts_default_args() {
     assert!(!stderr.contains("error: unexpected argument"));
     assert!(!stderr.contains("error: invalid value"));
 }
+
+/// startコマンドで音声保存パスを指定できる
+#[test]
+fn start_command_accepts_audio_save_path() {
+    let output = run_cmd(&["start", "--save-audio", "/tmp/voice-input-debug.wav"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("error: unexpected argument"));
+    assert!(!stderr.contains("error: invalid value"));
+}
+
+/// toggleコマンドで音声保存パスを指定できる
+#[test]
+fn toggle_command_accepts_audio_save_path() {
+    let output = run_cmd(&["toggle", "--save-audio", "/tmp/voice-input-debug.wav"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("error: unexpected argument"));
+    assert!(!stderr.contains("error: invalid value"));
+}

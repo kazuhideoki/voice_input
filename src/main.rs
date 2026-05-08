@@ -31,11 +31,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     /* ───── コマンド解析 ──────────── */
-    match cli.cmd.unwrap_or(Cmd::Toggle { prompt: None }) {
+    match cli.cmd.unwrap_or(Cmd::Toggle {
+        prompt: None,
+        save_audio: None,
+    }) {
         /* 録音系 → IPC */
-        Cmd::Start { prompt } => relay(IpcCmd::Start { prompt })?,
+        Cmd::Start { prompt, save_audio } => relay(IpcCmd::Start {
+            prompt,
+            save_audio_path: save_audio,
+        })?,
         Cmd::Stop => relay(IpcCmd::Stop)?,
-        Cmd::Toggle { prompt } => relay(IpcCmd::Toggle { prompt })?,
+        Cmd::Toggle { prompt, save_audio } => relay(IpcCmd::Toggle {
+            prompt,
+            save_audio_path: save_audio,
+        })?,
         Cmd::Status => relay(IpcCmd::Status)?,
         Cmd::Health => relay(IpcCmd::Health)?,
 

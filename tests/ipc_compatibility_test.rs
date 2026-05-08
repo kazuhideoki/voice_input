@@ -10,6 +10,23 @@ fn backward_compatibility_without_prompt() {
     assert!(result.is_ok(), "Expected deserialization to succeed");
 }
 
+/// 保存パスが省略された旧形式でもデシリアライズできる
+#[test]
+fn backward_compatibility_without_audio_save_path() {
+    let old_json = r#"{"Start":{"prompt":"test"}}"#;
+
+    let cmd: IpcCmd = serde_json::from_str(old_json).unwrap();
+
+    match cmd {
+        IpcCmd::Start {
+            save_audio_path, ..
+        } => {
+            assert_eq!(save_audio_path, None);
+        }
+        _ => panic!("Expected Start command"),
+    }
+}
+
 /// 旧クライアント由来の余計なフィールドを無視して受け入れる
 #[test]
 fn backward_compatibility_with_extra_fields() {
@@ -18,7 +35,7 @@ fn backward_compatibility_with_extra_fields() {
     let cmd: IpcCmd = serde_json::from_str(json_with_extra).unwrap();
 
     match cmd {
-        IpcCmd::Start { prompt } => {
+        IpcCmd::Start { prompt, .. } => {
             assert_eq!(prompt, Some("test".to_string()));
         }
         _ => panic!("Expected Start command"),

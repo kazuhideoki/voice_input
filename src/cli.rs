@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(author, version, about = "Voice Input client (daemon control + dict)")]
@@ -18,6 +19,9 @@ pub enum Cmd {
         /// Whisper へ追加のプロンプト
         #[arg(long)]
         prompt: Option<String>,
+        /// 録音後の音声データを指定パスへ保存
+        #[arg(long, value_name = "PATH")]
+        save_audio: Option<PathBuf>,
     },
     /// 録音停止
     Stop,
@@ -25,6 +29,9 @@ pub enum Cmd {
     Toggle {
         #[arg(long)]
         prompt: Option<String>,
+        /// 録音後の音声データを指定パスへ保存
+        #[arg(long, value_name = "PATH")]
+        save_audio: Option<PathBuf>,
     },
     /// デーモン状態取得
     Status,

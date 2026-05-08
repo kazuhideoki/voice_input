@@ -8,6 +8,7 @@
 #![allow(clippy::await_holding_refcell_ref)]
 
 use std::cell::RefCell;
+use std::path::Path;
 use std::rc::Rc;
 use tokio::sync::mpsc;
 use tokio::task::spawn_local;
@@ -60,13 +61,19 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     /// IPCコマンドを処理
     pub async fn handle(&self, cmd: IpcCmd) -> Result<IpcResp> {
         match cmd {
-            IpcCmd::Start { prompt } => self.handle_start(prompt).await,
+            IpcCmd::Start {
+                prompt,
+                save_audio_path,
+            } => self.handle_start(prompt, save_audio_path).await,
             IpcCmd::Stop => self.handle_stop().await,
-            IpcCmd::Toggle { prompt } => {
+            IpcCmd::Toggle {
+                prompt,
+                save_audio_path,
+            } => {
                 if self.recording.borrow().is_recording() {
                     self.handle_stop().await
                 } else {
-                    self.handle_start(prompt).await
+                    self.handle_start(prompt, save_audio_path).await
                 }
             }
             IpcCmd::Status => self.handle_status(),
@@ -76,12 +83,19 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     }
 
     /// 録音開始処理
-    async fn handle_start(&self, prompt: Option<String>) -> Result<IpcResp> {
+    async fn handle_start(
+        &self,
+        prompt: Option<String>,
+        save_audio_path: Option<std::path::PathBuf>,
+    ) -> Result<IpcResp> {
         // 体感開始時間を縮めるため、開始音は録音開始前に鳴らす
         play_start_sound();
 
         // 録音オプションを構築
-        let options = RecordingOptions { prompt };
+        let options = RecordingOptions {
+            prompt,
+            save_audio_path,
+        };
 
         // 録音を開始
         let recording = self.recording.clone();
@@ -154,6 +168,12 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         let recording = self.recording.clone();
         let outcome = recording.borrow().stop_recording().await?;
         let audio_bytes = outcome.result.audio_data.bytes.len();
+        let save_result = outcome.context.save_audio_path.as_ref().map(|path| {
+            (
+                path.clone(),
+                save_audio_file(path, &outcome.result.audio_data.bytes),
+            )
+        });
 
         // 転写キューに送信
         self.transcription_tx
@@ -173,10 +193,22 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             profiling::log_point("transcription.queued", &format!("bytes={}", audio_bytes));
         }
 
-        Ok(IpcResp {
-            ok: true,
-            msg: "recording stopped; queued".to_string(),
-        })
+        let msg = match save_result {
+            Some((path, Ok(()))) => {
+                format!(
+                    "recording stopped; queued; audio saved to {}",
+                    path.display()
+                )
+            }
+            Some((path, Err(error))) => format!(
+                "recording stopped; queued; audio save failed for {}: {}",
+                path.display(),
+                error
+            ),
+            None => "recording stopped; queued".to_string(),
+        };
+
+        Ok(IpcResp { ok: true, msg })
     }
 
     /// ステータス取得
@@ -306,6 +338,13 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                             play_stop_sound();
 
                             if let Ok(outcome) = recording.borrow().stop_recording().await {
+                                if let Some(path) = &outcome.context.save_audio_path {
+                                    if let Err(error) =
+                                        save_audio_file(path, &outcome.result.audio_data.bytes)
+                                    {
+                                        eprintln!("Failed to save audio file: {}", error);
+                                    }
+                                }
                                 let _ = tx.send(TranscriptionMessage {
                                     result: outcome.result,
                                     resume_music: outcome.context.music_was_playing,
@@ -326,6 +365,29 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     }
 }
 
+fn save_audio_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            VoiceInputError::SystemError(format!(
+                "Failed to create audio save directory {}: {}",
+                parent.display(),
+                error
+            ))
+        })?;
+    }
+
+    std::fs::write(path, bytes).map_err(|error| {
+        VoiceInputError::SystemError(format!(
+            "Failed to save audio file {}: {}",
+            path.display(),
+            error
+        ))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +405,7 @@ mod tests {
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Instant;
+    use tempfile::TempDir;
 
     static SOUND_TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
@@ -616,6 +679,13 @@ mod tests {
         )
     }
 
+    fn start_cmd() -> IpcCmd {
+        IpcCmd::Start {
+            prompt: None,
+            save_audio_path: None,
+        }
+    }
+
     /// 停止時に転写キューへsession_id付きで送信される
     #[tokio::test(flavor = "current_thread")]
     async fn stop_enqueues_transcription_message_with_session_id() {
@@ -630,15 +700,43 @@ mod tests {
                 let (handler, _recording, _media_control, mut rx) =
                     build_handler(backend, media_control);
 
-                handler
-                    .handle(IpcCmd::Start { prompt: None })
-                    .await
-                    .unwrap();
+                handler.handle(start_cmd()).await.unwrap();
                 handler.handle(IpcCmd::Stop).await.unwrap();
 
                 let message = rx.recv().await.expect("transcription should be queued");
                 assert_eq!(message.session_id, 1);
                 assert!(!message.resume_music);
+            })
+            .await;
+    }
+
+    /// 保存パスが指定された録音は停止時に音声バイト列を書き出す
+    #[tokio::test(flavor = "current_thread")]
+    async fn stop_persists_audio_bytes_when_save_path_is_configured() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let temp_dir = TempDir::new().unwrap();
+                let save_path = temp_dir.path().join("samples/debug.wav");
+                let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+                let media_control = MediaControlService::with_controller(Box::new(
+                    DelayedMediaController::new(false, Duration::from_millis(0)),
+                ));
+                let (handler, _recording, _media_control, mut rx) =
+                    build_handler(backend, media_control);
+
+                handler
+                    .handle(IpcCmd::Start {
+                        prompt: None,
+                        save_audio_path: Some(save_path.clone()),
+                    })
+                    .await
+                    .unwrap();
+                handler.handle(IpcCmd::Stop).await.unwrap();
+
+                assert_eq!(std::fs::read(&save_path).unwrap(), vec![0u8; 16]);
+                assert!(rx.recv().await.is_some());
             })
             .await;
     }
@@ -657,11 +755,9 @@ mod tests {
                 let (handler, _recording, _media_control, _rx) =
                     build_handler(backend, media_control);
 
-                let response = tokio::time::timeout(
-                    Duration::from_millis(50),
-                    handler.handle(IpcCmd::Start { prompt: None }),
-                )
-                .await;
+                let response =
+                    tokio::time::timeout(Duration::from_millis(50), handler.handle(start_cmd()))
+                        .await;
 
                 assert!(response.is_ok(), "start should not wait for pause");
             })
@@ -693,10 +789,7 @@ mod tests {
                 let (handler, _recording, _media_control, _rx) =
                     build_handler(backend, media_control);
 
-                handler
-                    .handle(IpcCmd::Start { prompt: None })
-                    .await
-                    .unwrap();
+                handler.handle(start_cmd()).await.unwrap();
             })
             .await;
 
@@ -732,10 +825,7 @@ mod tests {
                 let (handler, _recording, _media_control, _rx) =
                     build_handler(backend, media_control);
 
-                handler
-                    .handle(IpcCmd::Start { prompt: None })
-                    .await
-                    .unwrap();
+                handler.handle(start_cmd()).await.unwrap();
             })
             .await;
 
@@ -778,10 +868,7 @@ mod tests {
                 let (handler, _recording, _media_control, _rx) =
                     build_handler(backend, media_control);
 
-                handler
-                    .handle(IpcCmd::Start { prompt: None })
-                    .await
-                    .unwrap();
+                handler.handle(start_cmd()).await.unwrap();
             })
             .await;
 
@@ -809,10 +896,7 @@ mod tests {
                 let (handler, recording, media_control, _rx) =
                     build_handler(backend, media_control);
 
-                handler
-                    .handle(IpcCmd::Start { prompt: None })
-                    .await
-                    .unwrap();
+                handler.handle(start_cmd()).await.unwrap();
                 handler.handle(IpcCmd::Stop).await.unwrap();
                 tokio::time::sleep(Duration::from_millis(120)).await;
 
@@ -842,15 +926,9 @@ mod tests {
                 let (handler, recording, media_control, _rx) =
                     build_handler(backend, media_control);
 
-                handler
-                    .handle(IpcCmd::Start { prompt: None })
-                    .await
-                    .unwrap();
+                handler.handle(start_cmd()).await.unwrap();
                 handler.handle(IpcCmd::Stop).await.unwrap();
-                handler
-                    .handle(IpcCmd::Start { prompt: None })
-                    .await
-                    .unwrap();
+                handler.handle(start_cmd()).await.unwrap();
                 tokio::time::sleep(Duration::from_millis(120)).await;
 
                 let (_, music_was_playing) = recording.borrow().get_context_info().unwrap();
@@ -879,15 +957,9 @@ mod tests {
                 let (handler, recording, media_control, _rx) =
                     build_handler(backend, media_control);
 
-                handler
-                    .handle(IpcCmd::Start { prompt: None })
-                    .await
-                    .unwrap();
+                handler.handle(start_cmd()).await.unwrap();
                 handler.handle(IpcCmd::Stop).await.unwrap();
-                handler
-                    .handle(IpcCmd::Start { prompt: None })
-                    .await
-                    .unwrap();
+                handler.handle(start_cmd()).await.unwrap();
                 tokio::time::sleep(Duration::from_millis(160)).await;
 
                 let (_, music_was_playing) = recording.borrow().get_context_info().unwrap();
@@ -912,10 +984,7 @@ mod tests {
                 let (handler, recording, media_control, _rx) =
                     build_handler(backend, media_control);
 
-                let response = handler
-                    .handle(IpcCmd::Start { prompt: None })
-                    .await
-                    .unwrap();
+                let response = handler.handle(start_cmd()).await.unwrap();
                 tokio::time::sleep(Duration::from_millis(10)).await;
 
                 let (_, music_was_playing) = recording.borrow().get_context_info().unwrap();
