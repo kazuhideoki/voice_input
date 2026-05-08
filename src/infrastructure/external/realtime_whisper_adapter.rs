@@ -18,7 +18,7 @@ use tokio_tungstenite::tungstenite::{
 };
 
 use crate::application::{AudioFrame, TranscriptionClientError, TranscriptionEvent};
-use crate::domain::transcription::TranscriptionOutput;
+use crate::domain::transcription::{TranscriptionOutput, TranscriptionToken};
 use crate::error::{Result, VoiceInputError};
 use crate::utils::config::TranscriptionConfig;
 use crate::utils::profiling;
@@ -142,29 +142,7 @@ async fn run_realtime_whisper_session(
         })?;
     let (mut write, mut read) = stream.split();
 
-    send_json(
-        &mut write,
-        json!({
-            "type": "session.update",
-            "session": {
-                "type": "transcription",
-                "audio": {
-                    "input": {
-                        "format": {
-                            "type": "audio/pcm",
-                            "rate": REALTIME_SAMPLE_RATE,
-                        },
-                        "transcription": {
-                            "model": config.model,
-                            "language": config.language,
-                        },
-                        "turn_detection": null,
-                    }
-                }
-            }
-        }),
-    )
-    .await?;
+    send_json(&mut write, build_session_update_payload(&config)).await?;
 
     tokio::time::timeout(SESSION_UPDATE_TIMEOUT, wait_for_session_updated(&mut read))
         .await
@@ -238,6 +216,31 @@ fn build_realtime_request(api_key: &str) -> Result<Request<()>> {
     Ok(request)
 }
 
+fn build_session_update_payload(config: &RealtimeWhisperConfig) -> serde_json::Value {
+    json!({
+        "type": "session.update",
+        "session": {
+            "type": "transcription",
+            "audio": {
+                "input": {
+                    "format": {
+                        "type": "audio/pcm",
+                        "rate": REALTIME_SAMPLE_RATE,
+                    },
+                    "transcription": {
+                        "model": config.model,
+                        "language": config.language,
+                    },
+                    "turn_detection": null,
+                }
+            },
+            "include": [
+                "item.input_audio_transcription.logprobs",
+            ],
+        }
+    })
+}
+
 async fn wait_for_session_updated<R>(read: &mut R) -> Result<()>
 where
     R: Stream<Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
@@ -279,8 +282,7 @@ async fn handle_realtime_message(
             Ok(None)
         }
         "conversation.item.input_audio_transcription.completed" => {
-            let text = event.text_delta().unwrap_or_default();
-            Ok(Some(TranscriptionOutput::from_text(text)))
+            Ok(Some(event.into_transcription_output()))
         }
         "error" => Err(request_error(&event.error_message())),
         _ => Ok(None),
@@ -373,12 +375,32 @@ struct RealtimeEvent {
     delta: Option<String>,
     text: Option<String>,
     transcript: Option<String>,
+    logprobs: Option<Vec<RealtimeLogprobPayload>>,
     error: Option<RealtimeErrorPayload>,
 }
 
 impl RealtimeEvent {
-    fn text_delta(self) -> Option<String> {
-        self.delta.or(self.text).or(self.transcript)
+    fn text_delta(&self) -> Option<String> {
+        self.delta
+            .clone()
+            .or_else(|| self.text.clone())
+            .or_else(|| self.transcript.clone())
+    }
+
+    fn into_transcription_output(self) -> TranscriptionOutput {
+        let text = self
+            .delta
+            .or(self.text)
+            .or(self.transcript)
+            .unwrap_or_default();
+        let tokens = self
+            .logprobs
+            .unwrap_or_default()
+            .into_iter()
+            .map(|token| TranscriptionToken::new(token.token, token.logprob))
+            .collect();
+
+        TranscriptionOutput { text, tokens }
     }
 
     fn error_message(&self) -> String {
@@ -387,6 +409,12 @@ impl RealtimeEvent {
             .and_then(|error| error.message.clone())
             .unwrap_or_else(|| "realtime API returned an error event".to_string())
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct RealtimeLogprobPayload {
+    token: String,
+    logprob: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -474,6 +502,43 @@ fn pcm_i16_le_bytes(samples: &[i16]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::{
+        AudioData, DictRepository, TranscriptionClient, TranscriptionClientOptions,
+        TranscriptionService,
+    };
+    use crate::domain::dict::{EntryStatus, WordEntry};
+    use crate::domain::transcription::LowConfidenceSelection;
+    use async_trait::async_trait;
+
+    struct MockDictRepo;
+
+    impl DictRepository for MockDictRepo {
+        fn load(&self) -> std::io::Result<Vec<WordEntry>> {
+            Ok(vec![WordEntry {
+                surface: "テスト".to_string(),
+                replacement: "test".to_string(),
+                hit: 0,
+                status: EntryStatus::Active,
+            }])
+        }
+
+        fn save(&self, _entries: &[WordEntry]) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct UnusedTranscriptionClient;
+
+    #[async_trait]
+    impl TranscriptionClient for UnusedTranscriptionClient {
+        async fn transcribe(
+            &self,
+            _audio: AudioData,
+            _options: &TranscriptionClientOptions,
+        ) -> Result<TranscriptionOutput> {
+            unreachable!("finalize_output does not call transcription client")
+        }
+    }
 
     /// Realtime API の delta event から増分文字列を取り出せる
     #[test]
@@ -484,6 +549,72 @@ mod tests {
         .unwrap();
 
         assert_eq!(event.text_delta().as_deref(), Some("こん"));
+    }
+
+    /// Realtime API の session.update では転写 logprobs を要求する
+    #[test]
+    fn session_update_requests_transcription_logprobs() {
+        let config = RealtimeWhisperConfig {
+            api_key: "secret".to_string(),
+            model: "gpt-realtime-whisper".to_string(),
+            language: "ja".to_string(),
+        };
+
+        let payload = build_session_update_payload(&config);
+
+        assert_eq!(
+            payload["session"]["include"],
+            json!(["item.input_audio_transcription.logprobs"])
+        );
+    }
+
+    /// Realtime API の完了 event から最終文字列と token logprobs を取り出せる
+    #[test]
+    fn realtime_completed_event_maps_logprobs_to_tokens() {
+        let event = parse_realtime_event(
+            r#"{"type":"conversation.item.input_audio_transcription.completed","transcript":"こんにちは","logprobs":[{"token":"こん","bytes":[227,129,147,227,130,147],"logprob":-0.2},{"token":"にちは","bytes":[227,129,171,227,129,161,227,129,175],"logprob":-1.4}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            event.into_transcription_output(),
+            TranscriptionOutput {
+                text: "こんにちは".to_string(),
+                tokens: vec![
+                    TranscriptionToken::new("こん", -0.2),
+                    TranscriptionToken::new("にちは", -1.4),
+                ],
+            }
+        );
+    }
+
+    /// Realtime API の token logprobs は辞書変換後の低信頼選択へ反映できる
+    #[test]
+    fn realtime_logprobs_feed_low_confidence_selection_after_finalization() {
+        let event = parse_realtime_event(
+            r#"{"type":"conversation.item.input_audio_transcription.completed","transcript":"これはテストです","logprobs":[{"token":"これは","logprob":-0.1},{"token":"テスト","logprob":-1.4},{"token":"です","logprob":-0.1}]}"#,
+        )
+        .unwrap();
+        let service = TranscriptionService::new(
+            Box::new(UnusedTranscriptionClient),
+            Box::new(MockDictRepo),
+            1,
+        );
+
+        let finalized = service
+            .finalize_output_with_low_confidence_selection_for_test(
+                event.into_transcription_output(),
+            )
+            .unwrap();
+
+        assert_eq!(finalized.text, "これはtestです");
+        assert_eq!(
+            finalized.low_confidence_selection,
+            Some(LowConfidenceSelection {
+                start_char_index: 3,
+                char_count: 4,
+            })
+        );
     }
 
     /// ステレオ入力は平均化されてモノラルPCMへ変換される

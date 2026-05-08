@@ -193,7 +193,13 @@ impl TranscriptionService {
             dict_timer.log();
         }
 
-        let finalized = self.build_finalized_transcription(&output, &processed);
+        let finalized = self.build_finalized_transcription(
+            &output,
+            &processed,
+            EnvConfig::get()
+                .transcription
+                .low_confidence_selection_enabled,
+        );
         self.enqueue_transcription_log(&output, &finalized.text);
 
         if profiling::enabled() {
@@ -241,7 +247,13 @@ impl TranscriptionService {
             dict_timer.log();
         }
 
-        let finalized = self.build_finalized_transcription(&output, &processed);
+        let finalized = self.build_finalized_transcription(
+            &output,
+            &processed,
+            EnvConfig::get()
+                .transcription
+                .low_confidence_selection_enabled,
+        );
         self.enqueue_transcription_log(&output, &finalized.text);
         let _ = event_tx.send(TranscriptionEvent::Completed(finalized.clone()));
 
@@ -268,20 +280,33 @@ impl TranscriptionService {
             dict_timer.log();
         }
 
-        let finalized = self.build_finalized_transcription(&output, &processed);
+        let finalized = self.build_finalized_transcription(
+            &output,
+            &processed,
+            EnvConfig::get()
+                .transcription
+                .low_confidence_selection_enabled,
+        );
         self.enqueue_transcription_log(&output, &finalized.text);
         Ok(finalized)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finalize_output_with_low_confidence_selection_for_test(
+        &self,
+        output: TranscriptionOutput,
+    ) -> Result<FinalizedTranscription> {
+        let processed = self.apply_dictionary(&output.text)?;
+        Ok(self.build_finalized_transcription(&output, &processed, true))
     }
 
     fn build_finalized_transcription(
         &self,
         output: &TranscriptionOutput,
         processed: &crate::domain::dict::ReplacementOutput,
+        low_confidence_selection_enabled: bool,
     ) -> FinalizedTranscription {
-        let low_confidence_selection = if EnvConfig::get()
-            .transcription
-            .low_confidence_selection_enabled
-        {
+        let low_confidence_selection = if low_confidence_selection_enabled {
             plan_low_confidence_selection(
                 output,
                 &processed.span_mappings,
