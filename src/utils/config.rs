@@ -235,7 +235,7 @@ impl EnvConfig {
     /// 環境変数から設定を構築し、妥当性を検証する
     pub(crate) fn from_env() -> Result<Self, ConfigError> {
         let provider = TranscriptionProvider::DEFAULT;
-        let model = load_openai_transcription_model()?;
+        let model = TranscriptionProvider::OpenAi4o.default_model().to_string();
         let realtime_whisper_model = load_realtime_whisper_model()?;
         let mlx_qwen3_asr_model = TranscriptionProvider::MlxQwen3Asr
             .default_model()
@@ -373,14 +373,6 @@ fn csv_env(name: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn load_openai_transcription_model() -> Result<String, ConfigError> {
-    let value = non_empty_env("OPENAI_TRANSCRIBE_MODEL");
-    let model =
-        value.unwrap_or_else(|| TranscriptionProvider::OpenAi4o.default_model().to_string());
-    TranscriptionProvider::OpenAi4o.validate_model(&model)?;
-    Ok(model)
 }
 
 fn load_realtime_whisper_model() -> Result<String, ConfigError> {
@@ -608,36 +600,10 @@ mod tests {
         }
     }
 
-    /// OpenAI の未対応モデルが環境変数に指定されている場合は設定構築に失敗する
-    #[test]
-    fn unsupported_openai_model_in_env_fails_config_loading() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("OPENAI_TRANSCRIBE_MODEL", "whisper-1");
-        }
-
-        let result = EnvConfig::from_env();
-
-        assert_eq!(
-            result,
-            Err(ConfigError::UnsupportedTranscriptionModel {
-                provider: "4o".to_string(),
-                value: "whisper-1".to_string(),
-            })
-        );
-
-        unsafe {
-            std::env::remove_var("OPENAI_TRANSCRIBE_MODEL");
-        }
-    }
-
     /// 環境変数ではなく既定の実行バックエンドを使う
     #[test]
     fn default_transcription_provider_is_used_without_provider_env() {
         let _lock = lock_test_env();
-        unsafe {
-            std::env::remove_var("OPENAI_TRANSCRIBE_MODEL");
-        }
 
         let config = EnvConfig::from_env().unwrap();
 
@@ -661,9 +627,6 @@ mod tests {
     #[test]
     fn realtime_whisper_model_uses_default_model() {
         let _lock = lock_test_env();
-        unsafe {
-            std::env::remove_var("OPENAI_TRANSCRIBE_MODEL");
-        }
 
         let config = EnvConfig::from_env().unwrap();
 

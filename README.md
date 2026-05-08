@@ -25,7 +25,6 @@ cp .env.example .env
 ```
 
 - TRANSCRIPTION_API_KEY=your_openai_api_key_here # OpenAI 利用時のみ
-- OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe # 4o: gpt-4o-mini-transcribe / gpt-4o-transcribe
 - OPENAI_TRANSCRIBE_STREAMING=false
 - INPUT_DEVICE_PRIORITY="device1,device2,device3"
 - VOICE_INPUT_ENV_PATH=/path/to/.env

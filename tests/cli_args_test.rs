@@ -3,7 +3,6 @@ use std::process::Command;
 fn run_cmd(args: &[&str]) -> std::process::Output {
     let mut command = Command::new("cargo");
     command
-        .env("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-transcribe")
         .args(["run", "--bin", "voice_input", "--"])
         .args(args);
     command.output().expect("Failed to run command")
