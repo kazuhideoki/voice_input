@@ -6,12 +6,12 @@
 //! - 自動停止タイマーの管理
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
-use crate::application::{AudioBackend, AudioData, Recorder};
+use crate::application::{AudioBackend, AudioData, AudioDataFormat, Recorder};
 use crate::error::{Result, VoiceInputError};
 
 /// 録音状態
@@ -153,21 +153,12 @@ impl Default for RecordingConfig {
 }
 
 /// 録音オプション
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct RecordingOptions {
     /// 録音開始時のプロンプト
     pub prompt: Option<String>,
     /// 録音停止後に音声データを保存するパス
     pub save_audio_path: Option<PathBuf>,
-}
-
-impl Default for RecordingOptions {
-    fn default() -> Self {
-        Self {
-            prompt: None,
-            save_audio_path: None,
-        }
-    }
 }
 
 /// 録音コンテキスト情報
@@ -267,8 +258,17 @@ impl<T: AudioBackend> RecordingService<T> {
             }
         }
 
+        let requested_format = stopped_context
+            .save_audio_path
+            .as_deref()
+            .and_then(audio_format_from_path);
+
         // レコーダーを停止
-        let audio_data = match self.recorder.borrow_mut().stop() {
+        let stop_result = match requested_format {
+            Some(format) => self.recorder.borrow_mut().stop_as(format),
+            None => self.recorder.borrow_mut().stop(),
+        };
+        let audio_data = match stop_result {
             Ok(audio_data) => audio_data,
             Err(crate::application::AudioBackendError::NoAudioCaptured { message }) => {
                 ctx.state = RecordingState::Idle;
@@ -361,6 +361,14 @@ impl<T: AudioBackend> RecordingService<T> {
     }
 }
 
+fn audio_format_from_path(path: &Path) -> Option<AudioDataFormat> {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some(extension) if extension.eq_ignore_ascii_case("wav") => Some(AudioDataFormat::Wav),
+        Some(extension) if extension.eq_ignore_ascii_case("flac") => Some(AudioDataFormat::Flac),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,6 +403,11 @@ mod tests {
         recover_calls: Arc<std::sync::atomic::AtomicUsize>,
     }
 
+    struct FormatObservedAudioBackend {
+        is_recording: Arc<AtomicBool>,
+        requested_format: Arc<std::sync::Mutex<Option<AudioDataFormat>>>,
+    }
+
     impl FailingStopAudioBackend {
         fn new() -> Self {
             Self {
@@ -416,6 +429,15 @@ mod tests {
             Self {
                 is_recording: Arc::new(AtomicBool::new(false)),
                 recover_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            }
+        }
+    }
+
+    impl FormatObservedAudioBackend {
+        fn new() -> Self {
+            Self {
+                is_recording: Arc::new(AtomicBool::new(false)),
+                requested_format: Arc::new(std::sync::Mutex::new(None)),
             }
         }
     }
@@ -516,6 +538,47 @@ mod tests {
         ) -> std::result::Result<(), crate::application::AudioBackendError> {
             self.recover_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
+        }
+    }
+
+    impl crate::application::AudioBackend for FormatObservedAudioBackend {
+        fn start_recording(
+            &self,
+        ) -> std::result::Result<(), crate::application::AudioBackendError> {
+            self.is_recording.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn stop_recording(
+            &self,
+        ) -> std::result::Result<AudioData, crate::application::AudioBackendError> {
+            self.is_recording.store(false, Ordering::SeqCst);
+            Ok(AudioData {
+                bytes: b"fLaC".to_vec(),
+                mime_type: "audio/flac",
+                file_name: "audio.flac".to_string(),
+            })
+        }
+
+        fn stop_recording_as(
+            &self,
+            format: AudioDataFormat,
+        ) -> std::result::Result<AudioData, crate::application::AudioBackendError> {
+            *self.requested_format.lock().unwrap() = Some(format);
+            self.is_recording.store(false, Ordering::SeqCst);
+            let (bytes, mime_type, file_name) = match format {
+                AudioDataFormat::Wav => (b"RIFF".to_vec(), "audio/wav", "audio.wav"),
+                AudioDataFormat::Flac => (b"fLaC".to_vec(), "audio/flac", "audio.flac"),
+            };
+            Ok(AudioData {
+                bytes,
+                mime_type,
+                file_name: file_name.to_string(),
+            })
+        }
+
+        fn is_recording(&self) -> bool {
+            self.is_recording.load(Ordering::SeqCst)
         }
     }
 
@@ -626,6 +689,35 @@ mod tests {
             .await
             .unwrap();
         assert!(service.is_recording());
+    }
+
+    /// wav保存パスが指定された録音停止ではWAV形式をバックエンドへ要求する
+    #[tokio::test]
+    async fn wav_save_path_requests_wav_audio_data() {
+        let backend = FormatObservedAudioBackend::new();
+        let requested_format = backend.requested_format.clone();
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
+        let config = RecordingConfig {
+            max_duration_secs: 30,
+        };
+        let service = RecordingService::new(recorder, config);
+
+        service
+            .start_recording(RecordingOptions {
+                prompt: None,
+                save_audio_path: Some(PathBuf::from("sample.wav")),
+            })
+            .await
+            .unwrap();
+
+        let outcome = service.stop_recording().await.unwrap();
+
+        assert_eq!(
+            *requested_format.lock().unwrap(),
+            Some(AudioDataFormat::Wav)
+        );
+        assert_eq!(outcome.result.audio_data.mime_type, "audio/wav");
+        assert_eq!(&outcome.result.audio_data.bytes, b"RIFF");
     }
 
     /// 待機中に復帰回復を呼ぶとバックエンドに委譲する

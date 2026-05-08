@@ -8,6 +8,13 @@ pub struct AudioData {
     pub file_name: String,
 }
 
+/// 録音停止時に要求する音声エンコード形式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioDataFormat {
+    Wav,
+    Flac,
+}
+
 #[derive(Debug, Error)]
 pub enum AudioBackendError {
     #[error("audio backend state error: {message}")]
@@ -32,6 +39,11 @@ pub trait AudioBackend {
 
     /// 録音を停止し、音声データを返す。
     fn stop_recording(&self) -> Result<AudioData, AudioBackendError>;
+
+    /// 指定した形式で録音を停止し、音声データを返す。
+    fn stop_recording_as(&self, _format: AudioDataFormat) -> Result<AudioData, AudioBackendError> {
+        self.stop_recording()
+    }
 
     /// 現在録音中であれば `true`。
     fn is_recording(&self) -> bool;
@@ -61,6 +73,11 @@ impl<T: AudioBackend> Recorder<T> {
     /// 録音を停止し、音声データを返します。
     pub fn stop(&mut self) -> Result<AudioData, AudioBackendError> {
         self.backend.stop_recording()
+    }
+
+    /// 指定した形式で録音を停止し、音声データを返します。
+    pub fn stop_as(&mut self, format: AudioDataFormat) -> Result<AudioData, AudioBackendError> {
+        self.backend.stop_recording_as(format)
     }
 
     /// 録音中かどうかを返します。
