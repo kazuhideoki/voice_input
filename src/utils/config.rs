@@ -41,8 +41,6 @@ pub enum ConfigError {
     InvalidMaxDurationSecs { value: String },
     #[error("{name} must be either 'true' or 'false': {value}")]
     InvalidBooleanEnv { name: &'static str, value: String },
-    #[error("VOICE_INPUT_AUDIO_FORMAT must be either 'flac' or 'wav': {value}")]
-    InvalidAudioFormat { value: String },
 }
 
 /// 転写バックエンド種別
@@ -239,10 +237,11 @@ impl EnvConfig {
         let provider = TranscriptionProvider::DEFAULT;
         let model = load_openai_transcription_model()?;
         let realtime_whisper_model = load_realtime_whisper_model()?;
-        let mlx_qwen3_asr_model = load_mlx_qwen3_asr_model();
+        let mlx_qwen3_asr_model = TranscriptionProvider::MlxQwen3Asr
+            .default_model()
+            .to_string();
         let streaming_enabled = parse_bool_env("OPENAI_TRANSCRIBE_STREAMING")?;
-        let mlx_qwen3_asr_command = load_mlx_qwen3_asr_command();
-        let preferred_format = PreferredAudioFormat::from_env()?;
+        let mlx_qwen3_asr_command = "mlx-qwen3-asr".to_string();
         let max_duration_secs = match std::env::var("VOICE_INPUT_MAX_SECS") {
             Ok(value) => value
                 .parse()
@@ -277,7 +276,7 @@ impl EnvConfig {
             },
             audio: AudioConfig {
                 input_device_priorities: csv_env("INPUT_DEVICE_PRIORITY"),
-                preferred_format,
+                preferred_format: PreferredAudioFormat::Flac,
             },
             recording: RecordingConfig { max_duration_secs },
             profiling: ProfilingConfig {
@@ -392,18 +391,6 @@ fn load_realtime_whisper_model() -> Result<String, ConfigError> {
     Ok(model)
 }
 
-fn load_mlx_qwen3_asr_model() -> String {
-    non_empty_env("MLX_QWEN3_ASR_MODEL").unwrap_or_else(|| {
-        TranscriptionProvider::MlxQwen3Asr
-            .default_model()
-            .to_string()
-    })
-}
-
-fn load_mlx_qwen3_asr_command() -> String {
-    non_empty_env("MLX_QWEN3_ASR_COMMAND").unwrap_or_else(|| "mlx-qwen3-asr".into())
-}
-
 fn parse_bool_env(name: &'static str) -> Result<bool, ConfigError> {
     match std::env::var(name) {
         Ok(value) => match value.as_str() {
@@ -412,25 +399,6 @@ fn parse_bool_env(name: &'static str) -> Result<bool, ConfigError> {
             _ => Err(ConfigError::InvalidBooleanEnv { name, value }),
         },
         Err(_) => Ok(false),
-    }
-}
-
-impl PreferredAudioFormat {
-    fn from_env() -> Result<Self, ConfigError> {
-        match non_empty_env("VOICE_INPUT_AUDIO_FORMAT") {
-            Some(value) => Self::parse(&value),
-            None => Ok(Self::Flac),
-        }
-    }
-
-    fn parse(value: &str) -> Result<Self, ConfigError> {
-        match value.to_ascii_lowercase().as_str() {
-            "flac" => Ok(Self::Flac),
-            "wav" => Ok(Self::Wav),
-            _ => Err(ConfigError::InvalidAudioFormat {
-                value: value.to_string(),
-            }),
-        }
     }
 }
 
@@ -669,7 +637,6 @@ mod tests {
         let _lock = lock_test_env();
         unsafe {
             std::env::remove_var("OPENAI_TRANSCRIBE_MODEL");
-            std::env::remove_var("MLX_QWEN3_ASR_MODEL");
         }
 
         let config = EnvConfig::from_env().unwrap();
@@ -707,42 +674,19 @@ mod tests {
         assert_eq!(config.transcription.model, "gpt-4o-mini-transcribe");
     }
 
-    /// mlx-qwen3-asr コマンドは明示設定された値をそのまま使う
+    /// mlx-qwen3-asr コマンドは既定コマンドを使う
     #[test]
-    fn mlx_qwen3_asr_command_uses_configured_value_as_is() {
+    fn mlx_qwen3_asr_command_uses_default_command() {
         let _lock = lock_test_env();
-        let original_command = std::env::var("MLX_QWEN3_ASR_COMMAND").ok();
-
-        unsafe {
-            std::env::set_var("MLX_QWEN3_ASR_COMMAND", "/Users/example/bin/mlx-qwen3-asr");
-        }
 
         let config = EnvConfig::from_env().unwrap();
 
-        assert_eq!(
-            config.transcription.mlx_qwen3_asr_command,
-            "/Users/example/bin/mlx-qwen3-asr"
-        );
-
-        if let Some(value) = original_command {
-            unsafe {
-                std::env::set_var("MLX_QWEN3_ASR_COMMAND", value);
-            }
-        } else {
-            unsafe {
-                std::env::remove_var("MLX_QWEN3_ASR_COMMAND");
-            }
-        }
+        assert_eq!(config.transcription.mlx_qwen3_asr_command, "mlx-qwen3-asr");
     }
 
     /// 音声フォーマットは既定で FLAC を選ぶ
     #[test]
     fn audio_format_defaults_to_flac() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_AUDIO_FORMAT");
-        }
-
         let config = EnvConfig::from_env().unwrap();
 
         assert_eq!(config.audio.preferred_format, PreferredAudioFormat::Flac);
@@ -971,40 +915,6 @@ mod tests {
         }
     }
 
-    /// 録音フォーマットは環境変数から読み込める
-    #[test]
-    fn preferred_audio_format_is_loaded_from_environment() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_AUDIO_FORMAT", "wav");
-        }
-
-        let config = EnvConfig::from_env().unwrap();
-
-        assert_eq!(config.audio.preferred_format, PreferredAudioFormat::Wav);
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_AUDIO_FORMAT");
-        }
-    }
-
-    /// mlx-qwen3-asrモデルは専用環境変数から読み込める
-    #[test]
-    fn mlx_qwen3_asr_model_is_loaded_from_dedicated_environment() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("MLX_QWEN3_ASR_MODEL", "custom/qwen3-asr");
-        }
-
-        let config = EnvConfig::from_env().unwrap();
-
-        assert_eq!(config.transcription.mlx_qwen3_asr_model, "custom/qwen3-asr");
-
-        unsafe {
-            std::env::remove_var("MLX_QWEN3_ASR_MODEL");
-        }
-    }
-
     /// HTTPプロキシ設定は大文字環境変数から読み込める
     #[test]
     fn proxy_settings_are_loaded_from_uppercase_environment() {
@@ -1091,28 +1001,6 @@ mod tests {
 
         unsafe {
             std::env::remove_var("VOICE_INPUT_PROFILE");
-        }
-    }
-
-    /// 録音フォーマットは未対応値を拒否する
-    #[test]
-    fn try_from_env_rejects_invalid_audio_format() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_AUDIO_FORMAT", "mp3");
-        }
-
-        let result = EnvConfig::try_from_env();
-
-        assert_eq!(
-            result,
-            Err(ConfigError::InvalidAudioFormat {
-                value: "mp3".to_string(),
-            })
-        );
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_AUDIO_FORMAT");
         }
     }
 }

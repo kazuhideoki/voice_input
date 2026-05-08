@@ -26,21 +26,18 @@ cp .env.example .env
 
 - TRANSCRIPTION_API_KEY=your_openai_api_key_here # OpenAI 利用時のみ
 - OPENAI_TRANSCRIBE_MODEL=gpt-4o-mini-transcribe # 4o: gpt-4o-mini-transcribe / gpt-4o-transcribe
-- MLX_QWEN3_ASR_MODEL=Qwen/Qwen3-ASR-1.7B
 - OPENAI_TRANSCRIBE_STREAMING=false
-- MLX_QWEN3_ASR_COMMAND=mlx-qwen3-asr
 - INPUT_DEVICE_PRIORITY="device1,device2,device3"
 - VOICE_INPUT_ENV_PATH=/path/to/.env
 - VOICE_INPUT_SOCKET_PATH=/custom/path/voice_input.sock
 - VOICE_INPUT_SOCKET_DIR=/custom/socket/dir # `VOICE_INPUT_SOCKET_PATH` 未設定時のみ有効
 - XDG_DATA_HOME=/custom/xdg/data
-- VOICE_INPUT_STOP_POST_ROLL_MS=300 # 停止要求後に追加で録音する時間（末尾切れ対策）
 
 `.env` はデフォルトでカレントディレクトリから読み込まれ、`VOICE_INPUT_ENV_PATH` が設定されている場合はそのパスが優先されます。
 環境変数は `src/utils/config.rs` の `EnvConfig` で起動時に一度だけ読み込まれます。
 転写バックエンドは環境変数ではなく、`voice_input start --transcription-provider 4o`、`voice_input start --transcription-provider realtime-whisper`、または `voice_input start --transcription-provider mlx-qwen3-asr` のようにクライアントから指定します。`toggle` でも同じフラグを使えます。
 `realtime-whisper` は録音中の PCM フレームを OpenAI Realtime API へ送信し、delta を入力先へ逐次反映します。`gpt-realtime-whisper` は server VAD 非対応のため、停止時に手動 commit します。
-`mlx-qwen3-asr` 指定時は `MLX_QWEN3_ASR_COMMAND` のコマンドを使い、録音データは CLI 連携のため一時ファイル経由で渡します。
+`mlx-qwen3-asr` 指定時は `mlx-qwen3-asr` コマンドを使い、録音データは CLI 連携のため一時ファイル経由で渡します。
 
 ## 音声処理
 
