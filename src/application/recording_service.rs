@@ -9,9 +9,12 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-use crate::application::{AudioBackend, AudioData, AudioDataFormat, Recorder};
+use crate::application::{
+    AudioBackend, AudioData, AudioDataFormat, AudioFrame, CapturedAudio, Recorder,
+};
 use crate::error::{Result, VoiceInputError};
 use crate::utils::config::TranscriptionProvider;
 
@@ -148,6 +151,13 @@ pub struct StopRecordingOutcome {
     pub context: StoppedSessionContext,
 }
 
+/// 録音停止時の raw capture 結果
+#[derive(Clone, Debug)]
+pub struct StopCaptureOutcome {
+    pub capture: CapturedAudio,
+    pub context: StoppedSessionContext,
+}
+
 /// 録音設定
 #[derive(Clone, Debug)]
 pub struct RecordingConfig {
@@ -174,6 +184,8 @@ pub struct RecordingOptions {
     pub transcription_provider: TranscriptionProvider,
     /// 転写バックエンドが要求する音声形式
     pub requested_audio_format: Option<AudioDataFormat>,
+    /// 録音中 PCM フレームの送信先
+    pub audio_frame_tx: Option<mpsc::UnboundedSender<AudioFrame>>,
 }
 
 impl Default for RecordingOptions {
@@ -183,6 +195,7 @@ impl Default for RecordingOptions {
             save_audio_path: None,
             transcription_provider: TranscriptionProvider::DEFAULT,
             requested_audio_format: None,
+            audio_frame_tx: None,
         }
     }
 }
@@ -258,9 +271,10 @@ impl<T: AudioBackend> RecordingService<T> {
         };
 
         // レコーダーを開始
+        let audio_frame_tx = options.audio_frame_tx.clone();
         self.recorder
             .borrow_mut()
-            .start()
+            .start_with_frame_tx(audio_frame_tx)
             .map_err(VoiceInputError::from)?;
 
         ctx.state = RecordingState::Recording(ActiveRecordingSession::new(session_id, options));
@@ -313,6 +327,49 @@ impl<T: AudioBackend> RecordingService<T> {
             },
             context: stopped_context,
         })
+    }
+
+    /// 録音を停止し、エンコード前の raw PCM を返す
+    pub async fn stop_capture(&self) -> Result<StopCaptureOutcome> {
+        let mut ctx = self
+            .context
+            .lock()
+            .map_err(|e| VoiceInputError::SystemError(format!("Context lock error: {}", e)))?;
+
+        let stopped_context = ctx.state.stopped_context()?;
+        if let RecordingState::Recording(session) = &mut ctx.state {
+            if let Some(cancel) = session.cancel.take() {
+                let _ = cancel.send(());
+            }
+        }
+
+        let capture = match self.recorder.borrow_mut().stop_capture() {
+            Ok(capture) => capture,
+            Err(crate::application::AudioBackendError::NoAudioCaptured { message }) => {
+                ctx.state = RecordingState::Idle;
+                return Err(VoiceInputError::NoAudioCaptured(message));
+            }
+            Err(err) => return Err(VoiceInputError::from(err)),
+        };
+
+        ctx.state = RecordingState::Idle;
+
+        Ok(StopCaptureOutcome {
+            capture,
+            context: stopped_context,
+        })
+    }
+
+    /// raw PCM キャプチャを既存の保存/転写用音声データへエンコードする
+    pub fn encode_capture(
+        &self,
+        capture: CapturedAudio,
+        requested_format: Option<AudioDataFormat>,
+    ) -> Result<AudioData> {
+        self.recorder
+            .borrow()
+            .encode_capture(capture, requested_format)
+            .map_err(VoiceInputError::from)
     }
 
     /// 録音中かどうかを確認

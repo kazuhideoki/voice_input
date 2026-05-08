@@ -30,11 +30,11 @@ pub(crate) fn lock_test_env() -> std::sync::MutexGuard<'static, ()> {
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ConfigError {
     #[error(
-        "TRANSCRIPTION_PROVIDER={value} is unsupported. Supported providers: 4o, mlx-qwen3-asr"
+        "TRANSCRIPTION_PROVIDER={value} is unsupported. Supported providers: 4o, realtime-whisper, mlx-qwen3-asr"
     )]
     UnsupportedTranscriptionProvider { value: String },
     #[error(
-        "TRANSCRIPTION_MODEL={value} is unsupported for provider {provider}. Supported OpenAI models: gpt-4o-mini-transcribe, gpt-4o-transcribe"
+        "TRANSCRIPTION_MODEL={value} is unsupported for provider {provider}. Supported models: gpt-4o-mini-transcribe, gpt-4o-transcribe, gpt-realtime-whisper"
     )]
     UnsupportedTranscriptionModel { provider: String, value: String },
     #[error("VOICE_INPUT_MAX_SECS must be an integer: {value}")]
@@ -57,13 +57,15 @@ pub enum ConfigError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TranscriptionProvider {
     #[serde(rename = "4o")]
-    OpenAi,
+    OpenAi4o,
+    #[serde(rename = "realtime-whisper")]
+    OpenAiRealtimeWhisper,
     #[serde(rename = "mlx-qwen3-asr")]
     MlxQwen3Asr,
 }
 
 impl TranscriptionProvider {
-    pub const DEFAULT: Self = Self::OpenAi;
+    pub const DEFAULT: Self = Self::OpenAi4o;
 
     /// 環境変数から転写バックエンド設定を生成
     pub fn from_env() -> Result<Self, ConfigError> {
@@ -76,7 +78,8 @@ impl TranscriptionProvider {
     /// 文字列から転写バックエンド設定を生成
     pub fn parse(value: &str) -> Result<Self, ConfigError> {
         match value {
-            "4o" => Ok(Self::OpenAi),
+            "4o" => Ok(Self::OpenAi4o),
+            "realtime-whisper" => Ok(Self::OpenAiRealtimeWhisper),
             "mlx-qwen3-asr" => Ok(Self::MlxQwen3Asr),
             unsupported => Err(ConfigError::UnsupportedTranscriptionProvider {
                 value: unsupported.to_string(),
@@ -87,7 +90,8 @@ impl TranscriptionProvider {
     /// 環境変数未指定時のモデル名を返す
     pub fn default_model(&self) -> &'static str {
         match self {
-            Self::OpenAi => "gpt-4o-mini-transcribe",
+            Self::OpenAi4o => "gpt-4o-mini-transcribe",
+            Self::OpenAiRealtimeWhisper => "gpt-realtime-whisper",
             Self::MlxQwen3Asr => "Qwen/Qwen3-ASR-1.7B",
         }
     }
@@ -95,8 +99,15 @@ impl TranscriptionProvider {
     /// モデル名を検証する
     pub fn validate_model(&self, value: &str) -> Result<(), ConfigError> {
         match self {
-            Self::OpenAi => match value {
+            Self::OpenAi4o => match value {
                 "gpt-4o-mini-transcribe" | "gpt-4o-transcribe" => Ok(()),
+                unsupported => Err(ConfigError::UnsupportedTranscriptionModel {
+                    provider: self.as_str().to_string(),
+                    value: unsupported.to_string(),
+                }),
+            },
+            Self::OpenAiRealtimeWhisper => match value {
+                "gpt-realtime-whisper" => Ok(()),
                 unsupported => Err(ConfigError::UnsupportedTranscriptionModel {
                     provider: self.as_str().to_string(),
                     value: unsupported.to_string(),
@@ -109,9 +120,15 @@ impl TranscriptionProvider {
     /// バックエンド名を文字列で取得
     pub fn as_str(&self) -> &str {
         match self {
-            Self::OpenAi => "4o",
+            Self::OpenAi4o => "4o",
+            Self::OpenAiRealtimeWhisper => "realtime-whisper",
             Self::MlxQwen3Asr => "mlx-qwen3-asr",
         }
+    }
+
+    /// OpenAI API キーを利用する provider かどうかを返す
+    pub fn uses_openai_api(&self) -> bool {
+        matches!(self, Self::OpenAi4o | Self::OpenAiRealtimeWhisper)
     }
 }
 
@@ -124,6 +141,8 @@ pub struct TranscriptionConfig {
     pub api_key: Option<String>,
     /// 転写モデル名
     pub model: String,
+    /// OpenAI Realtime Whisper のモデル名
+    pub realtime_whisper_model: String,
     /// mlx-qwen3-asr のモデル名
     pub mlx_qwen3_asr_model: String,
     /// ストリーミング直接入力を有効にする
@@ -236,6 +255,7 @@ impl EnvConfig {
         let env_provider = TranscriptionProvider::from_env()?;
         let provider = TranscriptionProvider::DEFAULT;
         let model = load_openai_transcription_model(env_provider)?;
+        let realtime_whisper_model = load_realtime_whisper_model(env_provider)?;
         let mlx_qwen3_asr_model = load_mlx_qwen3_asr_model(env_provider);
         let streaming_enabled = parse_bool_env("OPENAI_TRANSCRIBE_STREAMING")?;
         let mlx_qwen3_asr_command = load_mlx_qwen3_asr_command();
@@ -258,6 +278,7 @@ impl EnvConfig {
                 api_key: non_empty_env("TRANSCRIPTION_API_KEY")
                     .or_else(|| non_empty_env("OPENAI_API_KEY")),
                 model,
+                realtime_whisper_model,
                 mlx_qwen3_asr_model,
                 streaming_enabled,
                 log_path: non_empty_env("OPENAI_TRANSCRIPTION_LOG_PATH").map(PathBuf::from),
@@ -375,14 +396,31 @@ fn csv_env(name: &str) -> Vec<String> {
 fn load_openai_transcription_model(
     env_provider: TranscriptionProvider,
 ) -> Result<String, ConfigError> {
-    let value = if env_provider == TranscriptionProvider::OpenAi {
+    let value = if env_provider == TranscriptionProvider::OpenAi4o {
         non_empty_env("TRANSCRIPTION_MODEL").or_else(|| non_empty_env("OPENAI_TRANSCRIBE_MODEL"))
     } else {
         non_empty_env("OPENAI_TRANSCRIBE_MODEL")
     };
 
-    let model = value.unwrap_or_else(|| TranscriptionProvider::OpenAi.default_model().to_string());
-    TranscriptionProvider::OpenAi.validate_model(&model)?;
+    let model =
+        value.unwrap_or_else(|| TranscriptionProvider::OpenAi4o.default_model().to_string());
+    TranscriptionProvider::OpenAi4o.validate_model(&model)?;
+    Ok(model)
+}
+
+fn load_realtime_whisper_model(env_provider: TranscriptionProvider) -> Result<String, ConfigError> {
+    let value = if env_provider == TranscriptionProvider::OpenAiRealtimeWhisper {
+        non_empty_env("TRANSCRIPTION_MODEL")
+    } else {
+        None
+    };
+
+    let model = value.unwrap_or_else(|| {
+        TranscriptionProvider::OpenAiRealtimeWhisper
+            .default_model()
+            .to_string()
+    });
+    TranscriptionProvider::OpenAiRealtimeWhisper.validate_model(&model)?;
     Ok(model)
 }
 
@@ -422,7 +460,9 @@ impl PreferredAudioFormat {
         match non_empty_env("VOICE_INPUT_AUDIO_FORMAT") {
             Some(value) => Self::parse_for_provider(provider, &value),
             None => Ok(match provider {
-                TranscriptionProvider::OpenAi => Self::Flac,
+                TranscriptionProvider::OpenAi4o | TranscriptionProvider::OpenAiRealtimeWhisper => {
+                    Self::Flac
+                }
                 TranscriptionProvider::MlxQwen3Asr => Self::Wav,
             }),
         }
@@ -489,9 +529,10 @@ mod tests {
 
     fn openai_transcription_config() -> TranscriptionConfig {
         TranscriptionConfig {
-            provider: TranscriptionProvider::OpenAi,
+            provider: TranscriptionProvider::OpenAi4o,
             api_key: None,
             model: "gpt-4o-mini-transcribe".to_string(),
+            realtime_whisper_model: "gpt-realtime-whisper".to_string(),
             mlx_qwen3_asr_model: "Qwen/Qwen3-ASR-1.7B".to_string(),
             streaming_enabled: false,
             log_path: None,
@@ -505,7 +546,11 @@ mod tests {
     fn supported_transcription_providers_are_parsed() {
         assert_eq!(
             TranscriptionProvider::parse("4o").unwrap(),
-            TranscriptionProvider::OpenAi
+            TranscriptionProvider::OpenAi4o
+        );
+        assert_eq!(
+            TranscriptionProvider::parse("realtime-whisper").unwrap(),
+            TranscriptionProvider::OpenAiRealtimeWhisper
         );
         assert_eq!(
             TranscriptionProvider::parse("mlx-qwen3-asr").unwrap(),
@@ -516,7 +561,7 @@ mod tests {
     /// OpenAI の未対応モデルは設定値として拒否する
     #[test]
     fn unsupported_openai_model_is_rejected() {
-        let error = TranscriptionProvider::OpenAi
+        let error = TranscriptionProvider::OpenAi4o
             .validate_model("whisper-1")
             .unwrap_err();
         assert_eq!(
@@ -525,6 +570,16 @@ mod tests {
                 provider: "4o".to_string(),
                 value: "whisper-1".to_string(),
             }
+        );
+    }
+
+    /// Realtime Whisper は専用モデルを受け入れる
+    #[test]
+    fn realtime_whisper_accepts_realtime_whisper_model() {
+        assert!(
+            TranscriptionProvider::OpenAiRealtimeWhisper
+                .validate_model("gpt-realtime-whisper")
+                .is_ok()
         );
     }
 
@@ -684,8 +739,15 @@ mod tests {
 
         let config = EnvConfig::from_env().unwrap();
 
-        assert_eq!(config.transcription.provider, TranscriptionProvider::OpenAi);
+        assert_eq!(
+            config.transcription.provider,
+            TranscriptionProvider::OpenAi4o
+        );
         assert_eq!(config.transcription.model, "gpt-4o-mini-transcribe");
+        assert_eq!(
+            config.transcription.realtime_whisper_model,
+            "gpt-realtime-whisper"
+        );
         assert_eq!(
             config.transcription.mlx_qwen3_asr_model,
             "Qwen/Qwen3-ASR-1.7B"
@@ -694,6 +756,30 @@ mod tests {
 
         unsafe {
             std::env::remove_var("TRANSCRIPTION_PROVIDER");
+        }
+    }
+
+    /// realtime-whisper指定時はTRANSCRIPTION_MODELを専用モデルとして読み込む
+    #[test]
+    fn realtime_whisper_model_is_loaded_from_transcription_model() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("TRANSCRIPTION_PROVIDER", "realtime-whisper");
+            std::env::set_var("TRANSCRIPTION_MODEL", "gpt-realtime-whisper");
+            std::env::remove_var("OPENAI_TRANSCRIBE_MODEL");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(
+            config.transcription.realtime_whisper_model,
+            "gpt-realtime-whisper"
+        );
+        assert_eq!(config.transcription.model, "gpt-4o-mini-transcribe");
+
+        unsafe {
+            std::env::remove_var("TRANSCRIPTION_PROVIDER");
+            std::env::remove_var("TRANSCRIPTION_MODEL");
         }
     }
 

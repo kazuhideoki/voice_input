@@ -140,3 +140,31 @@ fn start_command_preserves_transcription_provider() {
         _ => panic!("Expected Start command"),
     }
 }
+
+/// StartコマンドがRealtime Whisper指定をJSON文字列で保持する
+#[test]
+fn start_command_preserves_realtime_whisper_transcription_provider() {
+    let cmd = IpcCmd::Start {
+        prompt: None,
+        save_audio_path: None,
+        transcription_provider: Some(TranscriptionProvider::OpenAiRealtimeWhisper),
+    };
+
+    let json = serde_json::to_string(&cmd).unwrap();
+    assert!(json.contains(r#""transcription_provider":"realtime-whisper""#));
+
+    let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
+
+    match deserialized {
+        IpcCmd::Start {
+            transcription_provider,
+            ..
+        } => {
+            assert_eq!(
+                transcription_provider,
+                Some(TranscriptionProvider::OpenAiRealtimeWhisper)
+            );
+        }
+        _ => panic!("Expected Start command"),
+    }
+}

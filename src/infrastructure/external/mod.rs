@@ -1,6 +1,7 @@
 pub mod mlx_qwen3_asr_adapter;
 pub mod openai;
 pub mod openai_adapter;
+pub mod realtime_whisper_adapter;
 pub mod routing_transcription_adapter;
 pub mod sound;
 pub mod text_input;

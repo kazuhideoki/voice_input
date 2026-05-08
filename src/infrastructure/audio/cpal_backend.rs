@@ -1,6 +1,6 @@
 use super::encoder::{self, AudioFormat};
 use super::{AudioBackend, AudioBackendError};
-use crate::application::{AudioData, AudioDataFormat};
+use crate::application::{AudioData, AudioDataFormat, AudioFrame, CapturedAudio};
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use audioadapter_buffers::SizeError;
@@ -29,6 +29,7 @@ struct MemoryRecordingState {
     channels: u16,
     generation: u64,
     accepting_input: Arc<AtomicBool>,
+    frame_tx: Option<tokio::sync::mpsc::UnboundedSender<AudioFrame>>,
 }
 
 struct ProcessedAudio<'a> {
@@ -55,7 +56,14 @@ struct ReadyInputStream {
     identity: StreamIdentity,
 }
 
-type CaptureTarget = (Arc<Mutex<Vec<i16>>>, Arc<AtomicBool>, u64);
+type StreamingCaptureTarget = (
+    Arc<Mutex<Vec<i16>>>,
+    Arc<AtomicBool>,
+    u64,
+    u32,
+    u16,
+    Option<tokio::sync::mpsc::UnboundedSender<AudioFrame>>,
+);
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 const MIN_RESAMPLE_FRAMES: usize = 256;
@@ -314,18 +322,21 @@ fn try_capture_buffer(
     recording: &AtomicBool,
     capture_generation: &AtomicU64,
     recording_state: &Arc<Mutex<Option<MemoryRecordingState>>>,
-) -> Option<CaptureTarget> {
+) -> Option<StreamingCaptureTarget> {
     if !recording.load(Ordering::SeqCst) {
         return None;
     }
 
-    let (buffer, accepting_input, generation) = {
+    let (buffer, accepting_input, generation, sample_rate, channels, frame_tx) = {
         let state = recording_state.lock().unwrap();
         let state = state.as_ref()?;
         (
             state.buffer.clone(),
             state.accepting_input.clone(),
             state.generation,
+            state.sample_rate,
+            state.channels,
+            state.frame_tx.clone(),
         )
     };
 
@@ -335,7 +346,14 @@ fn try_capture_buffer(
         return None;
     }
 
-    Some((buffer, accepting_input, generation))
+    Some((
+        buffer,
+        accepting_input,
+        generation,
+        sample_rate,
+        channels,
+        frame_tx,
+    ))
 }
 
 fn append_input_i16(
@@ -344,17 +362,28 @@ fn append_input_i16(
     recording_state: &Arc<Mutex<Option<MemoryRecordingState>>>,
     data: &[i16],
 ) {
-    let Some((buffer, accepting_input, generation)) =
+    let Some((buffer, accepting_input, generation, sample_rate, channels, frame_tx)) =
         try_capture_buffer(recording, capture_generation, recording_state)
     else {
         return;
     };
 
     let mut buf = buffer.lock().unwrap();
-    if accepting_input.load(Ordering::SeqCst)
-        && generation == capture_generation.load(Ordering::SeqCst)
-    {
+    let accepted = accepting_input.load(Ordering::SeqCst)
+        && generation == capture_generation.load(Ordering::SeqCst);
+    if accepted {
         buf.extend_from_slice(data);
+    }
+    drop(buf);
+
+    if accepted {
+        if let Some(frame_tx) = frame_tx {
+            let _ = frame_tx.send(AudioFrame {
+                samples: data.to_vec(),
+                sample_rate,
+                channels,
+            });
+        }
     }
 }
 
@@ -364,20 +393,32 @@ fn append_input_f32(
     recording_state: &Arc<Mutex<Option<MemoryRecordingState>>>,
     data: &[f32],
 ) {
-    let Some((buffer, accepting_input, generation)) =
+    let Some((buffer, accepting_input, generation, sample_rate, channels, frame_tx)) =
         try_capture_buffer(recording, capture_generation, recording_state)
     else {
         return;
     };
 
+    let samples: Vec<i16> = data
+        .iter()
+        .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+        .collect();
     let mut buf = buffer.lock().unwrap();
-    if accepting_input.load(Ordering::SeqCst)
-        && generation == capture_generation.load(Ordering::SeqCst)
-    {
-        buf.extend(
-            data.iter()
-                .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16),
-        );
+    let accepted = accepting_input.load(Ordering::SeqCst)
+        && generation == capture_generation.load(Ordering::SeqCst);
+    if accepted {
+        buf.extend_from_slice(&samples);
+    }
+    drop(buf);
+
+    if accepted {
+        if let Some(frame_tx) = frame_tx {
+            let _ = frame_tx.send(AudioFrame {
+                samples,
+                sample_rate,
+                channels,
+            });
+        }
     }
 }
 
@@ -523,7 +564,11 @@ impl CpalAudioBackend {
             })
     }
 
-    fn start_capture_state(&self, input_setup: &CachedInputSetup) -> u64 {
+    fn start_capture_state(
+        &self,
+        input_setup: &CachedInputSetup,
+        frame_tx: Option<tokio::sync::mpsc::UnboundedSender<AudioFrame>>,
+    ) -> u64 {
         let config: StreamConfig = input_setup.supported_config.clone().into();
         let sample_rate = config.sample_rate;
         let channels = config.channels;
@@ -536,6 +581,7 @@ impl CpalAudioBackend {
             channels,
             generation,
             accepting_input: Arc::new(AtomicBool::new(true)),
+            frame_tx,
         });
         self.recording.store(true, Ordering::SeqCst);
         generation
@@ -1000,7 +1046,10 @@ impl CpalAudioBackend {
 
 impl CpalAudioBackend {
     /// 録音ストリームを開始します。
-    fn start_recording(&self) -> Result<(), AudioBackendError> {
+    fn start_recording_inner(
+        &self,
+        frame_tx: Option<tokio::sync::mpsc::UnboundedSender<AudioFrame>>,
+    ) -> Result<(), AudioBackendError> {
         if self.is_recording() {
             return Err(CpalBackendError::AlreadyRecording.into());
         }
@@ -1010,7 +1059,7 @@ impl CpalAudioBackend {
                 .map_err(|error| AudioBackendError::StreamOperation {
                     message: error.to_string(),
                 })?;
-        let generation = self.start_capture_state(&input_setup);
+        let generation = self.start_capture_state(&input_setup, frame_tx.clone());
         if self.wait_for_input_samples(generation, INPUT_READINESS_TIMEOUT) {
             return Ok(());
         }
@@ -1024,7 +1073,7 @@ impl CpalAudioBackend {
                 .map_err(|error| AudioBackendError::StreamOperation {
                     message: format!("audio input rebuild failed: {}", error),
                 })?;
-        let generation = self.start_capture_state(&input_setup);
+        let generation = self.start_capture_state(&input_setup, frame_tx);
         if !self.wait_for_input_samples(generation, INPUT_READINESS_TIMEOUT) {
             self.stop_accepting_current_capture();
             self.invalidate_input_stream();
@@ -1037,11 +1086,8 @@ impl CpalAudioBackend {
         Ok(())
     }
 
-    fn finish_recording(
-        &self,
-        requested_format: Option<AudioDataFormat>,
-    ) -> Result<AudioData, AudioBackendError> {
-        let overall_timer = profiling::Timer::start("audio.stop_recording");
+    fn stop_capture_data(&self) -> Result<CapturedAudio, AudioBackendError> {
+        let overall_timer = profiling::Timer::start("audio.stop_capture");
         if !self.is_recording() {
             return Err(CpalBackendError::NotRecording.into());
         }
@@ -1062,7 +1108,7 @@ impl CpalAudioBackend {
         state.accepting_input.store(false, Ordering::SeqCst);
 
         // メモリモード: バッファからエンコード（既定: FLAC）
-        let samples = state.buffer.lock().unwrap();
+        let mut samples = state.buffer.lock().unwrap();
         let samples_len = samples.len();
         if !has_minimum_capture(samples_len, state.sample_rate, state.channels) {
             drop(samples);
@@ -1084,33 +1130,62 @@ impl CpalAudioBackend {
                     .to_string(),
             });
         }
+
+        let captured = CapturedAudio {
+            samples: std::mem::take(&mut *samples),
+            sample_rate: state.sample_rate,
+            channels: state.channels,
+        };
+        drop(samples);
+
+        if profiling::enabled() {
+            overall_timer.log_with(&format!(
+                "samples={} rate={} ch={}",
+                captured.samples.len(),
+                captured.sample_rate,
+                captured.channels
+            ));
+        } else {
+            overall_timer.log();
+        }
+
+        Ok(captured)
+    }
+
+    fn encode_capture_data(
+        &self,
+        capture: CapturedAudio,
+        requested_format: Option<AudioDataFormat>,
+    ) -> Result<AudioData, AudioBackendError> {
+        let overall_timer = profiling::Timer::start("audio.encode_capture");
+        let samples_len = capture.samples.len();
         let trim_timer = profiling::Timer::start("audio.trim_silence");
-        let trimmed = Self::trim_silence(&samples, state.sample_rate, state.channels);
+        let trimmed = Self::trim_silence(&capture.samples, capture.sample_rate, capture.channels);
         if profiling::enabled() {
             trim_timer.log_with(&format!(
                 "samples={} trimmed={} rate={} ch={}",
                 samples_len,
                 trimmed.len(),
-                state.sample_rate,
-                state.channels
+                capture.sample_rate,
+                capture.channels
             ));
         } else {
             trim_timer.log();
         }
 
         // エンコード前にモノラル化して送信サイズを減らす
-        let mut processed = if state.channels > 1 {
-            let mono = Self::downmix_to_mono(trimmed.as_ref(), state.channels);
+        let mut processed = if capture.channels > 1 {
+            let mono = Self::downmix_to_mono(trimmed.as_ref(), capture.channels);
             ProcessedAudio {
                 samples: Cow::Owned(mono),
-                sample_rate: state.sample_rate,
+                sample_rate: capture.sample_rate,
                 channels: 1,
             }
         } else {
             ProcessedAudio {
                 samples: trimmed,
-                sample_rate: state.sample_rate,
-                channels: state.channels,
+                sample_rate: capture.sample_rate,
+                channels: capture.channels,
             }
         };
 
@@ -1213,6 +1288,14 @@ impl CpalAudioBackend {
         result
     }
 
+    fn finish_recording(
+        &self,
+        requested_format: Option<AudioDataFormat>,
+    ) -> Result<AudioData, AudioBackendError> {
+        let capture = self.stop_capture_data()?;
+        self.encode_capture_data(capture, requested_format)
+    }
+
     /// 録音を停止し、音声データを返します。
     fn stop_recording(&self) -> Result<AudioData, AudioBackendError> {
         self.finish_recording(None)
@@ -1239,7 +1322,14 @@ impl CpalAudioBackend {
 
 impl AudioBackend for CpalAudioBackend {
     fn start_recording(&self) -> Result<(), AudioBackendError> {
-        CpalAudioBackend::start_recording(self)
+        CpalAudioBackend::start_recording_inner(self, None)
+    }
+
+    fn start_recording_with_frame_tx(
+        &self,
+        frame_tx: Option<tokio::sync::mpsc::UnboundedSender<AudioFrame>>,
+    ) -> Result<(), AudioBackendError> {
+        CpalAudioBackend::start_recording_inner(self, frame_tx)
     }
 
     fn stop_recording(&self) -> Result<AudioData, AudioBackendError> {
@@ -1248,6 +1338,18 @@ impl AudioBackend for CpalAudioBackend {
 
     fn stop_recording_as(&self, format: AudioDataFormat) -> Result<AudioData, AudioBackendError> {
         CpalAudioBackend::stop_recording_as(self, format)
+    }
+
+    fn stop_capture(&self) -> Result<CapturedAudio, AudioBackendError> {
+        self.stop_capture_data()
+    }
+
+    fn encode_capture(
+        &self,
+        capture: CapturedAudio,
+        format: Option<AudioDataFormat>,
+    ) -> Result<AudioData, AudioBackendError> {
+        self.encode_capture_data(capture, format)
     }
 
     fn is_recording(&self) -> bool {
@@ -1657,11 +1759,38 @@ mod tests {
             channels: 1,
             generation: 1,
             accepting_input,
+            frame_tx: None,
         })));
 
         append_input_i16(&recording, &capture_generation, &recording_state, &[20, 30]);
 
         assert_eq!(*buffer.lock().unwrap(), vec![10i16]);
+    }
+
+    /// 録音中のcallbackはバッファ保存と同時にPCMフレームを送信する
+    #[test]
+    fn active_callback_sends_audio_frame_to_realtime_channel() {
+        let recording = AtomicBool::new(true);
+        let capture_generation = AtomicU64::new(1);
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let accepting_input = Arc::new(AtomicBool::new(true));
+        let (frame_tx, mut frame_rx) = tokio::sync::mpsc::unbounded_channel();
+        let recording_state = Arc::new(Mutex::new(Some(MemoryRecordingState {
+            buffer: buffer.clone(),
+            sample_rate: 48_000,
+            channels: 1,
+            generation: 1,
+            accepting_input,
+            frame_tx: Some(frame_tx),
+        })));
+
+        append_input_i16(&recording, &capture_generation, &recording_state, &[20, 30]);
+
+        assert_eq!(*buffer.lock().unwrap(), vec![20i16, 30i16]);
+        let frame = frame_rx.try_recv().unwrap();
+        assert_eq!(frame.samples, vec![20i16, 30i16]);
+        assert_eq!(frame.sample_rate, 48_000);
+        assert_eq!(frame.channels, 1);
     }
 
     /// stream 構築失敗時はキャッシュを破棄して cleanup を実行する
@@ -2080,6 +2209,7 @@ mod tests {
             channels: 2,
             generation: 1,
             accepting_input: Arc::new(AtomicBool::new(true)),
+            frame_tx: None,
         };
 
         // bufferが適切に初期化されているか確認
@@ -2160,6 +2290,7 @@ mod tests {
             channels: 1,
             generation: 1,
             accepting_input: Arc::new(AtomicBool::new(true)),
+            frame_tx: None,
         });
         backend.capture_generation.store(1, Ordering::SeqCst);
 
@@ -2196,6 +2327,7 @@ mod tests {
             channels: 1,
             generation: 1,
             accepting_input: Arc::new(AtomicBool::new(true)),
+            frame_tx: None,
         });
         backend.capture_generation.store(1, Ordering::SeqCst);
         backend.recording.store(true, Ordering::SeqCst);
@@ -2224,6 +2356,7 @@ mod tests {
             channels: 2,
             generation: 1,
             accepting_input: Arc::new(AtomicBool::new(true)),
+            frame_tx: None,
         });
         backend.capture_generation.store(1, Ordering::SeqCst);
 

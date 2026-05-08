@@ -71,6 +71,15 @@ fn start_command_accepts_mlx_transcription_provider() {
     assert!(!stderr.contains("error: invalid value"));
 }
 
+/// startコマンドでRealtime Whisper転写バックエンドを指定できる
+#[test]
+fn start_command_accepts_realtime_whisper_transcription_provider() {
+    let output = run_cmd(&["start", "--transcription-provider", "realtime-whisper"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("error: unexpected argument"));
+    assert!(!stderr.contains("error: invalid value"));
+}
+
 /// toggleコマンドで4o転写バックエンドを指定できる
 #[test]
 fn toggle_command_accepts_4o_transcription_provider() {

@@ -1,4 +1,5 @@
 use thiserror::Error;
+use tokio::sync::mpsc;
 
 /// 音声データの返却形式
 #[derive(Debug, Clone)]
@@ -6,6 +7,22 @@ pub struct AudioData {
     pub bytes: Vec<u8>,
     pub mime_type: &'static str,
     pub file_name: String,
+}
+
+/// 録音中に流れる PCM フレーム。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioFrame {
+    pub samples: Vec<i16>,
+    pub sample_rate: u32,
+    pub channels: u16,
+}
+
+/// 録音停止直後の raw PCM キャプチャ。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedAudio {
+    pub samples: Vec<i16>,
+    pub sample_rate: u32,
+    pub channels: u16,
 }
 
 /// 録音停止時に要求する音声エンコード形式。
@@ -37,12 +54,38 @@ pub trait AudioBackend {
     /// 録音を開始。
     fn start_recording(&self) -> Result<(), AudioBackendError>;
 
+    /// 録音中 PCM フレームの送信先を指定して録音を開始。
+    fn start_recording_with_frame_tx(
+        &self,
+        _frame_tx: Option<mpsc::UnboundedSender<AudioFrame>>,
+    ) -> Result<(), AudioBackendError> {
+        self.start_recording()
+    }
+
     /// 録音を停止し、音声データを返す。
     fn stop_recording(&self) -> Result<AudioData, AudioBackendError>;
 
     /// 指定した形式で録音を停止し、音声データを返す。
     fn stop_recording_as(&self, _format: AudioDataFormat) -> Result<AudioData, AudioBackendError> {
         self.stop_recording()
+    }
+
+    /// 録音を停止し、エンコード前の raw PCM を返す。
+    fn stop_capture(&self) -> Result<CapturedAudio, AudioBackendError> {
+        Err(AudioBackendError::AudioData {
+            message: "raw capture is not supported by this audio backend".to_string(),
+        })
+    }
+
+    /// raw PCM キャプチャを音声データへエンコードする。
+    fn encode_capture(
+        &self,
+        _capture: CapturedAudio,
+        _format: Option<AudioDataFormat>,
+    ) -> Result<AudioData, AudioBackendError> {
+        Err(AudioBackendError::AudioData {
+            message: "capture encoding is not supported by this audio backend".to_string(),
+        })
     }
 
     /// 現在録音中であれば `true`。
@@ -70,6 +113,14 @@ impl<T: AudioBackend> Recorder<T> {
         self.backend.start_recording()
     }
 
+    /// 録音中 PCM フレームの送信先を指定して録音を開始します。
+    pub fn start_with_frame_tx(
+        &mut self,
+        frame_tx: Option<mpsc::UnboundedSender<AudioFrame>>,
+    ) -> Result<(), AudioBackendError> {
+        self.backend.start_recording_with_frame_tx(frame_tx)
+    }
+
     /// 録音を停止し、音声データを返します。
     pub fn stop(&mut self) -> Result<AudioData, AudioBackendError> {
         self.backend.stop_recording()
@@ -78,6 +129,20 @@ impl<T: AudioBackend> Recorder<T> {
     /// 指定した形式で録音を停止し、音声データを返します。
     pub fn stop_as(&mut self, format: AudioDataFormat) -> Result<AudioData, AudioBackendError> {
         self.backend.stop_recording_as(format)
+    }
+
+    /// 録音を停止し、エンコード前の raw PCM を返します。
+    pub fn stop_capture(&mut self) -> Result<CapturedAudio, AudioBackendError> {
+        self.backend.stop_capture()
+    }
+
+    /// raw PCM キャプチャを音声データへエンコードします。
+    pub fn encode_capture(
+        &self,
+        capture: CapturedAudio,
+        format: Option<AudioDataFormat>,
+    ) -> Result<AudioData, AudioBackendError> {
+        self.backend.encode_capture(capture, format)
     }
 
     /// 録音中かどうかを返します。

@@ -16,7 +16,7 @@ use crate::infrastructure::external::{
 use crate::utils::config::{TranscriptionConfig, TranscriptionProvider};
 use async_trait::async_trait;
 
-/// リクエストごとに OpenAI と mlx-qwen3-asr を切り替える転写クライアント
+/// リクエストごとに OpenAI 4o と mlx-qwen3-asr を切り替える転写クライアント
 pub struct RoutingTranscriptionAdapter {
     config: TranscriptionConfig,
     openai: OnceCell<OpenAiTranscriptionAdapter>,
@@ -54,7 +54,12 @@ impl TranscriptionClient for RoutingTranscriptionAdapter {
         options: &TranscriptionClientOptions,
     ) -> Result<TranscriptionOutput> {
         match options.provider {
-            TranscriptionProvider::OpenAi => self.openai()?.transcribe(audio, options).await,
+            TranscriptionProvider::OpenAi4o => self.openai()?.transcribe(audio, options).await,
+            TranscriptionProvider::OpenAiRealtimeWhisper => {
+                Err(VoiceInputError::from(TranscriptionClientError::Request {
+                    message: "realtime-whisper requires live audio frame streaming".to_string(),
+                }))
+            }
             TranscriptionProvider::MlxQwen3Asr => {
                 self.mlx_qwen3_asr.transcribe(audio, options).await
             }
@@ -68,10 +73,15 @@ impl TranscriptionClient for RoutingTranscriptionAdapter {
         event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
     ) -> Result<TranscriptionOutput> {
         match options.provider {
-            TranscriptionProvider::OpenAi => {
+            TranscriptionProvider::OpenAi4o => {
                 self.openai()?
                     .transcribe_streaming(audio, options, event_tx)
                     .await
+            }
+            TranscriptionProvider::OpenAiRealtimeWhisper => {
+                Err(VoiceInputError::from(TranscriptionClientError::Request {
+                    message: "realtime-whisper requires live audio frame streaming".to_string(),
+                }))
             }
             TranscriptionProvider::MlxQwen3Asr => {
                 self.mlx_qwen3_asr.transcribe(audio, options).await

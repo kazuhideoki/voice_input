@@ -247,6 +247,25 @@ impl TranscriptionService {
         Ok(finalized)
     }
 
+    /// 転写クライアント以外で得た raw 出力へ辞書変換などの後処理を適用する
+    pub fn finalize_output(&self, output: TranscriptionOutput) -> Result<FinalizedTranscription> {
+        let dict_timer = profiling::Timer::start("transcription.finalize_dict");
+        let processed = self.apply_dictionary(&output.text)?;
+        if profiling::enabled() {
+            dict_timer.log_with(&format!(
+                "text_len={} processed_len={}",
+                output.text.len(),
+                processed.text.len()
+            ));
+        } else {
+            dict_timer.log();
+        }
+
+        let finalized = self.build_finalized_transcription(&output, &processed);
+        self.enqueue_transcription_log(&output, &finalized.text);
+        Ok(finalized)
+    }
+
     fn build_finalized_transcription(
         &self,
         output: &TranscriptionOutput,

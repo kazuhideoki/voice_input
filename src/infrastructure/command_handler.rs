@@ -15,14 +15,21 @@ use tokio::task::spawn_local;
 use tokio::time::Duration;
 
 use crate::application::{
-    AudioData, AudioDataFormat, RecordedAudio, RecordingOptions, RecordingService,
-    TranscriptionService,
+    AudioData, AudioDataFormat, CapturedAudio, RecordedAudio, RecordingOptions, RecordingService,
+    TranscriptionEvent, TranscriptionService,
 };
+use crate::domain::transcription::FinalizedTranscription;
 use crate::error::{Result, VoiceInputError};
 use crate::infrastructure::{
     audio::{AudioBackend, CpalAudioBackend},
-    external::sound::{play_start_sound, play_stop_sound},
+    external::{
+        realtime_whisper_adapter::{
+            RealtimeWhisperConfig, RealtimeWhisperSessionHandle, spawn_realtime_whisper_session,
+        },
+        sound::{play_start_sound, play_stop_sound, resume_apple_music},
+    },
     media_control_service::MediaControlService,
+    transcription_worker::{maybe_select_low_confidence, process_streaming_text_input},
 };
 use crate::ipc::{IpcCmd, IpcResp};
 use crate::utils::config::{EnvConfig, TranscriptionProvider};
@@ -37,6 +44,17 @@ pub struct TranscriptionMessage {
     pub provider: TranscriptionProvider,
 }
 
+struct ActiveRealtimeSession {
+    session_id: u64,
+    session: RealtimeWhisperSessionHandle,
+    event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
+    input_task: tokio::task::JoinHandle<Option<(FinalizedTranscription, bool)>>,
+}
+
+struct RealtimeStopOutcome {
+    save_result: Option<(PathBuf, Result<PathBuf>)>,
+}
+
 /// コマンドハンドラー
 pub struct CommandHandler<T: AudioBackend> {
     recording: Rc<RefCell<RecordingService<T>>>,
@@ -44,6 +62,7 @@ pub struct CommandHandler<T: AudioBackend> {
     transcription: Rc<RefCell<TranscriptionService>>,
     media_control: Rc<RefCell<MediaControlService>>,
     transcription_tx: mpsc::UnboundedSender<TranscriptionMessage>,
+    realtime_session: Rc<RefCell<Option<ActiveRealtimeSession>>>,
 }
 
 impl<T: AudioBackend + 'static> CommandHandler<T> {
@@ -59,6 +78,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             transcription,
             media_control,
             transcription_tx,
+            realtime_session: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -103,17 +123,41 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         play_start_sound();
 
         let provider = transcription_provider.unwrap_or(TranscriptionProvider::DEFAULT);
+        let mut realtime_session = if provider == TranscriptionProvider::OpenAiRealtimeWhisper {
+            Some(self.prepare_realtime_session()?)
+        } else {
+            None
+        };
+        let audio_frame_tx = realtime_session
+            .as_ref()
+            .map(|active| active.session.frame_tx());
+
         // 録音オプションを構築
         let options = RecordingOptions {
             prompt,
             save_audio_path,
             transcription_provider: provider,
             requested_audio_format: requested_audio_format(provider),
+            audio_frame_tx,
         };
 
         // 録音を開始
         let recording = self.recording.clone();
-        let session_id = recording.borrow().start_recording(options).await?;
+        let session_id = match recording.borrow().start_recording(options).await {
+            Ok(session_id) => session_id,
+            Err(error) => {
+                if let Some(active) = realtime_session.take() {
+                    active.session.abort();
+                    active.input_task.abort();
+                }
+                return Err(error);
+            }
+        };
+
+        if let Some(mut active) = realtime_session {
+            active.session_id = session_id;
+            *self.realtime_session.borrow_mut() = Some(active);
+        }
 
         // Apple Music の pause は録音開始後に非同期で行う
         self.spawn_pause_if_needed(session_id);
@@ -125,6 +169,30 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         Ok(IpcResp {
             ok: true,
             msg: format!("recording started (auto-stop in {}s)", max_secs),
+        })
+    }
+
+    fn prepare_realtime_session(&self) -> Result<ActiveRealtimeSession> {
+        if self.realtime_session.borrow().is_some() {
+            return Err(VoiceInputError::SystemError(
+                "realtime-whisper session is already active".to_string(),
+            ));
+        }
+
+        let config = RealtimeWhisperConfig::from_transcription_config(
+            &EnvConfig::get().transcription,
+            "ja".to_string(),
+        )?;
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let input_task =
+            spawn_local(async move { process_streaming_text_input(&mut event_rx).await });
+        let session = spawn_realtime_whisper_session(config, event_tx.clone());
+
+        Ok(ActiveRealtimeSession {
+            session_id: 0,
+            session,
+            event_tx,
+            input_task,
         })
     }
 
@@ -178,6 +246,10 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         // 停止音を再生
         play_stop_sound();
 
+        if self.realtime_session.borrow().is_some() {
+            return self.handle_stop_realtime().await;
+        }
+
         // 録音を停止
         let recording = self.recording.clone();
         let outcome = recording.borrow().stop_recording().await?;
@@ -226,6 +298,36 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         Ok(IpcResp { ok: true, msg })
     }
 
+    async fn handle_stop_realtime(&self) -> Result<IpcResp> {
+        let active = self.realtime_session.borrow_mut().take().ok_or_else(|| {
+            VoiceInputError::SystemError("realtime session not found".to_string())
+        })?;
+
+        let outcome = stop_active_realtime_session(
+            self.recording.clone(),
+            self.transcription.clone(),
+            active,
+        )
+        .await?;
+
+        let msg = match outcome.save_result {
+            Some((_requested_path, Ok(saved_path))) => {
+                format!(
+                    "recording stopped; realtime-whisper completed; audio saved to {}",
+                    saved_path.display()
+                )
+            }
+            Some((path, Err(error))) => format!(
+                "recording stopped; realtime-whisper completed; audio save failed for {}: {}",
+                path.display(),
+                error
+            ),
+            None => "recording stopped; realtime-whisper completed".to_string(),
+        };
+
+        Ok(IpcResp { ok: true, msg })
+    }
+
     /// ステータス取得
     fn handle_status(&self) -> Result<IpcResp> {
         let state = if self.recording.borrow().is_recording() {
@@ -268,10 +370,14 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
         let transcription = &EnvConfig::get().transcription;
         match transcription.provider {
-            crate::utils::config::TranscriptionProvider::OpenAi => {
+            crate::utils::config::TranscriptionProvider::OpenAi4o
+            | crate::utils::config::TranscriptionProvider::OpenAiRealtimeWhisper => {
                 match transcription.api_key.clone() {
                     Some(key) => {
-                        lines.push("TRANSCRIPTION_PROVIDER: 4o".to_string());
+                        lines.push(format!(
+                            "TRANSCRIPTION_PROVIDER: {}",
+                            transcription.provider.as_str()
+                        ));
                         lines.push("TRANSCRIPTION_API_KEY: present".to_string());
                         let client = reqwest::Client::new();
                         match client
@@ -294,7 +400,10 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                         }
                     }
                     None => {
-                        lines.push("TRANSCRIPTION_PROVIDER: 4o".to_string());
+                        lines.push(format!(
+                            "TRANSCRIPTION_PROVIDER: {}",
+                            transcription.provider.as_str()
+                        ));
                         lines.push("TRANSCRIPTION_API_KEY: missing".to_string());
                         ok = false;
                     }
@@ -337,6 +446,8 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     /// 自動停止タイマーをセットアップ
     fn setup_auto_stop_timer(&self) {
         let recording = self.recording.clone();
+        let transcription = self.transcription.clone();
+        let realtime_session = self.realtime_session.clone();
         let tx = self.transcription_tx.clone();
         let max_secs = recording.borrow().config().max_duration_secs;
 
@@ -352,7 +463,17 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                             println!("Auto-stop timer triggered after {}s", max_secs);
                             play_stop_sound();
 
-                            if let Ok(outcome) = recording.borrow().stop_recording().await {
+                            if let Some(active) = realtime_session.borrow_mut().take() {
+                                if let Err(error) = stop_active_realtime_session(
+                                    recording.clone(),
+                                    transcription.clone(),
+                                    active,
+                                )
+                                .await
+                                {
+                                    eprintln!("Realtime auto-stop failed: {}", error);
+                                }
+                            } else if let Ok(outcome) = recording.borrow().stop_recording().await {
                                 if let Some(path) = &outcome.context.save_audio_path {
                                     if let Err(error) = save_audio_file(
                                         path,
@@ -382,11 +503,117 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     }
 }
 
+async fn stop_active_realtime_session<T: AudioBackend + 'static>(
+    recording: Rc<RefCell<RecordingService<T>>>,
+    transcription: Rc<RefCell<TranscriptionService>>,
+    active: ActiveRealtimeSession,
+) -> Result<RealtimeStopOutcome> {
+    let capture_outcome = match recording.borrow().stop_capture().await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            active.session.abort();
+            active.input_task.abort();
+            return Err(error);
+        }
+    };
+
+    let resume_music_after_transcription = capture_outcome.context.music_was_playing;
+    let _defer_guard = scopeguard::guard(resume_music_after_transcription, |should_resume| {
+        if should_resume {
+            tokio::task::spawn_local(async move {
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                resume_apple_music();
+            });
+        }
+    });
+
+    let ActiveRealtimeSession {
+        session_id,
+        session,
+        event_tx,
+        input_task,
+    } = active;
+
+    if session_id != capture_outcome.context.session_id {
+        input_task.abort();
+        return Err(VoiceInputError::SystemError(format!(
+            "realtime session mismatch: active={} stopped={}",
+            session_id, capture_outcome.context.session_id
+        )));
+    }
+
+    let raw_output = match session.finish().await {
+        Ok(output) => output,
+        Err(error) => {
+            input_task.abort();
+            return Err(error);
+        }
+    };
+
+    let finalized = transcription.borrow().finalize_output(raw_output)?;
+    let _ = event_tx.send(TranscriptionEvent::Completed(finalized.clone()));
+
+    match input_task.await {
+        Ok(Some((finalized_for_selection, input_succeeded))) if input_succeeded => {
+            maybe_select_low_confidence(
+                &finalized_for_selection,
+                capture_outcome.context.session_id,
+                recording.clone(),
+            )
+            .await;
+        }
+        Ok(_) => {}
+        Err(error) => {
+            eprintln!("Realtime streaming input task failed: {}", error);
+        }
+    }
+
+    let save_result = capture_outcome
+        .context
+        .save_audio_path
+        .as_ref()
+        .map(|path| {
+            let requested_format =
+                audio_format_from_path(path).or(capture_outcome.context.requested_audio_format);
+            (
+                path.clone(),
+                encode_and_save_capture(
+                    &recording,
+                    capture_outcome.capture.clone(),
+                    requested_format,
+                    path,
+                ),
+            )
+        });
+
+    Ok(RealtimeStopOutcome { save_result })
+}
+
 fn requested_audio_format(provider: TranscriptionProvider) -> Option<AudioDataFormat> {
     match provider {
-        TranscriptionProvider::OpenAi => None,
+        TranscriptionProvider::OpenAi4o | TranscriptionProvider::OpenAiRealtimeWhisper => None,
         TranscriptionProvider::MlxQwen3Asr => Some(AudioDataFormat::Wav),
     }
+}
+
+fn audio_format_from_path(path: &Path) -> Option<AudioDataFormat> {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some(extension) if extension.eq_ignore_ascii_case("wav") => Some(AudioDataFormat::Wav),
+        Some(extension) if extension.eq_ignore_ascii_case("flac") => Some(AudioDataFormat::Flac),
+        _ => None,
+    }
+}
+
+fn encode_and_save_capture<T: AudioBackend>(
+    recording: &Rc<RefCell<RecordingService<T>>>,
+    capture: CapturedAudio,
+    requested_format: Option<AudioDataFormat>,
+    path: &Path,
+) -> Result<PathBuf> {
+    let audio = recording
+        .borrow()
+        .encode_capture(capture, requested_format)?;
+    save_audio_file(path, &audio)
 }
 
 fn save_audio_file(path: &Path, audio: &AudioData) -> Result<PathBuf> {

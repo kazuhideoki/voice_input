@@ -52,7 +52,7 @@ pub async fn handle_transcription<T: AudioBackend>(
         provider,
     };
 
-    let finalized = if provider == TranscriptionProvider::OpenAi
+    let finalized = if provider == TranscriptionProvider::OpenAi4o
         && EnvConfig::get().transcription.streaming_enabled
     {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -222,6 +222,12 @@ impl TextApplier for ProfiledTextApplier {
     }
 }
 
+pub(crate) async fn process_streaming_text_input(
+    event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<TranscriptionEvent>,
+) -> Option<(FinalizedTranscription, bool)> {
+    process_streaming_events(event_rx, &ProfiledTextApplier).await
+}
+
 async fn process_streaming_events(
     event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<TranscriptionEvent>,
     text_applier: &dyn TextApplier,
@@ -328,7 +334,7 @@ async fn select_recent_range_with_profile(trailing_char_count: usize, char_count
     }
 }
 
-async fn maybe_select_low_confidence<T: AudioBackend>(
+pub(crate) async fn maybe_select_low_confidence<T: AudioBackend>(
     finalized: &FinalizedTranscription,
     session_id: u64,
     recording_service: Rc<RefCell<RecordingService<T>>>,

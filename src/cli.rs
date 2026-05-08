@@ -24,7 +24,7 @@ pub enum Cmd {
         /// 録音後の音声データを指定パスへ保存
         #[arg(long, value_name = "PATH")]
         save_audio: Option<PathBuf>,
-        /// 転写バックエンド（4o/mlx-qwen3-asr）
+        /// 転写バックエンド（4o/realtime-whisper/mlx-qwen3-asr）
         #[arg(long, value_name = "PROVIDER", value_parser = parse_transcription_provider)]
         transcription_provider: Option<TranscriptionProvider>,
     },
@@ -37,7 +37,7 @@ pub enum Cmd {
         /// 録音後の音声データを指定パスへ保存
         #[arg(long, value_name = "PATH")]
         save_audio: Option<PathBuf>,
-        /// 転写バックエンド（4o/mlx-qwen3-asr）
+        /// 転写バックエンド（4o/realtime-whisper/mlx-qwen3-asr）
         #[arg(long, value_name = "PROVIDER", value_parser = parse_transcription_provider)]
         transcription_provider: Option<TranscriptionProvider>,
     },

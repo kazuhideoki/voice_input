@@ -10,7 +10,7 @@ Rust 製の **音声録音・文字起こし CLI / デーモン** です。
 | 機能                               | 説明                                             |
 | ---------------------------------- | ------------------------------------------------ |
 | **高速録音トグル**                 | 1 コマンドで録音開始 / 停止を切替                |
-| **複数転写バックエンド**           | OpenAI API または `mlx-qwen3-asr` を利用可能     |
+| **複数転写バックエンド**           | OpenAI 4o / Realtime Whisper / `mlx-qwen3-asr` を利用可能 |
 | **Apple Music 自動ポーズ/再開**    | 録音中は BGM を一時停止、終了後に自動再生        |
 | **単語リスト置換**                 | 転写テキストを辞書で自動置換                     |
 | **録音→転写まで自動**              | 1 コマンドで録音開始から文字起こしまで           |
@@ -26,7 +26,7 @@ cp .env.example .env
 
 - TRANSCRIPTION_PROVIDER=4o # 起動時バリデーション用。転写バックエンドの実行時切り替えには使いません
 - TRANSCRIPTION_API_KEY=your_openai_api_key_here # OpenAI 利用時のみ
-- TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe # OpenAI: gpt-4o-mini-transcribe / gpt-4o-transcribe
+- TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe # 4o: gpt-4o-mini-transcribe / gpt-4o-transcribe、realtime-whisper: gpt-realtime-whisper
 - MLX_QWEN3_ASR_MODEL=Qwen/Qwen3-ASR-1.7B
 - OPENAI_TRANSCRIBE_STREAMING=false
 - MLX_QWEN3_ASR_COMMAND=mlx-qwen3-asr
@@ -40,8 +40,9 @@ cp .env.example .env
 `.env` はデフォルトでカレントディレクトリから読み込まれ、`VOICE_INPUT_ENV_PATH` が設定されている場合はそのパスが優先されます。
 環境変数は `src/utils/config.rs` の `EnvConfig` で起動時に一度だけ読み込まれます。
 `TRANSCRIPTION_PROVIDER` は起動時バリデーションの互換性維持用で、実際の転写バックエンド切り替えには使いません。
-転写バックエンドは `voice_input start --transcription-provider 4o` または `voice_input start --transcription-provider mlx-qwen3-asr` のようにクライアントから指定します。`toggle` でも同じフラグを使えます。
+転写バックエンドは `voice_input start --transcription-provider 4o`、`voice_input start --transcription-provider realtime-whisper`、または `voice_input start --transcription-provider mlx-qwen3-asr` のようにクライアントから指定します。`toggle` でも同じフラグを使えます。
 `TRANSCRIPTION_PROVIDER=4o` のときに `TRANSCRIPTION_MODEL` へ `whisper-1` など未対応モデルを指定した場合は、起動時にエラーになります。
+`realtime-whisper` は録音中の PCM フレームを OpenAI Realtime API へ送信し、delta を入力先へ逐次反映します。`gpt-realtime-whisper` は server VAD 非対応のため、停止時に手動 commit します。
 `mlx-qwen3-asr` 指定時は `MLX_QWEN3_ASR_COMMAND` のコマンドを使い、録音データは CLI 連携のため一時ファイル経由で渡します。
 
 ## 音声処理
