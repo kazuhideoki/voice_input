@@ -30,11 +30,11 @@ pub(crate) fn lock_test_env() -> std::sync::MutexGuard<'static, ()> {
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ConfigError {
     #[error(
-        "TRANSCRIPTION_PROVIDER={value} is unsupported. Supported providers: 4o, realtime-whisper, mlx-qwen3-asr"
+        "transcription provider '{value}' is unsupported. Supported providers: 4o, realtime-whisper, mlx-qwen3-asr"
     )]
     UnsupportedTranscriptionProvider { value: String },
     #[error(
-        "TRANSCRIPTION_MODEL={value} is unsupported for provider {provider}. Supported models: gpt-4o-mini-transcribe, gpt-4o-transcribe, gpt-realtime-whisper"
+        "transcription model '{value}' is unsupported for provider {provider}. Supported models: gpt-4o-mini-transcribe, gpt-4o-transcribe, gpt-realtime-whisper"
     )]
     UnsupportedTranscriptionModel { provider: String, value: String },
     #[error("VOICE_INPUT_MAX_SECS must be an integer: {value}")]
@@ -43,14 +43,6 @@ pub enum ConfigError {
     InvalidBooleanEnv { name: &'static str, value: String },
     #[error("VOICE_INPUT_AUDIO_FORMAT must be either 'flac' or 'wav': {value}")]
     InvalidAudioFormat { value: String },
-    #[error(
-        "VOICE_INPUT_AUDIO_FORMAT={value} is unsupported for provider {provider}. Supported formats: {supported}"
-    )]
-    UnsupportedAudioFormatForProvider {
-        provider: String,
-        value: String,
-        supported: &'static str,
-    },
 }
 
 /// 転写バックエンド種別
@@ -66,14 +58,6 @@ pub enum TranscriptionProvider {
 
 impl TranscriptionProvider {
     pub const DEFAULT: Self = Self::OpenAi4o;
-
-    /// 環境変数から転写バックエンド設定を生成
-    pub fn from_env() -> Result<Self, ConfigError> {
-        match std::env::var("TRANSCRIPTION_PROVIDER") {
-            Ok(value) => Self::parse(&value),
-            Err(_) => Ok(Self::DEFAULT),
-        }
-    }
 
     /// 文字列から転写バックエンド設定を生成
     pub fn parse(value: &str) -> Result<Self, ConfigError> {
@@ -252,14 +236,13 @@ pub struct EnvConfig {
 impl EnvConfig {
     /// 環境変数から設定を構築し、妥当性を検証する
     pub(crate) fn from_env() -> Result<Self, ConfigError> {
-        let env_provider = TranscriptionProvider::from_env()?;
         let provider = TranscriptionProvider::DEFAULT;
-        let model = load_openai_transcription_model(env_provider)?;
-        let realtime_whisper_model = load_realtime_whisper_model(env_provider)?;
-        let mlx_qwen3_asr_model = load_mlx_qwen3_asr_model(env_provider);
+        let model = load_openai_transcription_model()?;
+        let realtime_whisper_model = load_realtime_whisper_model()?;
+        let mlx_qwen3_asr_model = load_mlx_qwen3_asr_model();
         let streaming_enabled = parse_bool_env("OPENAI_TRANSCRIBE_STREAMING")?;
         let mlx_qwen3_asr_command = load_mlx_qwen3_asr_command();
-        let preferred_format = PreferredAudioFormat::from_env(env_provider)?;
+        let preferred_format = PreferredAudioFormat::from_env()?;
         let max_duration_secs = match std::env::var("VOICE_INPUT_MAX_SECS") {
             Ok(value) => value
                 .parse()
@@ -393,51 +376,28 @@ fn csv_env(name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn load_openai_transcription_model(
-    env_provider: TranscriptionProvider,
-) -> Result<String, ConfigError> {
-    let value = if env_provider == TranscriptionProvider::OpenAi4o {
-        non_empty_env("TRANSCRIPTION_MODEL").or_else(|| non_empty_env("OPENAI_TRANSCRIBE_MODEL"))
-    } else {
-        non_empty_env("OPENAI_TRANSCRIBE_MODEL")
-    };
-
+fn load_openai_transcription_model() -> Result<String, ConfigError> {
+    let value = non_empty_env("OPENAI_TRANSCRIBE_MODEL");
     let model =
         value.unwrap_or_else(|| TranscriptionProvider::OpenAi4o.default_model().to_string());
     TranscriptionProvider::OpenAi4o.validate_model(&model)?;
     Ok(model)
 }
 
-fn load_realtime_whisper_model(env_provider: TranscriptionProvider) -> Result<String, ConfigError> {
-    let value = if env_provider == TranscriptionProvider::OpenAiRealtimeWhisper {
-        non_empty_env("TRANSCRIPTION_MODEL")
-    } else {
-        None
-    };
-
-    let model = value.unwrap_or_else(|| {
-        TranscriptionProvider::OpenAiRealtimeWhisper
-            .default_model()
-            .to_string()
-    });
+fn load_realtime_whisper_model() -> Result<String, ConfigError> {
+    let model = TranscriptionProvider::OpenAiRealtimeWhisper
+        .default_model()
+        .to_string();
     TranscriptionProvider::OpenAiRealtimeWhisper.validate_model(&model)?;
     Ok(model)
 }
 
-fn load_mlx_qwen3_asr_model(env_provider: TranscriptionProvider) -> String {
-    non_empty_env("MLX_QWEN3_ASR_MODEL")
-        .or_else(|| {
-            if env_provider == TranscriptionProvider::MlxQwen3Asr {
-                non_empty_env("TRANSCRIPTION_MODEL")
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| {
-            TranscriptionProvider::MlxQwen3Asr
-                .default_model()
-                .to_string()
-        })
+fn load_mlx_qwen3_asr_model() -> String {
+    non_empty_env("MLX_QWEN3_ASR_MODEL").unwrap_or_else(|| {
+        TranscriptionProvider::MlxQwen3Asr
+            .default_model()
+            .to_string()
+    })
 }
 
 fn load_mlx_qwen3_asr_command() -> String {
@@ -456,15 +416,10 @@ fn parse_bool_env(name: &'static str) -> Result<bool, ConfigError> {
 }
 
 impl PreferredAudioFormat {
-    fn from_env(provider: TranscriptionProvider) -> Result<Self, ConfigError> {
+    fn from_env() -> Result<Self, ConfigError> {
         match non_empty_env("VOICE_INPUT_AUDIO_FORMAT") {
-            Some(value) => Self::parse_for_provider(provider, &value),
-            None => Ok(match provider {
-                TranscriptionProvider::OpenAi4o | TranscriptionProvider::OpenAiRealtimeWhisper => {
-                    Self::Flac
-                }
-                TranscriptionProvider::MlxQwen3Asr => Self::Wav,
-            }),
+            Some(value) => Self::parse(&value),
+            None => Ok(Self::Flac),
         }
     }
 
@@ -476,22 +431,6 @@ impl PreferredAudioFormat {
                 value: value.to_string(),
             }),
         }
-    }
-
-    fn parse_for_provider(
-        provider: TranscriptionProvider,
-        value: &str,
-    ) -> Result<Self, ConfigError> {
-        let format = Self::parse(value)?;
-        if provider == TranscriptionProvider::MlxQwen3Asr && format != Self::Wav {
-            return Err(ConfigError::UnsupportedAudioFormatForProvider {
-                provider: provider.as_str().to_string(),
-                value: value.to_string(),
-                supported: "wav",
-            });
-        }
-
-        Ok(format)
     }
 }
 
@@ -706,7 +645,6 @@ mod tests {
     fn unsupported_openai_model_in_env_fails_config_loading() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("TRANSCRIPTION_PROVIDER", "4o");
             std::env::set_var("OPENAI_TRANSCRIBE_MODEL", "whisper-1");
         }
 
@@ -721,18 +659,15 @@ mod tests {
         );
 
         unsafe {
-            std::env::remove_var("TRANSCRIPTION_PROVIDER");
             std::env::remove_var("OPENAI_TRANSCRIBE_MODEL");
         }
     }
 
-    /// provider環境変数は検証だけ行い既定の実行バックエンドは変更しない
+    /// 環境変数ではなく既定の実行バックエンドを使う
     #[test]
-    fn provider_env_does_not_change_default_transcription_provider() {
+    fn default_transcription_provider_is_used_without_provider_env() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("TRANSCRIPTION_PROVIDER", "mlx-qwen3-asr");
-            std::env::remove_var("TRANSCRIPTION_MODEL");
             std::env::remove_var("OPENAI_TRANSCRIBE_MODEL");
             std::env::remove_var("MLX_QWEN3_ASR_MODEL");
         }
@@ -753,19 +688,13 @@ mod tests {
             "Qwen/Qwen3-ASR-1.7B"
         );
         assert_eq!(config.transcription.mlx_qwen3_asr_command, "mlx-qwen3-asr");
-
-        unsafe {
-            std::env::remove_var("TRANSCRIPTION_PROVIDER");
-        }
     }
 
-    /// realtime-whisper指定時はTRANSCRIPTION_MODELを専用モデルとして読み込む
+    /// realtime-whisperモデルは専用の既定モデルを使う
     #[test]
-    fn realtime_whisper_model_is_loaded_from_transcription_model() {
+    fn realtime_whisper_model_uses_default_model() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("TRANSCRIPTION_PROVIDER", "realtime-whisper");
-            std::env::set_var("TRANSCRIPTION_MODEL", "gpt-realtime-whisper");
             std::env::remove_var("OPENAI_TRANSCRIBE_MODEL");
         }
 
@@ -776,11 +705,6 @@ mod tests {
             "gpt-realtime-whisper"
         );
         assert_eq!(config.transcription.model, "gpt-4o-mini-transcribe");
-
-        unsafe {
-            std::env::remove_var("TRANSCRIPTION_PROVIDER");
-            std::env::remove_var("TRANSCRIPTION_MODEL");
-        }
     }
 
     /// mlx-qwen3-asr コマンドは明示設定された値をそのまま使う
@@ -790,8 +714,6 @@ mod tests {
         let original_command = std::env::var("MLX_QWEN3_ASR_COMMAND").ok();
 
         unsafe {
-            std::env::set_var("TRANSCRIPTION_PROVIDER", "mlx-qwen3-asr");
-            std::env::remove_var("TRANSCRIPTION_MODEL");
             std::env::set_var("MLX_QWEN3_ASR_COMMAND", "/Users/example/bin/mlx-qwen3-asr");
         }
 
@@ -802,10 +724,6 @@ mod tests {
             "/Users/example/bin/mlx-qwen3-asr"
         );
 
-        unsafe {
-            std::env::remove_var("TRANSCRIPTION_PROVIDER");
-            std::env::remove_var("TRANSCRIPTION_MODEL");
-        }
         if let Some(value) = original_command {
             unsafe {
                 std::env::set_var("MLX_QWEN3_ASR_COMMAND", value);
@@ -817,22 +735,17 @@ mod tests {
         }
     }
 
-    /// mlx-qwen3-asr 利用時は既定で WAV を選ぶ
+    /// 音声フォーマットは既定で FLAC を選ぶ
     #[test]
-    fn mlx_qwen3_asr_defaults_to_wav_audio_format() {
+    fn audio_format_defaults_to_flac() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("TRANSCRIPTION_PROVIDER", "mlx-qwen3-asr");
             std::env::remove_var("VOICE_INPUT_AUDIO_FORMAT");
         }
 
         let config = EnvConfig::from_env().unwrap();
 
-        assert_eq!(config.audio.preferred_format, PreferredAudioFormat::Wav);
-
-        unsafe {
-            std::env::remove_var("TRANSCRIPTION_PROVIDER");
-        }
+        assert_eq!(config.audio.preferred_format, PreferredAudioFormat::Flac);
     }
 
     /// OpenAI APIキーは新旧環境変数の後方互換を保つ
@@ -1075,6 +988,23 @@ mod tests {
         }
     }
 
+    /// mlx-qwen3-asrモデルは専用環境変数から読み込める
+    #[test]
+    fn mlx_qwen3_asr_model_is_loaded_from_dedicated_environment() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("MLX_QWEN3_ASR_MODEL", "custom/qwen3-asr");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(config.transcription.mlx_qwen3_asr_model, "custom/qwen3-asr");
+
+        unsafe {
+            std::env::remove_var("MLX_QWEN3_ASR_MODEL");
+        }
+    }
+
     /// HTTPプロキシ設定は大文字環境変数から読み込める
     #[test]
     fn proxy_settings_are_loaded_from_uppercase_environment() {
@@ -1182,32 +1112,6 @@ mod tests {
         );
 
         unsafe {
-            std::env::remove_var("VOICE_INPUT_AUDIO_FORMAT");
-        }
-    }
-
-    /// mlx-qwen3-asr は FLAC 指定を受け付けない
-    #[test]
-    fn mlx_qwen3_asr_rejects_flac_audio_format() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("TRANSCRIPTION_PROVIDER", "mlx-qwen3-asr");
-            std::env::set_var("VOICE_INPUT_AUDIO_FORMAT", "flac");
-        }
-
-        let result = EnvConfig::try_from_env();
-
-        assert_eq!(
-            result,
-            Err(ConfigError::UnsupportedAudioFormatForProvider {
-                provider: "mlx-qwen3-asr".to_string(),
-                value: "flac".to_string(),
-                supported: "wav",
-            })
-        );
-
-        unsafe {
-            std::env::remove_var("TRANSCRIPTION_PROVIDER");
             std::env::remove_var("VOICE_INPUT_AUDIO_FORMAT");
         }
     }

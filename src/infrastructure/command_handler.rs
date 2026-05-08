@@ -375,7 +375,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 match transcription.api_key.clone() {
                     Some(key) => {
                         lines.push(format!(
-                            "TRANSCRIPTION_PROVIDER: {}",
+                            "transcription provider: {}",
                             transcription.provider.as_str()
                         ));
                         lines.push("TRANSCRIPTION_API_KEY: present".to_string());
@@ -401,7 +401,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                     }
                     None => {
                         lines.push(format!(
-                            "TRANSCRIPTION_PROVIDER: {}",
+                            "transcription provider: {}",
                             transcription.provider.as_str()
                         ));
                         lines.push("TRANSCRIPTION_API_KEY: missing".to_string());
@@ -410,7 +410,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 }
             }
             crate::utils::config::TranscriptionProvider::MlxQwen3Asr => {
-                lines.push("TRANSCRIPTION_PROVIDER: mlx-qwen3-asr".to_string());
+                lines.push("transcription provider: mlx-qwen3-asr".to_string());
                 lines.push(format!(
                     "MLX_QWEN3_ASR_COMMAND: {}",
                     transcription.mlx_qwen3_asr_command
