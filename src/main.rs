@@ -2,6 +2,7 @@
 //! 録音操作（Start/Stop/Toggle/Status）のほか、ヘルスチェック、デバイス一覧、
 //! 辞書操作、設定操作の各コマンドを `ipc::send_cmd` で送信します。
 use clap::Parser;
+use std::path::PathBuf;
 use voice_input::{
     application::DictionaryService,
     cli::{Cli, Cmd, ConfigCmd, ConfigField, DictCmd},
@@ -34,6 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.cmd.unwrap_or(Cmd::Toggle {
         prompt: None,
         save_audio: None,
+        input_file: None,
         transcription_provider: None,
         transcription_model: None,
     }) {
@@ -41,26 +43,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Start {
             prompt,
             save_audio,
+            input_file,
             transcription_provider,
             transcription_model,
-        } => relay(IpcCmd::Start {
-            prompt,
-            save_audio_path: save_audio,
-            transcription_provider,
-            transcription_model,
-        })?,
+        } => {
+            let cmd = match canonicalize_input_file(input_file)? {
+                Some(input_file_path) => IpcCmd::StartWithInputFile {
+                    prompt,
+                    save_audio_path: save_audio,
+                    input_file_path,
+                    transcription_provider,
+                    transcription_model,
+                },
+                None => IpcCmd::Start {
+                    prompt,
+                    save_audio_path: save_audio,
+                    transcription_provider,
+                    transcription_model,
+                },
+            };
+            relay(cmd)?;
+        }
         Cmd::Stop => relay(IpcCmd::Stop)?,
         Cmd::Toggle {
             prompt,
             save_audio,
+            input_file,
             transcription_provider,
             transcription_model,
-        } => relay(IpcCmd::Toggle {
-            prompt,
-            save_audio_path: save_audio,
-            transcription_provider,
-            transcription_model,
-        })?,
+        } => {
+            let cmd = match canonicalize_input_file(input_file)? {
+                Some(input_file_path) => IpcCmd::ToggleWithInputFile {
+                    prompt,
+                    save_audio_path: save_audio,
+                    input_file_path,
+                    transcription_provider,
+                    transcription_model,
+                },
+                None => IpcCmd::Toggle {
+                    prompt,
+                    save_audio_path: save_audio,
+                    transcription_provider,
+                    transcription_model,
+                },
+            };
+            relay(cmd)?;
+        }
         Cmd::Status => relay(IpcCmd::Status)?,
         Cmd::Health => relay(IpcCmd::Health)?,
 
@@ -121,4 +149,38 @@ fn relay(cmd: IpcCmd) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Error: {}", resp.msg);
     }
     Ok(())
+}
+
+fn canonicalize_input_file(
+    input_file: Option<PathBuf>,
+) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+    input_file
+        .map(|path| {
+            std::fs::canonicalize(&path).map_err(|error| {
+                format!("failed to resolve input file {}: {}", path.display(), error).into()
+            })
+        })
+        .transpose()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 入力ファイルの相対パスはdaemonへ送る前に絶対パスへ解決される
+    #[test]
+    fn input_file_path_is_canonicalized_before_ipc() {
+        let target_dir = PathBuf::from("target/input-file-canonicalize-test");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let path = target_dir.join(format!("sample-{}.wav", std::process::id()));
+        std::fs::write(&path, b"RIFF").unwrap();
+
+        let resolved = canonicalize_input_file(Some(path.clone()))
+            .unwrap()
+            .unwrap();
+
+        assert!(resolved.is_absolute());
+        assert_eq!(resolved, std::fs::canonicalize(&path).unwrap());
+        std::fs::remove_file(path).unwrap();
+    }
 }

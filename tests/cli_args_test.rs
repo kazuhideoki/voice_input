@@ -51,10 +51,28 @@ fn start_command_accepts_audio_save_path() {
     assert!(!stderr.contains("error: invalid value"));
 }
 
+/// startコマンドで入力ファイルパスを指定できる
+#[test]
+fn start_command_accepts_input_file_path() {
+    let output = run_cmd(&["start", "--input-file", "/tmp/voice-input-debug.wav"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("error: unexpected argument"));
+    assert!(!stderr.contains("error: invalid value"));
+}
+
 /// toggleコマンドで音声保存パスを指定できる
 #[test]
 fn toggle_command_accepts_audio_save_path() {
     let output = run_cmd(&["toggle", "--save-audio", "/tmp/voice-input-debug.wav"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("error: unexpected argument"));
+    assert!(!stderr.contains("error: invalid value"));
+}
+
+/// toggleコマンドで入力ファイルパスを指定できる
+#[test]
+fn toggle_command_accepts_input_file_path() {
+    let output = run_cmd(&["toggle", "--input-file", "/tmp/voice-input-debug.wav"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("error: unexpected argument"));
     assert!(!stderr.contains("error: invalid value"));

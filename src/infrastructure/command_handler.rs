@@ -95,6 +95,23 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 self.handle_start(
                     prompt,
                     save_audio_path,
+                    None,
+                    transcription_provider,
+                    transcription_model,
+                )
+                .await
+            }
+            IpcCmd::StartWithInputFile {
+                prompt,
+                save_audio_path,
+                input_file_path,
+                transcription_provider,
+                transcription_model,
+            } => {
+                self.handle_start(
+                    prompt,
+                    save_audio_path,
+                    Some(input_file_path),
                     transcription_provider,
                     transcription_model,
                 )
@@ -113,6 +130,27 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                     self.handle_start(
                         prompt,
                         save_audio_path,
+                        None,
+                        transcription_provider,
+                        transcription_model,
+                    )
+                    .await
+                }
+            }
+            IpcCmd::ToggleWithInputFile {
+                prompt,
+                save_audio_path,
+                input_file_path,
+                transcription_provider,
+                transcription_model,
+            } => {
+                if self.recording.borrow().is_recording() {
+                    self.handle_stop().await
+                } else {
+                    self.handle_start(
+                        prompt,
+                        save_audio_path,
+                        Some(input_file_path),
                         transcription_provider,
                         transcription_model,
                     )
@@ -130,6 +168,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         &self,
         prompt: Option<String>,
         save_audio_path: Option<std::path::PathBuf>,
+        input_file_path: Option<std::path::PathBuf>,
         transcription_provider: Option<TranscriptionProvider>,
         transcription_model: Option<String>,
     ) -> Result<IpcResp> {
@@ -156,6 +195,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             transcription_model: model,
             requested_audio_format: requested_audio_format(provider),
             audio_frame_tx,
+            input_file_path,
         };
 
         // 録音を開始

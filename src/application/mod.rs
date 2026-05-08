@@ -4,8 +4,8 @@ pub mod recording_service;
 pub mod transcription_service;
 
 pub use audio::{
-    AudioBackend, AudioBackendError, AudioData, AudioDataFormat, AudioFrame, CapturedAudio,
-    Recorder,
+    AudioBackend, AudioBackendError, AudioData, AudioDataFormat, AudioFrame, AudioInputSource,
+    CapturedAudio, Recorder,
 };
 pub use dictionary_service::{DictRepository, DictionaryService};
 pub use recording_service::{

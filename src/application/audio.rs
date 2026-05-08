@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use thiserror::Error;
 use tokio::sync::mpsc;
 
@@ -32,6 +33,15 @@ pub enum AudioDataFormat {
     Flac,
 }
 
+/// 録音開始時に利用する音声入力ソース。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AudioInputSource {
+    /// 通常のマイク入力。
+    Microphone,
+    /// デバッグ用の音声ファイル入力。
+    File(PathBuf),
+}
+
 #[derive(Debug, Error)]
 pub enum AudioBackendError {
     #[error("audio backend state error: {message}")]
@@ -60,6 +70,23 @@ pub trait AudioBackend {
         _frame_tx: Option<mpsc::UnboundedSender<AudioFrame>>,
     ) -> Result<(), AudioBackendError> {
         self.start_recording()
+    }
+
+    /// 入力ソースと録音中 PCM フレームの送信先を指定して録音を開始。
+    fn start_recording_with_input_source(
+        &self,
+        input_source: AudioInputSource,
+        frame_tx: Option<mpsc::UnboundedSender<AudioFrame>>,
+    ) -> Result<(), AudioBackendError> {
+        match input_source {
+            AudioInputSource::Microphone => self.start_recording_with_frame_tx(frame_tx),
+            AudioInputSource::File(path) => Err(AudioBackendError::AudioData {
+                message: format!(
+                    "file input is not supported by this audio backend: {}",
+                    path.display()
+                ),
+            }),
+        }
     }
 
     /// 録音を停止し、音声データを返す。
@@ -119,6 +146,16 @@ impl<T: AudioBackend> Recorder<T> {
         frame_tx: Option<mpsc::UnboundedSender<AudioFrame>>,
     ) -> Result<(), AudioBackendError> {
         self.backend.start_recording_with_frame_tx(frame_tx)
+    }
+
+    /// 入力ソースと録音中 PCM フレームの送信先を指定して録音を開始します。
+    pub fn start_with_input_source(
+        &mut self,
+        input_source: AudioInputSource,
+        frame_tx: Option<mpsc::UnboundedSender<AudioFrame>>,
+    ) -> Result<(), AudioBackendError> {
+        self.backend
+            .start_recording_with_input_source(input_source, frame_tx)
     }
 
     /// 録音を停止し、音声データを返します。
