@@ -28,8 +28,10 @@ const OPENAI_REALTIME_TRANSCRIPTION_URL: &str =
 const REALTIME_SAMPLE_RATE: u32 = 24_000;
 const APPEND_CHUNK_MS: usize = 100;
 const APPEND_CHUNK_BYTES: usize = REALTIME_SAMPLE_RATE as usize * 2 * APPEND_CHUNK_MS / 1000;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SESSION_UPDATE_TIMEOUT: Duration = Duration::from_secs(10);
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
+const FINISH_TIMEOUT: Duration = Duration::from_secs(45);
 const OPENAI_SAFETY_IDENTIFIER: HeaderName = HeaderName::from_static("openai-safety-identifier");
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,11 +81,17 @@ impl RealtimeWhisperSessionHandle {
             let _ = stop_tx.send(());
         }
 
-        match self.result_rx.await {
-            Ok(result) => result,
-            Err(error) => Err(VoiceInputError::from(TranscriptionClientError::Request {
+        match tokio::time::timeout(FINISH_TIMEOUT, &mut self.result_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => Err(VoiceInputError::from(TranscriptionClientError::Request {
                 message: format!("realtime-whisper session ended without result: {}", error),
             })),
+            Err(_) => {
+                self.task.abort();
+                Err(request_error(
+                    "realtime-whisper session did not finish within 45s after stop",
+                ))
+            }
         }
     }
 
@@ -124,11 +132,14 @@ async fn run_realtime_whisper_session(
     let overall_timer = profiling::Timer::start("realtime_whisper.session");
     let request = build_realtime_request(&config.api_key)?;
 
-    let (stream, _) = connect_async(request).await.map_err(|error| {
-        VoiceInputError::from(TranscriptionClientError::Request {
-            message: format!("failed to connect realtime websocket: {}", error),
-        })
-    })?;
+    let (stream, _) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(request))
+        .await
+        .map_err(|_| request_error("realtime websocket connection did not open within 10s"))?
+        .map_err(|error| {
+            VoiceInputError::from(TranscriptionClientError::Request {
+                message: format!("failed to connect realtime websocket: {}", error),
+            })
+        })?;
     let (mut write, mut read) = stream.split();
 
     send_json(
