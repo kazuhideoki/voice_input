@@ -1,6 +1,6 @@
 use super::encoder::{self, AudioFormat};
 use super::{AudioBackend, AudioBackendError};
-use crate::application::AudioData;
+use crate::application::{AudioData, AudioDataFormat};
 use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use audioadapter_buffers::SizeError;
@@ -577,6 +577,13 @@ impl CpalAudioBackend {
         }
     }
 
+    fn audio_data_format_to_encoder_format(format: AudioDataFormat) -> AudioFormat {
+        match format {
+            AudioDataFormat::Wav => AudioFormat::Wav,
+            AudioDataFormat::Flac => AudioFormat::Flac,
+        }
+    }
+
     /// WAVファイルヘッダーを生成する
     ///
     /// # Arguments
@@ -695,7 +702,6 @@ impl CpalAudioBackend {
     const THRESHOLD_MULTIPLIER: f32 = 3.0;
     const NOISE_WINDOW_MS: u32 = 200;
     const MIN_SILENCE_DURATION_MS: u32 = 50;
-    const MIN_RETAINED_FRAMES: usize = 1;
 
     /// メモリバッファのサイズ見積もり
     /// 録音時間に基づいて必要なバッファサイズを計算
@@ -774,22 +780,6 @@ impl CpalAudioBackend {
         ((sample_rate as usize * Self::MIN_SILENCE_DURATION_MS as usize) / 1000).max(1)
     }
 
-    fn ensure_minimum_samples(samples: &[i16], frame_size: usize) -> Cow<'_, [i16]> {
-        if samples.is_empty() {
-            return Cow::Borrowed(samples);
-        }
-
-        let total_frames = samples.len() / frame_size;
-        let retain_frames = Self::MIN_RETAINED_FRAMES.min(total_frames.max(1));
-        let retain_samples = (retain_frames * frame_size).min(samples.len());
-
-        if retain_samples == samples.len() {
-            Cow::Borrowed(samples)
-        } else {
-            Cow::Owned(samples[..retain_samples].to_vec())
-        }
-    }
-
     fn trim_silence(samples: &[i16], sample_rate: u32, channels: u16) -> Cow<'_, [i16]> {
         if samples.is_empty() || channels == 0 {
             return Cow::Borrowed(samples);
@@ -825,14 +815,14 @@ impl CpalAudioBackend {
         }
 
         if end_frame <= start_frame {
-            return Self::ensure_minimum_samples(samples, frame_size);
+            return Cow::Borrowed(samples);
         }
 
         let start_idx = start_frame * frame_size;
         let end_idx = end_frame * frame_size;
 
         if start_idx >= end_idx {
-            return Self::ensure_minimum_samples(samples, frame_size);
+            return Cow::Borrowed(samples);
         }
 
         Cow::Owned(samples[start_idx..end_idx].to_vec())
@@ -1008,7 +998,7 @@ impl CpalAudioBackend {
     }
 }
 
-impl AudioBackend for CpalAudioBackend {
+impl CpalAudioBackend {
     /// 録音ストリームを開始します。
     fn start_recording(&self) -> Result<(), AudioBackendError> {
         if self.is_recording() {
@@ -1047,8 +1037,10 @@ impl AudioBackend for CpalAudioBackend {
         Ok(())
     }
 
-    /// 録音を停止し、音声データを返します。
-    fn stop_recording(&self) -> Result<AudioData, AudioBackendError> {
+    fn finish_recording(
+        &self,
+        requested_format: Option<AudioDataFormat>,
+    ) -> Result<AudioData, AudioBackendError> {
         let overall_timer = profiling::Timer::start("audio.stop_recording");
         if !self.is_recording() {
             return Err(CpalBackendError::NotRecording.into());
@@ -1136,7 +1128,10 @@ impl AudioBackend for CpalAudioBackend {
             resample_timer.log();
         }
 
-        let result = match Self::preferred_format() {
+        let audio_format = requested_format
+            .map(Self::audio_data_format_to_encoder_format)
+            .unwrap_or_else(Self::preferred_format);
+        let result = match audio_format {
             AudioFormat::Flac => {
                 let encode_timer = profiling::Timer::start("audio.encode_flac");
                 match encoder::flac::encode_flac_i16(
@@ -1218,6 +1213,15 @@ impl AudioBackend for CpalAudioBackend {
         result
     }
 
+    /// 録音を停止し、音声データを返します。
+    fn stop_recording(&self) -> Result<AudioData, AudioBackendError> {
+        self.finish_recording(None)
+    }
+
+    fn stop_recording_as(&self, format: AudioDataFormat) -> Result<AudioData, AudioBackendError> {
+        self.finish_recording(Some(format))
+    }
+
     /// 録音中かどうかを確認します。
     fn is_recording(&self) -> bool {
         self.recording.load(Ordering::SeqCst)
@@ -1230,6 +1234,28 @@ impl AudioBackend for CpalAudioBackend {
 
         self.invalidate_input_stream();
         self.warm_up()
+    }
+}
+
+impl AudioBackend for CpalAudioBackend {
+    fn start_recording(&self) -> Result<(), AudioBackendError> {
+        CpalAudioBackend::start_recording(self)
+    }
+
+    fn stop_recording(&self) -> Result<AudioData, AudioBackendError> {
+        CpalAudioBackend::stop_recording(self)
+    }
+
+    fn stop_recording_as(&self, format: AudioDataFormat) -> Result<AudioData, AudioBackendError> {
+        CpalAudioBackend::stop_recording_as(self, format)
+    }
+
+    fn is_recording(&self) -> bool {
+        CpalAudioBackend::is_recording(self)
+    }
+
+    fn recover_after_wake(&self) -> Result<(), AudioBackendError> {
+        CpalAudioBackend::recover_after_wake(self)
     }
 }
 
@@ -2154,6 +2180,35 @@ mod tests {
         assert!(backend.recording_state.lock().unwrap().is_none());
     }
 
+    /// WAV形式を指定した停止ではRIFF/WAVEデータが返る
+    #[test]
+    fn stop_recording_as_wav_returns_wav_data() {
+        init_env_config_for_test();
+        let backend = CpalAudioBackend::default();
+
+        let samples = (0..min_capture_samples(48_000, 1, MIN_CAPTURE_DURATION))
+            .map(|i| if i % 2 == 0 { 1000i16 } else { -1000i16 })
+            .collect();
+        let buffer = Arc::new(Mutex::new(samples));
+        *backend.recording_state.lock().unwrap() = Some(MemoryRecordingState {
+            buffer,
+            sample_rate: 48000,
+            channels: 1,
+            generation: 1,
+            accepting_input: Arc::new(AtomicBool::new(true)),
+        });
+        backend.capture_generation.store(1, Ordering::SeqCst);
+        backend.recording.store(true, Ordering::SeqCst);
+
+        let result = backend.stop_recording_as(AudioDataFormat::Wav).unwrap();
+
+        assert_eq!(result.mime_type, "audio/wav");
+        assert_eq!(result.file_name, "audio.wav");
+        assert!(result.bytes.len() > 44);
+        assert_eq!(&result.bytes[0..4], b"RIFF");
+        assert_eq!(&result.bytes[8..12], b"WAVE");
+    }
+
     /// 空バッファは転写キューへ渡さず再試行を促す
     #[test]
     fn stop_recording_rejects_empty_buffer() {
@@ -2334,16 +2389,16 @@ mod tests {
         );
     }
 
-    /// 全て無音でも最低限のサンプルが残る
+    /// 全て無音と判定された録音は短く潰さず元の長さを残す
     #[test]
-    fn trim_silence_keeps_minimum_when_all_silent() {
+    fn trim_silence_keeps_original_length_when_all_silent() {
         let sample_rate = 16_000;
         let channels = 1;
         let samples = vec![0i16; sample_rate as usize / 10];
 
         let trimmed = CpalAudioBackend::trim_silence(&samples, sample_rate, channels);
 
-        assert!(!trimmed.is_empty());
+        assert_eq!(trimmed.len(), samples.len());
         assert!(trimmed.iter().all(|&s| s == 0));
     }
 

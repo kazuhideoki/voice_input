@@ -101,6 +101,10 @@ fn kill_daemon(tmp: &TempDir, child: &mut Child) {
     let _ = fs::remove_file(socket_path(tmp));
 }
 
+fn debug_save_audio_path(tmp: &TempDir) -> PathBuf {
+    tmp.path().join("saved.wav")
+}
+
 /// デバイス一覧コマンドが成功する
 #[test]
 #[cfg_attr(feature = "ci-test", ignore)]
@@ -133,6 +137,62 @@ fn toggle_start_stop() -> Result<(), Box<dyn std::error::Error>> {
     configure_ipc_env(&mut stop, &tmp);
     stop.arg("toggle");
     stop.assert().success();
+
+    kill_daemon(&tmp, &mut daemon);
+    Ok(())
+}
+
+/// wav保存パスを指定したCLI録音は再生可能なWAVファイルを書き出す
+#[test]
+#[cfg_attr(feature = "ci-test", ignore)]
+fn save_audio_wav_path_writes_playable_wav() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = TempDir::new()?;
+    let mut daemon = spawn_daemon(&tmp);
+    let save_path = debug_save_audio_path(&tmp);
+
+    let mut start = Command::cargo_bin("voice_input");
+    configure_ipc_env(&mut start, &tmp);
+    start
+        .arg("start")
+        .arg("--save-audio")
+        .arg(save_path.as_os_str());
+    let start_output = start.output()?;
+    assert!(
+        start_output.status.success(),
+        "start command should run: {}",
+        String::from_utf8_lossy(&start_output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&start_output.stdout).contains("recording started"),
+        "start command should start recording: {}",
+        String::from_utf8_lossy(&start_output.stdout)
+    );
+
+    sleep(Duration::from_secs(2));
+
+    let mut stop = Command::cargo_bin("voice_input");
+    configure_ipc_env(&mut stop, &tmp);
+    stop.arg("stop");
+    let stop_output = stop.output()?;
+    assert!(
+        stop_output.status.success(),
+        "stop command should run: {}",
+        String::from_utf8_lossy(&stop_output.stderr)
+    );
+    let stop_stdout = String::from_utf8_lossy(&stop_output.stdout);
+    assert!(
+        stop_stdout.contains("audio saved to"),
+        "stop command should report saved audio: {}",
+        stop_stdout
+    );
+
+    let bytes = fs::read(&save_path)?;
+    assert!(
+        bytes.len() > 44 + 1024,
+        "saved WAV should contain more than a header and a few samples"
+    );
+    assert_eq!(&bytes[0..4], b"RIFF");
+    assert_eq!(&bytes[8..12], b"WAVE");
 
     kill_daemon(&tmp, &mut daemon);
     Ok(())

@@ -8,13 +8,15 @@
 #![allow(clippy::await_holding_refcell_ref)]
 
 use std::cell::RefCell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use tokio::sync::mpsc;
 use tokio::task::spawn_local;
 use tokio::time::Duration;
 
-use crate::application::{RecordedAudio, RecordingOptions, RecordingService, TranscriptionService};
+use crate::application::{
+    AudioData, RecordedAudio, RecordingOptions, RecordingService, TranscriptionService,
+};
 use crate::error::{Result, VoiceInputError};
 use crate::infrastructure::{
     audio::{AudioBackend, CpalAudioBackend},
@@ -171,7 +173,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         let save_result = outcome.context.save_audio_path.as_ref().map(|path| {
             (
                 path.clone(),
-                save_audio_file(path, &outcome.result.audio_data.bytes),
+                save_audio_file(path, &outcome.result.audio_data),
             )
         });
 
@@ -194,10 +196,10 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         }
 
         let msg = match save_result {
-            Some((path, Ok(()))) => {
+            Some((_requested_path, Ok(saved_path))) => {
                 format!(
                     "recording stopped; queued; audio saved to {}",
-                    path.display()
+                    saved_path.display()
                 )
             }
             Some((path, Err(error))) => format!(
@@ -339,9 +341,10 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
                             if let Ok(outcome) = recording.borrow().stop_recording().await {
                                 if let Some(path) = &outcome.context.save_audio_path {
-                                    if let Err(error) =
-                                        save_audio_file(path, &outcome.result.audio_data.bytes)
-                                    {
+                                    if let Err(error) = save_audio_file(
+                                        path,
+                                        &outcome.result.audio_data,
+                                    ) {
                                         eprintln!("Failed to save audio file: {}", error);
                                     }
                                 }
@@ -365,8 +368,9 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     }
 }
 
-fn save_audio_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path
+fn save_audio_file(path: &Path, audio: &AudioData) -> Result<PathBuf> {
+    let save_path = audio_save_path(path, audio)?;
+    if let Some(parent) = save_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
@@ -379,13 +383,36 @@ fn save_audio_file(path: &Path, bytes: &[u8]) -> Result<()> {
         })?;
     }
 
-    std::fs::write(path, bytes).map_err(|error| {
+    std::fs::write(&save_path, &audio.bytes).map_err(|error| {
         VoiceInputError::SystemError(format!(
             "Failed to save audio file {}: {}",
-            path.display(),
+            save_path.display(),
             error
         ))
-    })
+    })?;
+
+    Ok(save_path)
+}
+
+fn audio_save_path(path: &Path, audio: &AudioData) -> Result<PathBuf> {
+    let extension = audio_extension(audio)?;
+    match path.extension().and_then(|value| value.to_str()) {
+        Some(path_extension) if path_extension.eq_ignore_ascii_case(extension) => {
+            Ok(path.to_path_buf())
+        }
+        _ => Ok(path.with_extension(extension)),
+    }
+}
+
+fn audio_extension(audio: &AudioData) -> Result<&'static str> {
+    match audio.mime_type {
+        "audio/flac" => Ok("flac"),
+        "audio/wav" | "audio/x-wav" => Ok("wav"),
+        mime_type => Err(VoiceInputError::SystemError(format!(
+            "Unsupported audio MIME type for save: {}",
+            mime_type
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -739,6 +766,25 @@ mod tests {
                 assert!(rx.recv().await.is_some());
             })
             .await;
+    }
+
+    /// 保存パスの拡張子が音声形式と異なる場合は実際の形式に合わせて保存される
+    #[test]
+    fn save_path_extension_matches_audio_format() {
+        let temp_dir = TempDir::new().unwrap();
+        let requested_path = temp_dir.path().join("samples/debug.wav");
+        let expected_path = temp_dir.path().join("samples/debug.flac");
+        let audio = AudioData {
+            bytes: b"fLaCencoded".to_vec(),
+            mime_type: "audio/flac",
+            file_name: "audio.flac".to_string(),
+        };
+
+        let saved_path = save_audio_file(&requested_path, &audio).unwrap();
+
+        assert_eq!(saved_path, expected_path);
+        assert!(!requested_path.exists());
+        assert_eq!(std::fs::read(expected_path).unwrap(), b"fLaCencoded");
     }
 
     /// 遅いApple Music確認があっても録音開始レスポンスは待たない
