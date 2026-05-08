@@ -21,12 +21,12 @@ voice-input で採用判断するときは、次の軸を分ける。
 ## 再現用コマンド
 
 ```sh
-.venv/bin/python survey/realtime_whisper_benchmark.py \
-  --audio sample.wav \
+.venv/bin/python survey/realtime_whisper_api/realtime_whisper_benchmark.py \
+  --audio survey/realtime_whisper_api/sample.wav \
   --providers realtime_whisper \
   --send-interval-scale 1
 
-.venv/bin/python survey/realtime_whisper_benchmark.py \
-  --audio sample.wav \
+.venv/bin/python survey/realtime_whisper_api/realtime_whisper_benchmark.py \
+  --audio survey/realtime_whisper_api/sample.wav \
   --providers gpt4o_stream
 ```

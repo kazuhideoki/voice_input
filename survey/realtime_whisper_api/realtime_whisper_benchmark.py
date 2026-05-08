@@ -31,6 +31,9 @@ from urllib.request import Request, urlopen
 OPENAI_TRANSCRIPTIONS_URL = "https://api.openai.com/v1/audio/transcriptions"
 OPENAI_REALTIME_TRANSCRIPTION_URL = "wss://api.openai.com/v1/realtime?intent=transcription"
 REALTIME_SAMPLE_RATE = 24_000
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_AUDIO_PATH = SCRIPT_DIR / "sample.wav"
+DEFAULT_OUTPUT_DIR = SCRIPT_DIR / "runs"
 
 
 @dataclass
@@ -733,8 +736,8 @@ def run_provider(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--audio", type=Path, default=Path("sample.wav"))
-    parser.add_argument("--output-dir", type=Path, default=Path("survey/runs"))
+    parser.add_argument("--audio", type=Path, default=DEFAULT_AUDIO_PATH)
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--providers", default="gpt4o_stream,realtime_whisper")
     parser.add_argument("--repetitions", type=int, default=1)
     parser.add_argument("--language", default="ja")
@@ -794,11 +797,6 @@ def main() -> int:
         diagnostics.final_silence_ms,
         diagnostics.likely_truncated_audio,
     )
-    if diagnostics.likely_truncated_audio:
-        logging.warning(
-            "audio appears to end without enough trailing silence; final words may be cut off in realtime transcription"
-        )
-
     results: list[BenchmarkResult] = []
     try:
         for repetition in range(1, args.repetitions + 1):
