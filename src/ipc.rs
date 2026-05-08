@@ -43,6 +43,8 @@ pub enum IpcCmd {
         save_audio_path: Option<PathBuf>,
         #[serde(default)]
         transcription_provider: Option<TranscriptionProvider>,
+        #[serde(default)]
+        transcription_model: Option<String>,
     },
     /// 録音停止
     Stop,
@@ -54,6 +56,8 @@ pub enum IpcCmd {
         save_audio_path: Option<PathBuf>,
         #[serde(default)]
         transcription_provider: Option<TranscriptionProvider>,
+        #[serde(default)]
+        transcription_model: Option<String>,
     },
     /// ステータス取得
     Status,
@@ -331,6 +335,7 @@ mod tests {
             prompt: Some("test prompt".to_string()),
             save_audio_path: None,
             transcription_provider: None,
+            transcription_model: None,
         };
 
         let json = serde_json::to_string(&cmd).unwrap();
@@ -364,6 +369,7 @@ mod tests {
             prompt: None,
             save_audio_path: None,
             transcription_provider: None,
+            transcription_model: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("Start"));
@@ -378,6 +384,7 @@ mod tests {
             prompt: Some("test".to_string()),
             save_audio_path: None,
             transcription_provider: None,
+            transcription_model: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();

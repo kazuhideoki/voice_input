@@ -27,6 +27,9 @@ pub enum Cmd {
         /// 転写バックエンド（4o/realtime-whisper/mlx-qwen3-asr）
         #[arg(long, value_name = "PROVIDER", value_parser = parse_transcription_provider)]
         transcription_provider: Option<TranscriptionProvider>,
+        /// 4o 転写モデル（gpt-4o-transcribe/gpt-4o-mini-transcribe）
+        #[arg(long, value_name = "MODEL", value_parser = parse_transcription_model)]
+        transcription_model: Option<String>,
     },
     /// 録音停止
     Stop,
@@ -40,6 +43,9 @@ pub enum Cmd {
         /// 転写バックエンド（4o/realtime-whisper/mlx-qwen3-asr）
         #[arg(long, value_name = "PROVIDER", value_parser = parse_transcription_provider)]
         transcription_provider: Option<TranscriptionProvider>,
+        /// 4o 転写モデル（gpt-4o-transcribe/gpt-4o-mini-transcribe）
+        #[arg(long, value_name = "MODEL", value_parser = parse_transcription_model)]
+        transcription_model: Option<String>,
     },
     /// デーモン状態取得
     Status,
@@ -88,4 +94,11 @@ pub enum ConfigField {
 
 fn parse_transcription_provider(value: &str) -> Result<TranscriptionProvider, String> {
     TranscriptionProvider::parse(value).map_err(|error| error.to_string())
+}
+
+fn parse_transcription_model(value: &str) -> Result<String, String> {
+    TranscriptionProvider::OpenAi4o
+        .validate_model(value)
+        .map(|()| value.to_string())
+        .map_err(|error| error.to_string())
 }

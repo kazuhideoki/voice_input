@@ -39,23 +39,26 @@ impl TranscriptionClient for OpenAiTranscriptionAdapter {
     async fn transcribe(
         &self,
         audio: AudioData,
-        _options: &TranscriptionClientOptions,
+        options: &TranscriptionClientOptions,
     ) -> Result<TranscriptionOutput> {
-        self.client.transcribe_audio(audio).await.map_err(|error| {
-            crate::error::VoiceInputError::from(TranscriptionClientError::Request {
-                message: error.to_string(),
+        self.client
+            .transcribe_audio_with_model(audio, options.model.as_deref())
+            .await
+            .map_err(|error| {
+                crate::error::VoiceInputError::from(TranscriptionClientError::Request {
+                    message: error.to_string(),
+                })
             })
-        })
     }
 
     async fn transcribe_streaming(
         &self,
         audio: AudioData,
-        _options: &TranscriptionClientOptions,
+        options: &TranscriptionClientOptions,
         event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
     ) -> Result<TranscriptionOutput> {
         self.client
-            .transcribe_audio_streaming(audio, event_tx)
+            .transcribe_audio_streaming_with_model(audio, options.model.as_deref(), event_tx)
             .await
             .map_err(|error| {
                 crate::error::VoiceInputError::from(TranscriptionClientError::Request {

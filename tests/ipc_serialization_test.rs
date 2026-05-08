@@ -9,6 +9,7 @@ fn start_command_serializes_roundtrip() {
         prompt: Some("test prompt".to_string()),
         save_audio_path: None,
         transcription_provider: None,
+        transcription_model: None,
     };
 
     let json = serde_json::to_string(&start_cmd).unwrap();
@@ -29,6 +30,7 @@ fn toggle_command_serializes_roundtrip() {
         prompt: None,
         save_audio_path: None,
         transcription_provider: None,
+        transcription_model: None,
     };
 
     let json = serde_json::to_string(&toggle_cmd).unwrap();
@@ -51,16 +53,19 @@ fn ipc_cmds_roundtrip_via_json() {
             prompt: None,
             save_audio_path: None,
             transcription_provider: None,
+            transcription_model: None,
         },
         IpcCmd::Start {
             prompt: Some("hello".to_string()),
             save_audio_path: None,
             transcription_provider: None,
+            transcription_model: None,
         },
         IpcCmd::Toggle {
             prompt: Some("world".to_string()),
             save_audio_path: None,
             transcription_provider: None,
+            transcription_model: None,
         },
         IpcCmd::Stop,
         IpcCmd::Status,
@@ -86,6 +91,7 @@ fn start_command_json_format_contains_prompt() {
         prompt: Some("test".to_string()),
         save_audio_path: None,
         transcription_provider: None,
+        transcription_model: None,
     };
 
     let json = serde_json::to_string(&cmd).unwrap();
@@ -100,6 +106,7 @@ fn start_command_preserves_audio_save_path() {
         prompt: None,
         save_audio_path: Some(PathBuf::from("/tmp/debug.wav")),
         transcription_provider: None,
+        transcription_model: None,
     };
 
     let json = serde_json::to_string(&cmd).unwrap();
@@ -122,6 +129,7 @@ fn start_command_preserves_transcription_provider() {
         prompt: None,
         save_audio_path: None,
         transcription_provider: Some(TranscriptionProvider::MlxQwen3Asr),
+        transcription_model: None,
     };
 
     let json = serde_json::to_string(&cmd).unwrap();
@@ -148,6 +156,7 @@ fn start_command_preserves_realtime_whisper_transcription_provider() {
         prompt: None,
         save_audio_path: None,
         transcription_provider: Some(TranscriptionProvider::OpenAiRealtimeWhisper),
+        transcription_model: None,
     };
 
     let json = serde_json::to_string(&cmd).unwrap();
@@ -163,6 +172,35 @@ fn start_command_preserves_realtime_whisper_transcription_provider() {
             assert_eq!(
                 transcription_provider,
                 Some(TranscriptionProvider::OpenAiRealtimeWhisper)
+            );
+        }
+        _ => panic!("Expected Start command"),
+    }
+}
+
+/// Startコマンドが転写モデル指定をJSONで保持する
+#[test]
+fn start_command_preserves_transcription_model() {
+    let cmd = IpcCmd::Start {
+        prompt: None,
+        save_audio_path: None,
+        transcription_provider: Some(TranscriptionProvider::OpenAi4o),
+        transcription_model: Some("gpt-4o-mini-transcribe".to_string()),
+    };
+
+    let json = serde_json::to_string(&cmd).unwrap();
+    assert!(json.contains(r#""transcription_model":"gpt-4o-mini-transcribe""#));
+
+    let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
+
+    match deserialized {
+        IpcCmd::Start {
+            transcription_model,
+            ..
+        } => {
+            assert_eq!(
+                transcription_model,
+                Some("gpt-4o-mini-transcribe".to_string())
             );
         }
         _ => panic!("Expected Start command"),

@@ -35,6 +35,7 @@ cp .env.example .env
 `.env` はデフォルトでカレントディレクトリから読み込まれ、`VOICE_INPUT_ENV_PATH` が設定されている場合はそのパスが優先されます。
 環境変数は `src/utils/config.rs` の `EnvConfig` で起動時に一度だけ読み込まれます。
 転写バックエンドは環境変数ではなく、`voice_input start --transcription-provider 4o`、`voice_input start --transcription-provider realtime-whisper`、または `voice_input start --transcription-provider mlx-qwen3-asr` のようにクライアントから指定します。`toggle` でも同じフラグを使えます。
+`4o` の既定モデルは `gpt-4o-transcribe` です。軽量モデルを使う場合は `voice_input start --transcription-provider 4o --transcription-model gpt-4o-mini-transcribe` のように指定します。
 `realtime-whisper` は録音中の PCM フレームを OpenAI Realtime API へ送信し、delta を入力先へ逐次反映します。`gpt-realtime-whisper` は server VAD 非対応のため、停止時に手動 commit します。
 `mlx-qwen3-asr` 指定時は `mlx-qwen3-asr` コマンドを使い、録音データは CLI 連携のため一時ファイル経由で渡します。
 

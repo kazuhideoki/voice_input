@@ -122,6 +122,16 @@ impl OpenAiClient {
         &self,
         audio_data: AudioData,
     ) -> Result<TranscriptionOutput, OpenAiError> {
+        self.transcribe_audio_with_model(audio_data, None).await
+    }
+
+    /// AudioDataから指定モデルで転写を実行
+    pub async fn transcribe_audio_with_model(
+        &self,
+        audio_data: AudioData,
+        model: Option<&str>,
+    ) -> Result<TranscriptionOutput, OpenAiError> {
+        let model = model.unwrap_or(&self.model);
         if profiling::enabled() {
             profiling::log_point(
                 "openai.request",
@@ -129,7 +139,7 @@ impl OpenAiClient {
                     "bytes={} mime={} model={}",
                     audio_data.bytes.len(),
                     audio_data.mime_type,
-                    self.model
+                    model
                 ),
             );
         }
@@ -140,7 +150,7 @@ impl OpenAiClient {
             .map_err(OpenAiError::Multipart)?;
 
         // 既存の転写処理を実行
-        self.transcribe_with_part(part, None).await
+        self.transcribe_with_part(part, None, model).await
     }
 
     /// AudioDataから直接ストリーミング転写を実行
@@ -149,6 +159,18 @@ impl OpenAiClient {
         audio_data: AudioData,
         event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
     ) -> Result<TranscriptionOutput, OpenAiError> {
+        self.transcribe_audio_streaming_with_model(audio_data, None, event_tx)
+            .await
+    }
+
+    /// AudioDataから指定モデルでストリーミング転写を実行
+    pub async fn transcribe_audio_streaming_with_model(
+        &self,
+        audio_data: AudioData,
+        model: Option<&str>,
+        event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
+    ) -> Result<TranscriptionOutput, OpenAiError> {
+        let model = model.unwrap_or(&self.model);
         if profiling::enabled() {
             profiling::log_point(
                 "openai.streaming_request",
@@ -156,7 +178,7 @@ impl OpenAiClient {
                     "bytes={} mime={} model={}",
                     audio_data.bytes.len(),
                     audio_data.mime_type,
-                    self.model
+                    model
                 ),
             );
         }
@@ -166,7 +188,7 @@ impl OpenAiClient {
             .mime_str(audio_data.mime_type)
             .map_err(OpenAiError::Multipart)?;
 
-        self.transcribe_streaming_with_part(part, None, event_tx)
+        self.transcribe_streaming_with_part(part, None, model, event_tx)
             .await
     }
 
@@ -175,6 +197,7 @@ impl OpenAiClient {
         &self,
         file_part: multipart::Part,
         prompt: Option<&str>,
+        model: &str,
     ) -> Result<TranscriptionOutput, OpenAiError> {
         let overall_timer = profiling::Timer::start("openai.transcribe_total");
         let url = "https://api.openai.com/v1/audio/transcriptions";
@@ -182,7 +205,7 @@ impl OpenAiClient {
         // multipart/form-data
         let mut form = multipart::Form::new()
             .part("file", file_part)
-            .text("model", self.model.clone())
+            .text("model", model.to_string())
             .text("language", "ja")
             .text("include[]", "logprobs");
 
@@ -246,6 +269,7 @@ impl OpenAiClient {
         &self,
         file_part: multipart::Part,
         prompt: Option<&str>,
+        model: &str,
         event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
     ) -> Result<TranscriptionOutput, OpenAiError> {
         let overall_timer = profiling::Timer::start("openai.streaming_transcribe_total");
@@ -253,7 +277,7 @@ impl OpenAiClient {
 
         let mut form = multipart::Form::new()
             .part("file", file_part)
-            .text("model", self.model.clone())
+            .text("model", model.to_string())
             .text("language", "ja")
             .text("stream", "true")
             .text("include[]", "logprobs");

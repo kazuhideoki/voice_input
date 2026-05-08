@@ -42,6 +42,7 @@ pub struct TranscriptionMessage {
     pub resume_music: bool,
     pub session_id: u64,
     pub provider: TranscriptionProvider,
+    pub model: Option<String>,
 }
 
 struct ActiveRealtimeSession {
@@ -89,21 +90,33 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 prompt,
                 save_audio_path,
                 transcription_provider,
+                transcription_model,
             } => {
-                self.handle_start(prompt, save_audio_path, transcription_provider)
-                    .await
+                self.handle_start(
+                    prompt,
+                    save_audio_path,
+                    transcription_provider,
+                    transcription_model,
+                )
+                .await
             }
             IpcCmd::Stop => self.handle_stop().await,
             IpcCmd::Toggle {
                 prompt,
                 save_audio_path,
                 transcription_provider,
+                transcription_model,
             } => {
                 if self.recording.borrow().is_recording() {
                     self.handle_stop().await
                 } else {
-                    self.handle_start(prompt, save_audio_path, transcription_provider)
-                        .await
+                    self.handle_start(
+                        prompt,
+                        save_audio_path,
+                        transcription_provider,
+                        transcription_model,
+                    )
+                    .await
                 }
             }
             IpcCmd::Status => self.handle_status(),
@@ -118,11 +131,14 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         prompt: Option<String>,
         save_audio_path: Option<std::path::PathBuf>,
         transcription_provider: Option<TranscriptionProvider>,
+        transcription_model: Option<String>,
     ) -> Result<IpcResp> {
+        let provider = transcription_provider.unwrap_or(TranscriptionProvider::DEFAULT);
+        let model = resolve_transcription_model(provider, transcription_model)?;
+
         // 体感開始時間を縮めるため、開始音は録音開始前に鳴らす
         play_start_sound();
 
-        let provider = transcription_provider.unwrap_or(TranscriptionProvider::DEFAULT);
         let mut realtime_session = if provider == TranscriptionProvider::OpenAiRealtimeWhisper {
             Some(self.prepare_realtime_session()?)
         } else {
@@ -137,6 +153,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             prompt,
             save_audio_path,
             transcription_provider: provider,
+            transcription_model: model,
             requested_audio_format: requested_audio_format(provider),
             audio_frame_tx,
         };
@@ -268,6 +285,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 resume_music: outcome.context.music_was_playing,
                 session_id: outcome.context.session_id,
                 provider: outcome.context.transcription_provider,
+                model: outcome.context.transcription_model,
             })
             .map_err(|e| {
                 VoiceInputError::SystemError(format!(
@@ -487,6 +505,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                                     resume_music: outcome.context.music_was_playing,
                                     session_id: outcome.context.session_id,
                                     provider: outcome.context.transcription_provider,
+                                    model: outcome.context.transcription_model,
                                 });
                             }
                         }
@@ -593,6 +612,25 @@ fn requested_audio_format(provider: TranscriptionProvider) -> Option<AudioDataFo
     match provider {
         TranscriptionProvider::OpenAi4o | TranscriptionProvider::OpenAiRealtimeWhisper => None,
         TranscriptionProvider::MlxQwen3Asr => Some(AudioDataFormat::Wav),
+    }
+}
+
+fn resolve_transcription_model(
+    provider: TranscriptionProvider,
+    model: Option<String>,
+) -> Result<Option<String>> {
+    match (provider, model) {
+        (TranscriptionProvider::OpenAi4o, Some(model)) => {
+            provider.validate_model(&model).map_err(|error| {
+                VoiceInputError::ConfigInitError(format!("invalid transcription model: {error}"))
+            })?;
+            Ok(Some(model))
+        }
+        (TranscriptionProvider::OpenAi4o, None) => Ok(Some(provider.default_model().to_string())),
+        (_, Some(model)) => Err(VoiceInputError::ConfigInitError(format!(
+            "--transcription-model is only supported with --transcription-provider 4o: {model}"
+        ))),
+        (_, None) => Ok(None),
     }
 }
 
@@ -1012,6 +1050,7 @@ mod tests {
             prompt: None,
             save_audio_path: None,
             transcription_provider: None,
+            transcription_model: None,
         }
     }
 
@@ -1035,6 +1074,67 @@ mod tests {
                 let message = rx.recv().await.expect("transcription should be queued");
                 assert_eq!(message.session_id, 1);
                 assert!(!message.resume_music);
+                assert_eq!(message.model, Some("gpt-4o-transcribe".to_string()));
+            })
+            .await;
+    }
+
+    /// 4o mini指定の録音は転写キューへモデルを渡す
+    #[tokio::test(flavor = "current_thread")]
+    async fn four_o_mini_model_is_queued_for_transcription() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+                let media_control = MediaControlService::with_controller(Box::new(
+                    DelayedMediaController::new(false, Duration::from_millis(0)),
+                ));
+                let (handler, _recording, _media_control, mut rx) =
+                    build_handler(backend, media_control);
+
+                handler
+                    .handle(IpcCmd::Start {
+                        prompt: None,
+                        save_audio_path: None,
+                        transcription_provider: Some(TranscriptionProvider::OpenAi4o),
+                        transcription_model: Some("gpt-4o-mini-transcribe".to_string()),
+                    })
+                    .await
+                    .unwrap();
+                handler.handle(IpcCmd::Stop).await.unwrap();
+
+                let message = rx.recv().await.expect("transcription should be queued");
+                assert_eq!(message.provider, TranscriptionProvider::OpenAi4o);
+                assert_eq!(message.model, Some("gpt-4o-mini-transcribe".to_string()));
+            })
+            .await;
+    }
+
+    /// 4o以外のプロバイダでは転写モデル指定を拒否する
+    #[tokio::test(flavor = "current_thread")]
+    async fn non_4o_provider_rejects_transcription_model() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+                let media_control = MediaControlService::with_controller(Box::new(
+                    DelayedMediaController::new(false, Duration::from_millis(0)),
+                ));
+                let (handler, _recording, _media_control, _rx) =
+                    build_handler(backend, media_control);
+
+                let result = handler
+                    .handle(IpcCmd::Start {
+                        prompt: None,
+                        save_audio_path: None,
+                        transcription_provider: Some(TranscriptionProvider::MlxQwen3Asr),
+                        transcription_model: Some("gpt-4o-mini-transcribe".to_string()),
+                    })
+                    .await;
+
+                assert!(result.is_err());
             })
             .await;
     }
@@ -1059,6 +1159,7 @@ mod tests {
                         prompt: None,
                         save_audio_path: None,
                         transcription_provider: Some(TranscriptionProvider::MlxQwen3Asr),
+                        transcription_model: None,
                     })
                     .await
                     .unwrap();
@@ -1066,6 +1167,7 @@ mod tests {
 
                 let message = rx.recv().await.expect("transcription should be queued");
                 assert_eq!(message.provider, TranscriptionProvider::MlxQwen3Asr);
+                assert_eq!(message.model, None);
                 assert_eq!(
                     *requested_format.lock().unwrap(),
                     Some(AudioDataFormat::Wav)
@@ -1096,6 +1198,7 @@ mod tests {
                         prompt: None,
                         save_audio_path: Some(save_path.clone()),
                         transcription_provider: None,
+                        transcription_model: None,
                     })
                     .await
                     .unwrap();

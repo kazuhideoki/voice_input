@@ -76,6 +76,8 @@ pub struct TranscriptionClientOptions {
     pub language: String,
     /// 転写バックエンド
     pub provider: TranscriptionProvider,
+    /// 転写モデル
+    pub model: Option<String>,
 }
 
 /// ストリーミング転写イベント
@@ -96,6 +98,8 @@ pub struct TranscriptionOptions {
     pub prompt: Option<String>,
     /// 転写バックエンド
     pub provider: TranscriptionProvider,
+    /// 転写モデル
+    pub model: Option<String>,
 }
 
 impl Default for TranscriptionOptions {
@@ -104,6 +108,7 @@ impl Default for TranscriptionOptions {
             language: "ja".to_string(),
             prompt: None,
             provider: TranscriptionProvider::DEFAULT,
+            model: None,
         }
     }
 }
@@ -170,6 +175,7 @@ impl TranscriptionService {
         let client_options = TranscriptionClientOptions {
             language: options.language.clone(),
             provider: options.provider,
+            model: options.model.clone(),
         };
         let output = self.client.transcribe(audio, &client_options).await?;
         api_timer.log();
@@ -215,6 +221,7 @@ impl TranscriptionService {
         let client_options = TranscriptionClientOptions {
             language: options.language.clone(),
             provider: options.provider,
+            model: options.model.clone(),
         };
         let output = self
             .client

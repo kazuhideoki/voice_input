@@ -35,26 +35,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         prompt: None,
         save_audio: None,
         transcription_provider: None,
+        transcription_model: None,
     }) {
         /* 録音系 → IPC */
         Cmd::Start {
             prompt,
             save_audio,
             transcription_provider,
+            transcription_model,
         } => relay(IpcCmd::Start {
             prompt,
             save_audio_path: save_audio,
             transcription_provider,
+            transcription_model,
         })?,
         Cmd::Stop => relay(IpcCmd::Stop)?,
         Cmd::Toggle {
             prompt,
             save_audio,
             transcription_provider,
+            transcription_model,
         } => relay(IpcCmd::Toggle {
             prompt,
             save_audio_path: save_audio,
             transcription_provider,
+            transcription_model,
         })?,
         Cmd::Status => relay(IpcCmd::Status)?,
         Cmd::Health => relay(IpcCmd::Health)?,

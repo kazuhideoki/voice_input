@@ -87,6 +87,29 @@ fn toggle_command_accepts_4o_transcription_provider() {
     assert!(!stderr.contains("error: invalid value"));
 }
 
+/// startコマンドで4o mini転写モデルを指定できる
+#[test]
+fn start_command_accepts_4o_mini_transcription_model() {
+    let output = run_cmd(&[
+        "start",
+        "--transcription-provider",
+        "4o",
+        "--transcription-model",
+        "gpt-4o-mini-transcribe",
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("error: unexpected argument"));
+    assert!(!stderr.contains("error: invalid value"));
+}
+
+/// startコマンドは未対応の転写モデルを拒否する
+#[test]
+fn start_command_rejects_unsupported_transcription_model() {
+    let output = run_cmd(&["start", "--transcription-model", "whisper-1"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid value"));
+}
+
 /// startコマンドは旧OpenAI別名を受け付けない
 #[test]
 fn start_command_rejects_openai_transcription_provider_alias() {

@@ -30,6 +30,7 @@ pub async fn handle_transcription<T: AudioBackend>(
     resume_music: bool,
     session_id: u64,
     provider: TranscriptionProvider,
+    model: Option<String>,
     recording_service: Rc<RefCell<RecordingService<T>>>,
     transcription_service: Rc<RefCell<TranscriptionService>>,
 ) -> Result<()> {
@@ -50,6 +51,7 @@ pub async fn handle_transcription<T: AudioBackend>(
         language: "ja".to_string(),
         prompt: None, // メモリモードではプロンプトファイルを使用しない
         provider,
+        model,
     };
 
     let finalized = if provider == TranscriptionProvider::OpenAi4o
@@ -295,6 +297,7 @@ pub async fn spawn_transcription_worker<T: AudioBackend + 'static>(
                 message.resume_music,
                 message.session_id,
                 message.provider,
+                message.model,
                 recording_service,
                 transcription_service,
             )

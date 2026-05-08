@@ -72,7 +72,7 @@ impl TranscriptionProvider {
     /// 環境変数未指定時のモデル名を返す
     pub fn default_model(&self) -> &'static str {
         match self {
-            Self::OpenAi4o => "gpt-4o-mini-transcribe",
+            Self::OpenAi4o => "gpt-4o-transcribe",
             Self::OpenAiRealtimeWhisper => "gpt-realtime-whisper",
             Self::MlxQwen3Asr => "Qwen/Qwen3-ASR-1.7B",
         }
@@ -430,7 +430,7 @@ mod tests {
         TranscriptionConfig {
             provider: TranscriptionProvider::OpenAi4o,
             api_key: None,
-            model: "gpt-4o-mini-transcribe".to_string(),
+            model: "gpt-4o-transcribe".to_string(),
             realtime_whisper_model: "gpt-realtime-whisper".to_string(),
             mlx_qwen3_asr_model: "Qwen/Qwen3-ASR-1.7B".to_string(),
             streaming_enabled: false,
@@ -611,7 +611,7 @@ mod tests {
             config.transcription.provider,
             TranscriptionProvider::OpenAi4o
         );
-        assert_eq!(config.transcription.model, "gpt-4o-mini-transcribe");
+        assert_eq!(config.transcription.model, "gpt-4o-transcribe");
         assert_eq!(
             config.transcription.realtime_whisper_model,
             "gpt-realtime-whisper"
@@ -634,7 +634,7 @@ mod tests {
             config.transcription.realtime_whisper_model,
             "gpt-realtime-whisper"
         );
-        assert_eq!(config.transcription.model, "gpt-4o-mini-transcribe");
+        assert_eq!(config.transcription.model, "gpt-4o-transcribe");
     }
 
     /// mlx-qwen3-asr コマンドは既定コマンドを使う

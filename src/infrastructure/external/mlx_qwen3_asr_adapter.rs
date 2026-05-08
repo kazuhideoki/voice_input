@@ -203,6 +203,7 @@ mod tests {
         TranscriptionClientOptions {
             language: "ja".to_string(),
             provider: TranscriptionProvider::MlxQwen3Asr,
+            model: None,
         }
     }
 

@@ -42,6 +42,8 @@ pub struct ActiveRecordingSession {
     pub save_audio_path: Option<PathBuf>,
     /// 録音停止後に使う転写バックエンド
     pub transcription_provider: TranscriptionProvider,
+    /// 録音停止後に使う転写モデル
+    pub transcription_model: Option<String>,
     /// 転写バックエンドが要求する音声形式
     pub requested_audio_format: Option<AudioDataFormat>,
 }
@@ -56,6 +58,7 @@ impl ActiveRecordingSession {
             start_prompt: options.prompt,
             save_audio_path: options.save_audio_path,
             transcription_provider: options.transcription_provider,
+            transcription_model: options.transcription_model,
             requested_audio_format: options.requested_audio_format,
         }
     }
@@ -120,6 +123,7 @@ impl RecordingState {
                 music_was_playing: session.music_was_playing,
                 save_audio_path: session.save_audio_path.clone(),
                 transcription_provider: session.transcription_provider,
+                transcription_model: session.transcription_model.clone(),
                 requested_audio_format: session.requested_audio_format,
             }),
         }
@@ -134,6 +138,7 @@ pub struct StoppedSessionContext {
     pub music_was_playing: bool,
     pub save_audio_path: Option<PathBuf>,
     pub transcription_provider: TranscriptionProvider,
+    pub transcription_model: Option<String>,
     pub requested_audio_format: Option<AudioDataFormat>,
 }
 
@@ -182,6 +187,8 @@ pub struct RecordingOptions {
     pub save_audio_path: Option<PathBuf>,
     /// 録音停止後に使う転写バックエンド
     pub transcription_provider: TranscriptionProvider,
+    /// 録音停止後に使う転写モデル
+    pub transcription_model: Option<String>,
     /// 転写バックエンドが要求する音声形式
     pub requested_audio_format: Option<AudioDataFormat>,
     /// 録音中 PCM フレームの送信先
@@ -194,6 +201,7 @@ impl Default for RecordingOptions {
             prompt: None,
             save_audio_path: None,
             transcription_provider: TranscriptionProvider::DEFAULT,
+            transcription_model: None,
             requested_audio_format: None,
             audio_frame_tx: None,
         }
