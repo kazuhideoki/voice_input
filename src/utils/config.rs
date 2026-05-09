@@ -19,6 +19,15 @@ pub const DEFAULT_MAX_RECORDING_DURATION_SECS: u64 = 30;
 /// 最大録音時間を指定する環境変数名
 pub const MAX_RECORDING_DURATION_SECS_ENV: &str = "VOICE_INPUT_MAX_SECS";
 
+/// 録音開始時に先頭へ付与するローカル pre-roll のデフォルト値（ミリ秒）
+pub const DEFAULT_AUDIO_PRE_ROLL_MS: u64 = 500;
+
+/// 録音開始時 pre-roll の最大値（ミリ秒）
+pub const MAX_AUDIO_PRE_ROLL_MS: u64 = 5_000;
+
+/// 録音開始時の pre-roll 長を指定する環境変数名
+pub const AUDIO_PRE_ROLL_MS_ENV: &str = "VOICE_INPUT_PRE_ROLL_MS";
+
 #[cfg(test)]
 use std::sync::Mutex;
 
@@ -45,6 +54,8 @@ pub enum ConfigError {
     UnsupportedTranscriptionModel { provider: String, value: String },
     #[error("VOICE_INPUT_MAX_SECS must be a positive integer: {value}")]
     InvalidMaxDurationSecs { value: String },
+    #[error("VOICE_INPUT_PRE_ROLL_MS must be an integer between 0 and 5000: {value}")]
+    InvalidAudioPreRollMs { value: String },
     #[error("{name} must be either 'true' or 'false': {value}")]
     InvalidBooleanEnv { name: &'static str, value: String },
 }
@@ -197,6 +208,8 @@ pub struct AudioConfig {
     pub input_device_priorities: Vec<String>,
     /// 録音フォーマット
     pub preferred_format: PreferredAudioFormat,
+    /// 録音開始時に先頭へ付与するローカル pre-roll 長（ミリ秒）
+    pub pre_roll_ms: u64,
 }
 
 /// 録音フォーマット
@@ -255,6 +268,10 @@ impl EnvConfig {
             .to_string();
         let streaming_enabled = parse_bool_env("OPENAI_TRANSCRIBE_STREAMING")?;
         let mlx_qwen3_asr_command = "mlx-qwen3-asr".to_string();
+        let audio_pre_roll_ms = match std::env::var(AUDIO_PRE_ROLL_MS_ENV) {
+            Ok(value) => parse_audio_pre_roll_ms(&value)?,
+            Err(_) => DEFAULT_AUDIO_PRE_ROLL_MS,
+        };
         let max_duration_secs = match max_duration_secs_override {
             Some(value) if value > 0 => value,
             Some(value) => {
@@ -296,6 +313,7 @@ impl EnvConfig {
             audio: AudioConfig {
                 input_device_priorities: csv_env("INPUT_DEVICE_PRIORITY"),
                 preferred_format: PreferredAudioFormat::Flac,
+                pre_roll_ms: audio_pre_roll_ms,
             },
             recording: RecordingConfig { max_duration_secs },
             profiling: ProfilingConfig {
@@ -432,6 +450,21 @@ pub fn parse_max_duration_secs(value: &str) -> Result<u64, ConfigError> {
     Ok(secs)
 }
 
+/// 録音開始時 pre-roll のミリ秒を検証して返す
+pub fn parse_audio_pre_roll_ms(value: &str) -> Result<u64, ConfigError> {
+    let millis = value
+        .parse()
+        .map_err(|_| ConfigError::InvalidAudioPreRollMs {
+            value: value.to_string(),
+        })?;
+    if millis > MAX_AUDIO_PRE_ROLL_MS {
+        return Err(ConfigError::InvalidAudioPreRollMs {
+            value: value.to_string(),
+        });
+    }
+    Ok(millis)
+}
+
 fn parse_bool_env(name: &'static str) -> Result<bool, ConfigError> {
     match std::env::var(name) {
         Ok(value) => match value.as_str() {
@@ -446,9 +479,9 @@ fn parse_bool_env(name: &'static str) -> Result<bool, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioConfig, ConfigError, DEFAULT_MAX_RECORDING_DURATION_SECS, EnvConfig, PathConfig,
-        PreferredAudioFormat, ProfilingConfig, ProxyConfig, RecordingConfig, TranscriptionConfig,
-        TranscriptionProvider, lock_test_env,
+        AudioConfig, ConfigError, DEFAULT_AUDIO_PRE_ROLL_MS, DEFAULT_MAX_RECORDING_DURATION_SECS,
+        EnvConfig, MAX_AUDIO_PRE_ROLL_MS, PathConfig, PreferredAudioFormat, ProfilingConfig,
+        ProxyConfig, RecordingConfig, TranscriptionConfig, TranscriptionProvider, lock_test_env,
     };
     use std::path::PathBuf;
 
@@ -468,6 +501,7 @@ mod tests {
             audio: AudioConfig {
                 input_device_priorities: Vec::new(),
                 preferred_format: PreferredAudioFormat::Flac,
+                pre_roll_ms: DEFAULT_AUDIO_PRE_ROLL_MS,
             },
             recording: RecordingConfig {
                 max_duration_secs: DEFAULT_MAX_RECORDING_DURATION_SECS,
@@ -705,6 +739,70 @@ mod tests {
         assert_eq!(config.audio.preferred_format, PreferredAudioFormat::Flac);
     }
 
+    /// 録音開始時の pre-roll は既定で 500ms になる
+    #[test]
+    fn audio_pre_roll_defaults_to_500ms() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_PRE_ROLL_MS");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(config.audio.pre_roll_ms, DEFAULT_AUDIO_PRE_ROLL_MS);
+    }
+
+    /// 録音開始時の pre-roll は環境変数から読み込める
+    #[test]
+    fn audio_pre_roll_ms_is_loaded_from_environment() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_PRE_ROLL_MS", "250");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(config.audio.pre_roll_ms, 250);
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_PRE_ROLL_MS");
+        }
+    }
+
+    /// 録音開始時の pre-roll は0msで無効化できる
+    #[test]
+    fn audio_pre_roll_ms_accepts_zero() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_PRE_ROLL_MS", "0");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(config.audio.pre_roll_ms, 0);
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_PRE_ROLL_MS");
+        }
+    }
+
+    /// 録音開始時の pre-roll は上限値を受け入れる
+    #[test]
+    fn audio_pre_roll_ms_accepts_maximum() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_PRE_ROLL_MS", MAX_AUDIO_PRE_ROLL_MS.to_string());
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(config.audio.pre_roll_ms, MAX_AUDIO_PRE_ROLL_MS);
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_PRE_ROLL_MS");
+        }
+    }
+
     /// OpenAI APIキーは新旧環境変数の後方互換を保つ
     #[test]
     fn transcription_api_key_falls_back_to_openai_api_key() {
@@ -745,6 +843,46 @@ mod tests {
 
         unsafe {
             std::env::remove_var("VOICE_INPUT_MAX_SECS");
+        }
+    }
+
+    /// 録音開始時の pre-roll が整数でない場合は設定エラーになる
+    #[test]
+    fn try_from_env_rejects_invalid_audio_pre_roll_ms() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_PRE_ROLL_MS", "abc");
+        }
+
+        let result = EnvConfig::try_from_env();
+
+        assert_eq!(
+            result,
+            Err(ConfigError::InvalidAudioPreRollMs {
+                value: "abc".to_string(),
+            })
+        );
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_PRE_ROLL_MS");
+        }
+    }
+
+    /// 録音開始時の pre-roll が上限を超える場合は設定エラーになる
+    #[test]
+    fn try_from_env_rejects_too_large_audio_pre_roll_ms() {
+        let _lock = lock_test_env();
+        let value = (MAX_AUDIO_PRE_ROLL_MS + 1).to_string();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_PRE_ROLL_MS", &value);
+        }
+
+        let result = EnvConfig::try_from_env();
+
+        assert_eq!(result, Err(ConfigError::InvalidAudioPreRollMs { value }));
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_PRE_ROLL_MS");
         }
     }
 
