@@ -35,6 +35,8 @@ use crate::ipc::{IpcCmd, IpcResp};
 use crate::utils::config::{EnvConfig, TranscriptionProvider};
 use crate::utils::profiling;
 
+const REALTIME_READY_RETRY_DELAY: Duration = Duration::from_secs(5);
+
 /// 転写メッセージ
 #[derive(Clone, Debug)]
 pub struct TranscriptionMessage {
@@ -43,6 +45,12 @@ pub struct TranscriptionMessage {
     pub session_id: u64,
     pub provider: TranscriptionProvider,
     pub model: Option<String>,
+}
+
+struct PreparedRealtimeSession {
+    session: RealtimeWhisperSessionHandle,
+    event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
+    input_task: tokio::task::JoinHandle<Option<(FinalizedTranscription, bool)>>,
 }
 
 struct ActiveRealtimeSession {
@@ -64,6 +72,8 @@ pub struct CommandHandler<T: AudioBackend> {
     media_control: Rc<RefCell<MediaControlService>>,
     transcription_tx: mpsc::UnboundedSender<TranscriptionMessage>,
     realtime_session: Rc<RefCell<Option<ActiveRealtimeSession>>>,
+    ready_realtime_session: Rc<RefCell<Option<PreparedRealtimeSession>>>,
+    ready_realtime_task: Rc<RefCell<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl<T: AudioBackend + 'static> CommandHandler<T> {
@@ -80,7 +90,34 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             media_control,
             transcription_tx,
             realtime_session: Rc::new(RefCell::new(None)),
+            ready_realtime_session: Rc::new(RefCell::new(None)),
+            ready_realtime_task: Rc::new(RefCell::new(None)),
         }
+    }
+
+    /// 設定が Realtime Whisper の場合、待機済みセッションをバックグラウンドで1本用意する。
+    pub fn warm_realtime_whisper_session_if_enabled(&self) {
+        if EnvConfig::get().transcription.provider != TranscriptionProvider::OpenAiRealtimeWhisper {
+            return;
+        }
+
+        profiling::log_point("realtime_ready.warm_requested", "");
+        self.ensure_ready_realtime_session();
+    }
+
+    /// sleep/wake などで stale になり得る待機済みセッションを破棄する。
+    pub fn reset_ready_realtime_whisper_session(&self) {
+        profiling::log_point("realtime_ready.reset", "");
+        if let Some(prepared) = self.ready_realtime_session.borrow_mut().take() {
+            prepared.session.abort();
+            prepared.input_task.abort();
+        }
+
+        if let Some(task) = self.ready_realtime_task.borrow_mut().take() {
+            task.abort();
+        }
+
+        self.warm_realtime_whisper_session_if_enabled();
     }
 
     /// IPCコマンドを処理
@@ -194,7 +231,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         play_start_sound();
 
         let mut realtime_session = if provider == TranscriptionProvider::OpenAiRealtimeWhisper {
-            Some(self.prepare_realtime_session()?)
+            Some(self.prepare_realtime_session_for_recording()?)
         } else {
             None
         };
@@ -222,6 +259,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 if let Some(active) = realtime_session.take() {
                     active.session.abort();
                     active.input_task.abort();
+                    self.warm_realtime_whisper_session_if_enabled();
                 }
                 return Err(error);
             }
@@ -250,28 +288,55 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         })
     }
 
-    fn prepare_realtime_session(&self) -> Result<ActiveRealtimeSession> {
+    fn prepare_realtime_session_for_recording(&self) -> Result<ActiveRealtimeSession> {
         if self.realtime_session.borrow().is_some() {
             return Err(VoiceInputError::SystemError(
                 "realtime-whisper session is already active".to_string(),
             ));
         }
 
-        let config = RealtimeWhisperConfig::from_transcription_config(
-            &EnvConfig::get().transcription,
-            "ja".to_string(),
-        )?;
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-        let input_task =
-            spawn_local(async move { process_streaming_text_input(&mut event_rx).await });
-        let session = spawn_realtime_whisper_session(config, event_tx.clone());
+        if let Some(prepared) = self.take_ready_realtime_session() {
+            profiling::log_point("realtime_ready.consumed", "");
+            return Ok(ActiveRealtimeSession {
+                session_id: 0,
+                session: prepared.session,
+                event_tx: prepared.event_tx,
+                input_task: prepared.input_task,
+            });
+        }
 
-        Ok(ActiveRealtimeSession {
-            session_id: 0,
-            session,
-            event_tx,
-            input_task,
-        })
+        profiling::log_point("realtime_ready.miss", "fallback=on_demand");
+        self.prepare_realtime_session()
+            .map(|prepared| ActiveRealtimeSession {
+                session_id: 0,
+                session: prepared.session,
+                event_tx: prepared.event_tx,
+                input_task: prepared.input_task,
+            })
+    }
+
+    fn prepare_realtime_session(&self) -> Result<PreparedRealtimeSession> {
+        build_prepared_realtime_session()
+    }
+
+    fn take_ready_realtime_session(&self) -> Option<PreparedRealtimeSession> {
+        let prepared = self.ready_realtime_session.borrow_mut().take()?;
+        if prepared.session.is_finished() {
+            profiling::log_point("realtime_ready.stale", "");
+            prepared.session.abort();
+            prepared.input_task.abort();
+            self.ensure_ready_realtime_session();
+            return None;
+        }
+
+        Some(prepared)
+    }
+
+    fn ensure_ready_realtime_session(&self) {
+        ensure_ready_realtime_session(
+            self.ready_realtime_session.clone(),
+            self.ready_realtime_task.clone(),
+        );
     }
 
     fn spawn_pause_if_needed(&self, session_id: u64) {
@@ -388,6 +453,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             active,
         )
         .await?;
+        self.warm_realtime_whisper_session_if_enabled();
 
         let msg = match outcome.save_result {
             Some((_requested_path, Ok(saved_path))) => {
@@ -527,6 +593,8 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         let recording = self.recording.clone();
         let transcription = self.transcription.clone();
         let realtime_session = self.realtime_session.clone();
+        let ready_realtime_session = self.ready_realtime_session.clone();
+        let ready_realtime_task = self.ready_realtime_task.clone();
         let tx = self.transcription_tx.clone();
 
         spawn_local(async move {
@@ -550,6 +618,13 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                                 .await
                                 {
                                     eprintln!("Realtime auto-stop failed: {}", error);
+                                } else if EnvConfig::get().transcription.provider
+                                    == TranscriptionProvider::OpenAiRealtimeWhisper
+                                {
+                                    ensure_ready_realtime_session(
+                                        ready_realtime_session.clone(),
+                                        ready_realtime_task.clone(),
+                                    );
                                 }
                             } else if let Ok(outcome) = recording.borrow().stop_recording().await {
                                 if let Some(path) = &outcome.context.save_audio_path {
@@ -580,6 +655,82 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             }
         });
     }
+}
+
+fn build_prepared_realtime_session() -> Result<PreparedRealtimeSession> {
+    let config = RealtimeWhisperConfig::from_transcription_config(
+        &EnvConfig::get().transcription,
+        "ja".to_string(),
+    )?;
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let input_task = spawn_local(async move { process_streaming_text_input(&mut event_rx).await });
+    let session = spawn_realtime_whisper_session(config, event_tx.clone());
+
+    Ok(PreparedRealtimeSession {
+        session,
+        event_tx,
+        input_task,
+    })
+}
+
+fn ensure_ready_realtime_session(
+    ready_realtime_session: Rc<RefCell<Option<PreparedRealtimeSession>>>,
+    ready_realtime_task: Rc<RefCell<Option<tokio::task::JoinHandle<()>>>>,
+) {
+    if ready_realtime_session.borrow().is_some() || ready_realtime_task.borrow().is_some() {
+        profiling::log_point("realtime_ready.ensure_skipped", "reason=already_present");
+        return;
+    }
+
+    let initial = match build_prepared_realtime_session() {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            eprintln!("Realtime ready session warm-up skipped: {}", error);
+            return;
+        }
+    };
+
+    let ready_realtime_session_for_task = ready_realtime_session.clone();
+    let ready_realtime_task_for_task = ready_realtime_task.clone();
+    let task = spawn_local(async move {
+        profiling::log_point("realtime_ready.warm_started", "");
+        let mut next = Some(initial);
+        while let Some(mut prepared) = next.take() {
+            match prepared.session.wait_until_ready().await {
+                Ok(()) => {
+                    println!("Realtime ready websocket connected.");
+                    profiling::log_point("realtime_ready.warm_ready", "");
+                    *ready_realtime_session_for_task.borrow_mut() = Some(prepared);
+                    break;
+                }
+                Err(error) => {
+                    prepared.session.abort();
+                    prepared.input_task.abort();
+                    profiling::log_point(
+                        "realtime_ready.warm_failed",
+                        &format!("retry_in_secs={}", REALTIME_READY_RETRY_DELAY.as_secs()),
+                    );
+                    eprintln!(
+                        "Realtime ready session warm-up failed; retrying in {}s: {}",
+                        REALTIME_READY_RETRY_DELAY.as_secs(),
+                        error
+                    );
+                    tokio::time::sleep(REALTIME_READY_RETRY_DELAY).await;
+                    next = match build_prepared_realtime_session() {
+                        Ok(prepared) => Some(prepared),
+                        Err(error) => {
+                            eprintln!("Realtime ready session retry skipped: {}", error);
+                            None
+                        }
+                    };
+                }
+            }
+        }
+
+        *ready_realtime_task_for_task.borrow_mut() = None;
+    });
+
+    *ready_realtime_task.borrow_mut() = Some(task);
 }
 
 async fn stop_active_realtime_session<T: AudioBackend + 'static>(

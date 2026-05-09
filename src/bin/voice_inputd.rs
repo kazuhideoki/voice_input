@@ -82,7 +82,10 @@ async fn async_main() -> Result<()> {
     let transcription_service = container.transcription_service.clone();
 
     text_input::init_worker().map_err(|e| VoiceInputError::SystemError(e.to_string()))?;
-    spawn_runtime_recovery_monitor(recording_service.clone());
+    spawn_runtime_recovery_monitor(recording_service.clone(), command_handler.clone());
+    command_handler
+        .borrow()
+        .warm_realtime_whisper_session_if_enabled();
 
     spawn_local(spawn_transcription_worker(
         semaphore.clone(),
@@ -108,6 +111,7 @@ fn spawn_runtime_recovery_monitor(
     recording_service: std::rc::Rc<
         std::cell::RefCell<voice_input::application::RecordingService<CpalAudioBackend>>,
     >,
+    command_handler: std::rc::Rc<std::cell::RefCell<CommandHandler<CpalAudioBackend>>>,
 ) {
     const CHECK_INTERVAL: Duration = Duration::from_secs(15);
     const WAKE_THRESHOLD: Duration = Duration::from_secs(45);
@@ -138,6 +142,9 @@ fn spawn_runtime_recovery_monitor(
                 match (audio_result, text_result) {
                     (Ok(()), Ok(())) => {
                         recovered = true;
+                        command_handler
+                            .borrow()
+                            .reset_ready_realtime_whisper_session();
                         println!("Recovered runtime resources after wake.");
                         break;
                     }

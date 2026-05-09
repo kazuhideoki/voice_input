@@ -32,6 +32,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SESSION_UPDATE_TIMEOUT: Duration = Duration::from_secs(10);
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
 const FINISH_TIMEOUT: Duration = Duration::from_secs(45);
+const READY_TIMEOUT: Duration = Duration::from_secs(25);
 const OPENAI_SAFETY_IDENTIFIER: HeaderName = HeaderName::from_static("openai-safety-identifier");
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,6 +66,7 @@ impl RealtimeWhisperConfig {
 pub struct RealtimeWhisperSessionHandle {
     frame_tx: mpsc::UnboundedSender<AudioFrame>,
     stop_tx: Option<oneshot::Sender<()>>,
+    ready_rx: Option<oneshot::Receiver<Result<()>>>,
     result_rx: oneshot::Receiver<Result<TranscriptionOutput>>,
     task: JoinHandle<()>,
 }
@@ -73,6 +75,32 @@ impl RealtimeWhisperSessionHandle {
     /// セッションへ録音中 PCM フレームを送るための sender。
     pub fn frame_tx(&self) -> mpsc::UnboundedSender<AudioFrame> {
         self.frame_tx.clone()
+    }
+
+    /// WebSocket 接続と `session.update` ACK を待ち、音声送信可能な状態にする。
+    pub async fn wait_until_ready(&mut self) -> Result<()> {
+        let Some(mut ready_rx) = self.ready_rx.take() else {
+            return Ok(());
+        };
+
+        match tokio::time::timeout(READY_TIMEOUT, &mut ready_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => Err(request_error(&format!(
+                "realtime-whisper ready signal was cancelled: {}",
+                error
+            ))),
+            Err(_) => {
+                self.task.abort();
+                Err(request_error(
+                    "realtime-whisper session was not ready within 25s",
+                ))
+            }
+        }
+    }
+
+    /// セッション task がすでに終了しているかどうか。
+    pub fn is_finished(&self) -> bool {
+        self.task.is_finished()
     }
 
     /// 音声送信を commit し、最終 transcript を待つ。
@@ -101,6 +129,12 @@ impl RealtimeWhisperSessionHandle {
     }
 }
 
+impl Drop for RealtimeWhisperSessionHandle {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 /// Realtime Whisper セッションをバックグラウンドで開始する。
 pub fn spawn_realtime_whisper_session(
     config: RealtimeWhisperConfig,
@@ -108,16 +142,19 @@ pub fn spawn_realtime_whisper_session(
 ) -> RealtimeWhisperSessionHandle {
     let (frame_tx, frame_rx) = mpsc::unbounded_channel();
     let (stop_tx, stop_rx) = oneshot::channel();
+    let (ready_tx, ready_rx) = oneshot::channel();
     let (result_tx, result_rx) = oneshot::channel();
 
     let task = tokio::task::spawn_local(async move {
-        let result = run_realtime_whisper_session(config, frame_rx, stop_rx, event_tx).await;
+        let result =
+            run_realtime_whisper_session(config, frame_rx, stop_rx, event_tx, ready_tx).await;
         let _ = result_tx.send(result);
     });
 
     RealtimeWhisperSessionHandle {
         frame_tx,
         stop_tx: Some(stop_tx),
+        ready_rx: Some(ready_rx),
         result_rx,
         task,
     }
@@ -128,25 +165,58 @@ async fn run_realtime_whisper_session(
     mut frame_rx: mpsc::UnboundedReceiver<AudioFrame>,
     mut stop_rx: oneshot::Receiver<()>,
     event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
+    ready_tx: oneshot::Sender<Result<()>>,
 ) -> Result<TranscriptionOutput> {
     let overall_timer = profiling::Timer::start("realtime_whisper.session");
-    let request = build_realtime_request(&config.api_key)?;
+    let mut ready_tx = Some(ready_tx);
+    let request = match build_realtime_request(&config.api_key) {
+        Ok(request) => request,
+        Err(error) => {
+            notify_ready(&mut ready_tx, Err(request_error(&error.to_string())));
+            return Err(error);
+        }
+    };
 
-    let (stream, _) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(request))
-        .await
-        .map_err(|_| request_error("realtime websocket connection did not open within 10s"))?
-        .map_err(|error| {
-            VoiceInputError::from(TranscriptionClientError::Request {
+    profiling::log_point("realtime_whisper.websocket.connecting", "");
+    let (stream, _) = match tokio::time::timeout(CONNECT_TIMEOUT, connect_async(request)).await {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            let error = VoiceInputError::from(TranscriptionClientError::Request {
                 message: format!("failed to connect realtime websocket: {}", error),
-            })
-        })?;
+            });
+            notify_ready(&mut ready_tx, Err(request_error(&error.to_string())));
+            return Err(error);
+        }
+        Err(_) => {
+            let error = request_error("realtime websocket connection did not open within 10s");
+            notify_ready(&mut ready_tx, Err(request_error(&error.to_string())));
+            return Err(error);
+        }
+    };
+    profiling::log_point("realtime_whisper.websocket.connected", "");
     let (mut write, mut read) = stream.split();
 
-    send_json(&mut write, build_session_update_payload(&config)).await?;
+    if let Err(error) = send_json(&mut write, build_session_update_payload(&config)).await {
+        notify_ready(&mut ready_tx, Err(request_error(&error.to_string())));
+        return Err(error);
+    }
+    profiling::log_point("realtime_whisper.session_update.sent", "");
 
-    tokio::time::timeout(SESSION_UPDATE_TIMEOUT, wait_for_session_updated(&mut read))
-        .await
-        .map_err(|_| request_error("realtime session.update was not acknowledged within 10s"))??;
+    match tokio::time::timeout(SESSION_UPDATE_TIMEOUT, wait_for_session_updated(&mut read)).await {
+        Ok(Ok(())) => {
+            profiling::log_point("realtime_whisper.session_update.ack", "");
+            notify_ready(&mut ready_tx, Ok(()));
+        }
+        Ok(Err(error)) => {
+            notify_ready(&mut ready_tx, Err(request_error(&error.to_string())));
+            return Err(error);
+        }
+        Err(_) => {
+            let error = request_error("realtime session.update was not acknowledged within 10s");
+            notify_ready(&mut ready_tx, Err(request_error(&error.to_string())));
+            return Err(error);
+        }
+    }
 
     let mut converter = Pcm24kMonoConverter::default();
     let mut pending_audio = Vec::new();
@@ -182,6 +252,7 @@ async fn run_realtime_whisper_session(
                 }
                 flush_pending_audio(&mut write, &mut pending_audio, true).await?;
                 send_json(&mut write, json!({"type": "input_audio_buffer.commit"})).await?;
+                profiling::log_point("realtime_whisper.audio.commit", "");
                 committed = true;
                 completion_timeout.as_mut().reset(Instant::now() + COMPLETION_TIMEOUT);
                 completion_timeout_enabled = true;
@@ -190,6 +261,12 @@ async fn run_realtime_whisper_session(
                 return Err(request_error("realtime transcription did not complete within 30s after commit"));
             }
         }
+    }
+}
+
+fn notify_ready(ready_tx: &mut Option<oneshot::Sender<Result<()>>>, result: Result<()>) {
+    if let Some(tx) = ready_tx.take() {
+        let _ = tx.send(result);
     }
 }
 
