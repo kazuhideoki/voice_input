@@ -40,6 +40,7 @@ cp .env.example .env
 `realtime-whisper` は録音中の PCM フレームを OpenAI Realtime API へ送信し、delta を入力先へ逐次反映します。`gpt-realtime-whisper` は server VAD 非対応のため、停止時に手動 commit します。
 `mlx-qwen3-asr` 指定時は `mlx-qwen3-asr` コマンドを使い、録音データは CLI 連携のため一時ファイル経由で渡します。
 `VOICE_INPUT_PRE_ROLL_MS` は `start` / `toggle` 直前のローカル音声リングバッファを録音の先頭へ付与する長さです。既定値は 500ms で、0 を指定すると無効化できます。キー押下前の音声はメモリ上にだけ保持し、送信や保存は録音開始後のデータとして扱う場合に限ります。
+`VOICE_INPUT_PUSH_TO_TALK=true` を設定すると、`VOICE_INPUT_PUSH_TO_TALK_HOTKEY` のキーを押している間だけ daemon が録音します。既定ホットキーは `opt+8` で、対象キーイベントは前面アプリへ渡さず抑制します。
 
 ## 音声処理
 
@@ -98,6 +99,7 @@ cargo build --release
    - `VoiceInput.app` を有効化
    - システム設定 → プライバシーとセキュリティ → アクセシビリティ
    - `VoiceInput.app` を有効化
+   - `VOICE_INPUT_PUSH_TO_TALK=true` を使う場合は、入力監視でも `VoiceInput.app` を有効化
 
 3. **権限反映後の再起動**
 
@@ -106,9 +108,9 @@ cargo build --release
 ```
 
 この方式では `~/Applications/VoiceInput.app` を構築し、LaunchAgent は bundle 内の `voice_inputd` を起動します。
-初回は `build-app-bundle.sh` で app bundle を配置したあと、システム設定で `VoiceInput.app` に `Microphone` / `Accessibility` 権限を付与し、最後に `restart-app-bundle.sh` で LaunchAgent を再起動してください。
+初回は `build-app-bundle.sh` で app bundle を配置したあと、システム設定で `VoiceInput.app` に `Microphone` / `Accessibility` 権限を付与し、最後に `restart-app-bundle.sh` で LaunchAgent を再起動してください。push-to-talk を使う場合は `Input Monitoring` 権限も付与してください。
 `restart-app-bundle.sh` は再ビルドや再署名を行わず、権限付与の反映に必要な再起動だけを実行します。
-`cleanup-app-bundle.sh` は bundle を削除したうえで、bundle identifier に対して `Microphone` / `Accessibility` の TCC 設定を reset します。
+`cleanup-app-bundle.sh` は bundle を削除したうえで、bundle identifier に対して `Microphone` / `Accessibility` / `Input Monitoring` の TCC 設定を reset します。
 
 ### 開発時の再ビルド
 
@@ -198,6 +200,15 @@ voice_input --list-devices
 ```sh
 voice_input toggle
 ```
+
+キーを押している間だけ録音する場合は daemon 側の環境変数で有効化します。
+
+```sh
+VOICE_INPUT_PUSH_TO_TALK=true
+VOICE_INPUT_PUSH_TO_TALK_HOTKEY=opt+8
+```
+
+`VOICE_INPUT_PUSH_TO_TALK_HOTKEY` は `opt+8`、`cmd+space`、`ctrl+shift+v`、`fn+f8` のような `modifier+key` 形式を受け付けます。キーボード配列差分で通常表記が合わない場合は `opt+keycode:28` のように raw keycode も指定できます。
 
 ## テキスト入力方式
 

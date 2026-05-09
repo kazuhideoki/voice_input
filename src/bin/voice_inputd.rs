@@ -30,6 +30,7 @@ use voice_input::{
         audio::CpalAudioBackend,
         command_handler::CommandHandler,
         external::text_input,
+        push_to_talk::{self, PushToTalkEvent, PushToTalkMonitor},
         runtime_recovery::{SleepWakeDetector, WakeRecoveryRetryPolicy},
         service_container::ServiceContainer,
         transcription_worker::spawn_transcription_worker,
@@ -87,6 +88,11 @@ async fn async_main() -> Result<()> {
     command_handler
         .borrow()
         .warm_realtime_whisper_session_if_enabled();
+    let _push_to_talk_monitor = spawn_push_to_talk_if_enabled(
+        command_handler.clone(),
+        recording_service.clone(),
+        &EnvConfig::get().push_to_talk,
+    )?;
 
     spawn_local(spawn_transcription_worker(
         semaphore.clone(),
@@ -107,6 +113,67 @@ async fn async_main() -> Result<()> {
             let _ = handle_client(stream, handler).await;
         });
     }
+}
+
+fn spawn_push_to_talk_if_enabled(
+    command_handler: std::rc::Rc<std::cell::RefCell<CommandHandler<CpalAudioBackend>>>,
+    recording_service: std::rc::Rc<
+        std::cell::RefCell<voice_input::application::RecordingService<CpalAudioBackend>>,
+    >,
+    config: &voice_input::utils::config::PushToTalkConfig,
+) -> Result<Option<PushToTalkMonitor>> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let monitor = push_to_talk::spawn_monitor(config, tx)?;
+    if monitor.is_none() {
+        return Ok(None);
+    }
+
+    println!("push-to-talk enabled: hotkey={}", config.hotkey);
+    spawn_local(async move {
+        let mut push_to_talk_recording = false;
+
+        while let Some(event) = rx.recv().await {
+            match event {
+                PushToTalkEvent::KeyDown => {
+                    if push_to_talk_recording || recording_service.borrow().is_recording() {
+                        continue;
+                    }
+
+                    let response = command_handler
+                        .borrow()
+                        .handle(IpcCmd::Start {
+                            prompt: None,
+                            save_audio_path: None,
+                            max_duration_secs: None,
+                            transcription_provider: None,
+                            transcription_model: None,
+                        })
+                        .await;
+
+                    match response {
+                        Ok(_) => push_to_talk_recording = true,
+                        Err(error) => eprintln!("Push-to-talk start failed: {error}"),
+                    }
+                }
+                PushToTalkEvent::KeyUp => {
+                    if !push_to_talk_recording {
+                        continue;
+                    }
+
+                    push_to_talk_recording = false;
+                    if !recording_service.borrow().is_recording() {
+                        continue;
+                    }
+
+                    if let Err(error) = command_handler.borrow().handle(IpcCmd::Stop).await {
+                        eprintln!("Push-to-talk stop failed: {error}");
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(monitor)
 }
 
 fn spawn_runtime_recovery_monitor(

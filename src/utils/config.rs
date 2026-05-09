@@ -28,6 +28,15 @@ pub const MAX_AUDIO_PRE_ROLL_MS: u64 = 5_000;
 /// 録音開始時の pre-roll 長を指定する環境変数名
 pub const AUDIO_PRE_ROLL_MS_ENV: &str = "VOICE_INPUT_PRE_ROLL_MS";
 
+/// キー押下中だけ録音する push-to-talk を有効にする環境変数名
+pub const PUSH_TO_TALK_ENABLED_ENV: &str = "VOICE_INPUT_PUSH_TO_TALK";
+
+/// push-to-talk のトリガーキーを指定する環境変数名
+pub const PUSH_TO_TALK_HOTKEY_ENV: &str = "VOICE_INPUT_PUSH_TO_TALK_HOTKEY";
+
+/// push-to-talk のデフォルトホットキー
+pub const DEFAULT_PUSH_TO_TALK_HOTKEY: &str = "opt+8";
+
 #[cfg(test)]
 use std::sync::Mutex;
 
@@ -233,6 +242,15 @@ pub struct RecordingConfig {
     pub max_duration_secs: u64,
 }
 
+/// push-to-talk 設定
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushToTalkConfig {
+    /// キー押下中録音を有効にする
+    pub enabled: bool,
+    /// トリガーにするホットキー
+    pub hotkey: String,
+}
+
 /// 環境変数設定
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvConfig {
@@ -246,6 +264,8 @@ pub struct EnvConfig {
     pub audio: AudioConfig,
     /// 録音設定
     pub recording: RecordingConfig,
+    /// push-to-talk 設定
+    pub push_to_talk: PushToTalkConfig,
     /// プロファイリング設定
     pub profiling: ProfilingConfig,
 }
@@ -316,6 +336,11 @@ impl EnvConfig {
                 pre_roll_ms: audio_pre_roll_ms,
             },
             recording: RecordingConfig { max_duration_secs },
+            push_to_talk: PushToTalkConfig {
+                enabled: parse_bool_env(PUSH_TO_TALK_ENABLED_ENV)?,
+                hotkey: non_empty_env(PUSH_TO_TALK_HOTKEY_ENV)
+                    .unwrap_or_else(|| DEFAULT_PUSH_TO_TALK_HOTKEY.to_string()),
+            },
             profiling: ProfilingConfig {
                 enabled: parse_bool_env("VOICE_INPUT_PROFILE")?,
             },
@@ -480,8 +505,9 @@ fn parse_bool_env(name: &'static str) -> Result<bool, ConfigError> {
 mod tests {
     use super::{
         AudioConfig, ConfigError, DEFAULT_AUDIO_PRE_ROLL_MS, DEFAULT_MAX_RECORDING_DURATION_SECS,
-        EnvConfig, MAX_AUDIO_PRE_ROLL_MS, PathConfig, PreferredAudioFormat, ProfilingConfig,
-        ProxyConfig, RecordingConfig, TranscriptionConfig, TranscriptionProvider, lock_test_env,
+        DEFAULT_PUSH_TO_TALK_HOTKEY, EnvConfig, MAX_AUDIO_PRE_ROLL_MS, PathConfig,
+        PreferredAudioFormat, ProfilingConfig, ProxyConfig, PushToTalkConfig, RecordingConfig,
+        TranscriptionConfig, TranscriptionProvider, lock_test_env,
     };
     use std::path::PathBuf;
 
@@ -505,6 +531,10 @@ mod tests {
             },
             recording: RecordingConfig {
                 max_duration_secs: DEFAULT_MAX_RECORDING_DURATION_SECS,
+            },
+            push_to_talk: PushToTalkConfig {
+                enabled: false,
+                hotkey: DEFAULT_PUSH_TO_TALK_HOTKEY.to_string(),
             },
             profiling: ProfilingConfig { enabled: false },
         }
@@ -664,6 +694,64 @@ mod tests {
 
         unsafe {
             std::env::remove_var("VOICE_INPUT_LOW_CONFIDENCE_SELECTION");
+        }
+    }
+
+    /// push-to-talk は既定で無効かつ opt+8 を既定ホットキーにする
+    #[test]
+    fn push_to_talk_defaults_to_disabled_opt_8() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_PUSH_TO_TALK");
+            std::env::remove_var("VOICE_INPUT_PUSH_TO_TALK_HOTKEY");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert!(!config.push_to_talk.enabled);
+        assert_eq!(config.push_to_talk.hotkey, DEFAULT_PUSH_TO_TALK_HOTKEY);
+    }
+
+    /// push-to-talk は環境変数から有効化とホットキー指定ができる
+    #[test]
+    fn push_to_talk_settings_are_loaded_from_environment() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_PUSH_TO_TALK", "true");
+            std::env::set_var("VOICE_INPUT_PUSH_TO_TALK_HOTKEY", "cmd+space");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert!(config.push_to_talk.enabled);
+        assert_eq!(config.push_to_talk.hotkey, "cmd+space");
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_PUSH_TO_TALK");
+            std::env::remove_var("VOICE_INPUT_PUSH_TO_TALK_HOTKEY");
+        }
+    }
+
+    /// push-to-talk の有効化フラグは true/false 以外を許可しない
+    #[test]
+    fn try_from_env_rejects_invalid_push_to_talk_flag() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_PUSH_TO_TALK", "enabled");
+        }
+
+        let result = EnvConfig::try_from_env();
+
+        assert_eq!(
+            result.unwrap_err(),
+            ConfigError::InvalidBooleanEnv {
+                name: "VOICE_INPUT_PUSH_TO_TALK",
+                value: "enabled".to_string(),
+            }
+        );
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_PUSH_TO_TALK");
         }
     }
 
