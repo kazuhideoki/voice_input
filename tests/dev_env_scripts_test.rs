@@ -415,6 +415,10 @@ fn cleanup_app_bundle_removes_bundle_and_resets_tcc() -> Result<(), Box<dyn Erro
         tccutil_log.contains("reset Accessibility com.user.voiceinput"),
         "cleanup-app-bundle should reset accessibility permission: {tccutil_log}"
     );
+    assert!(
+        tccutil_log.contains("reset ListenEvent com.user.voiceinput"),
+        "cleanup-app-bundle should reset input monitoring permission: {tccutil_log}"
+    );
 
     Ok(())
 }

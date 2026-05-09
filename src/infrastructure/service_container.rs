@@ -346,7 +346,7 @@ mod tests {
     use super::test_helpers::*;
     use crate::utils::config::{
         AudioConfig, EnvConfig, PathConfig, PreferredAudioFormat, ProfilingConfig, ProxyConfig,
-        RecordingConfig, TranscriptionConfig, TranscriptionProvider,
+        PushToTalkConfig, RecordingConfig, TranscriptionConfig, TranscriptionProvider,
     };
 
     fn mlx_env_config() -> EnvConfig {
@@ -379,6 +379,10 @@ mod tests {
             },
             recording: RecordingConfig {
                 max_duration_secs: 30,
+            },
+            push_to_talk: PushToTalkConfig {
+                enabled: false,
+                hotkey: crate::utils::config::DEFAULT_PUSH_TO_TALK_HOTKEY.to_string(),
             },
             profiling: ProfilingConfig { enabled: false },
         }

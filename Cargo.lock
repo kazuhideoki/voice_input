@@ -2800,6 +2800,8 @@ dependencies = [
  "base64",
  "chrono",
  "clap",
+ "core-foundation 0.10.1",
+ "core-graphics",
  "cpal",
  "criterion",
  "directories",

@@ -44,6 +44,10 @@ audioadapter-buffers = "2.0.0"
 base64 = "0.22.1"
 tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-graphics = "0.25"
+
 [features]
 default = []
 ci-test = []  # CI環境で安全に実行できるテストのみを有効化

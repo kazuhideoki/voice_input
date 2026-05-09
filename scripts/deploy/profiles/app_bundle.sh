@@ -79,6 +79,7 @@ cleanup_profile_artifacts() {
     remove_path_if_exists "$APP_BUNDLE_PATH"
     reset_tcc_permission "Microphone" "$APP_BUNDLE_IDENTIFIER"
     reset_tcc_permission "Accessibility" "$APP_BUNDLE_IDENTIFIER"
+    reset_tcc_permission "ListenEvent" "$APP_BUNDLE_IDENTIFIER"
 }
 
 validate_restart_prerequisites() {
@@ -96,6 +97,7 @@ print_setup_next_steps() {
     echo "初回は以下の順序で app bundle を利用してください:"
     echo "  1. ./scripts/build-app-bundle.sh"
     echo "  2. システム設定で VoiceInput.app にマイク/アクセシビリティ権限を付与"
+    echo "     push-to-talk を使う場合は入力監視権限も付与"
     echo "  3. ./scripts/restart-app-bundle.sh"
     echo ""
     echo "app bundle を更新する場合は以下のコマンドを利用できます:"
