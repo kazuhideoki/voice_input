@@ -10,7 +10,8 @@ use std::rc::Rc;
 use tokio::sync::mpsc;
 
 use crate::application::{
-    Recorder, RecordingConfig, RecordingService, TranscriptionClient, TranscriptionService,
+    Recorder, RecordingConfig, RecordingService, TranscriptionClient, TranscriptionHistoryService,
+    TranscriptionService,
 };
 use crate::error::Result;
 use crate::infrastructure::{
@@ -63,6 +64,8 @@ pub struct ServiceContainer<T: AudioBackend + 'static> {
     pub recording_service: Rc<RefCell<RecordingService<T>>>,
     /// 転写サービス
     pub transcription_service: Rc<RefCell<TranscriptionService>>,
+    /// 転写履歴サービス
+    pub history_service: Rc<RefCell<TranscriptionHistoryService>>,
     /// 転写メッセージ送信チャンネル
     pub transcription_tx: mpsc::UnboundedSender<TranscriptionMessage>,
     /// 転写メッセージ受信チャンネル
@@ -147,6 +150,7 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
         )));
 
         let media_control = Rc::new(RefCell::new(MediaControlService::new()));
+        let history = Rc::new(RefCell::new(TranscriptionHistoryService::new()));
 
         // 転写用チャンネル
         let (tx, rx) = mpsc::unbounded_channel();
@@ -156,6 +160,7 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
             recording.clone(),
             transcription.clone(),
             media_control,
+            history.clone(),
             tx.clone(),
         )));
 
@@ -163,6 +168,7 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
             command_handler,
             recording_service: recording,
             transcription_service: transcription,
+            history_service: history,
             transcription_tx: tx,
             transcription_rx: Some(rx),
         })
@@ -308,6 +314,7 @@ pub mod test_helpers {
                 EnvConfig::get().recommended_transcription_parallelism(),
             )));
             let media_control_service = Rc::new(RefCell::new(MediaControlService::new()));
+            let history_service = Rc::new(RefCell::new(TranscriptionHistoryService::new()));
 
             // 転写ワーカー用のチャンネル
             let (transcription_tx, transcription_rx) = mpsc::unbounded_channel();
@@ -317,6 +324,7 @@ pub mod test_helpers {
                 recording_service.clone(),
                 transcription_service.clone(),
                 media_control_service,
+                history_service.clone(),
                 transcription_tx.clone(),
             )));
 
@@ -324,6 +332,7 @@ pub mod test_helpers {
                 command_handler,
                 recording_service,
                 transcription_service,
+                history_service,
                 transcription_tx,
                 transcription_rx: Some(transcription_rx),
             })

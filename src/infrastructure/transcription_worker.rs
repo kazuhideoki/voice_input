@@ -14,7 +14,8 @@ use tokio::sync::Semaphore;
 
 use crate::application::AudioBackend;
 use crate::application::{
-    RecordedAudio, RecordingService, TranscriptionEvent, TranscriptionOptions, TranscriptionService,
+    RecordingService, TranscriptionEvent, TranscriptionHistoryService, TranscriptionOptions,
+    TranscriptionService,
 };
 use crate::domain::transcription::{FinalizedTranscription, LowConfidenceSelection};
 use crate::error::Result;
@@ -26,15 +27,19 @@ use async_trait::async_trait;
 
 /// 転写結果を処理
 pub async fn handle_transcription<T: AudioBackend>(
-    result: RecordedAudio,
-    resume_music: bool,
-    session_id: u64,
-    provider: TranscriptionProvider,
-    model: Option<String>,
+    message: TranscriptionMessage,
     recording_service: Rc<RefCell<RecordingService<T>>>,
     transcription_service: Rc<RefCell<TranscriptionService>>,
+    history_service: Rc<RefCell<TranscriptionHistoryService>>,
 ) -> Result<()> {
     let overall_timer = profiling::Timer::start("transcription.handle");
+    let TranscriptionMessage {
+        result,
+        resume_music,
+        session_id,
+        provider,
+        model,
+    } = message;
 
     // エラーが発生しても確実に音楽を再開するためにdeferパターンで実装
     let _defer_guard = scopeguard::guard(resume_music, |should_resume| {
@@ -51,7 +56,7 @@ pub async fn handle_transcription<T: AudioBackend>(
         language: "ja".to_string(),
         prompt: None, // メモリモードではプロンプトファイルを使用しない
         provider,
-        model,
+        model: model.clone(),
     };
 
     let finalized = if provider == TranscriptionProvider::OpenAi4o
@@ -100,6 +105,9 @@ pub async fn handle_transcription<T: AudioBackend>(
     } else {
         overall_timer.log();
     }
+    history_service
+        .borrow_mut()
+        .record_finalized(&finalized, provider, model.as_deref());
 
     Ok(())
 }
@@ -284,6 +292,7 @@ pub async fn spawn_transcription_worker<T: AudioBackend + 'static>(
     semaphore: Arc<Semaphore>,
     mut rx: tokio::sync::mpsc::UnboundedReceiver<TranscriptionMessage>,
     transcription_service: Rc<RefCell<TranscriptionService>>,
+    history_service: Rc<RefCell<TranscriptionHistoryService>>,
     recording_service: Rc<RefCell<RecordingService<T>>>,
 ) {
     use tokio::task::spawn_local;
@@ -298,16 +307,14 @@ pub async fn spawn_transcription_worker<T: AudioBackend + 'static>(
         };
 
         let transcription_service = transcription_service.clone();
+        let history_service = history_service.clone();
         let recording_service = recording_service.clone();
         spawn_local(async move {
             if let Err(e) = handle_transcription(
-                message.result,
-                message.resume_music,
-                message.session_id,
-                message.provider,
-                message.model,
+                message,
                 recording_service,
                 transcription_service,
+                history_service,
             )
             .await
             {

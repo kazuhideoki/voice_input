@@ -61,6 +61,8 @@ pub enum Cmd {
     },
     /// デーモン状態取得
     Status,
+    /// 最新の転写履歴を一覧表示
+    History,
     /// ヘルスチェック
     Health,
     /// 🔤 辞書操作

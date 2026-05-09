@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod dictionary_service;
+pub mod history_service;
 pub mod recording_service;
 pub mod transcription_service;
 
@@ -8,6 +9,7 @@ pub use audio::{
     CapturedAudio, Recorder,
 };
 pub use dictionary_service::{DictRepository, DictionaryService};
+pub use history_service::{TranscriptionHistoryEntry, TranscriptionHistoryService};
 pub use recording_service::{
     ActiveRecordingSession, RecordedAudio, RecordingConfig, RecordingContext, RecordingOptions,
     RecordingService, RecordingState, StopCaptureOutcome, StopRecordingOutcome,

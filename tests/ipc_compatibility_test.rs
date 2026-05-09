@@ -76,6 +76,7 @@ fn other_commands_remain_compatible() {
     let commands = vec![
         (r#"{"Stop":null}"#, "Stop"),
         (r#"{"Status":null}"#, "Status"),
+        (r#"{"History":null}"#, "History"),
         (r#"{"Health":null}"#, "Health"),
         (r#"{"ListDevices":null}"#, "ListDevices"),
     ];
@@ -85,6 +86,7 @@ fn other_commands_remain_compatible() {
         let variant_name = match cmd {
             IpcCmd::Stop => "Stop",
             IpcCmd::Status => "Status",
+            IpcCmd::History => "History",
             IpcCmd::Health => "Health",
             IpcCmd::ListDevices => "ListDevices",
             _ => "Unknown",

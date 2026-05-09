@@ -98,6 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             relay(cmd)?;
         }
         Cmd::Status => relay(IpcCmd::Status)?,
+        Cmd::History => relay(IpcCmd::History)?,
         Cmd::Health => relay(IpcCmd::Health)?,
 
         /* 辞書操作 → ローカル JSON */
@@ -152,7 +153,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn command_max_secs(cmd: &Cmd) -> Option<u64> {
     match cmd {
         Cmd::Start { max_secs, .. } | Cmd::Toggle { max_secs, .. } => *max_secs,
-        Cmd::Stop | Cmd::Status | Cmd::Health | Cmd::Dict { .. } | Cmd::Config { .. } => None,
+        Cmd::Stop
+        | Cmd::Status
+        | Cmd::History
+        | Cmd::Health
+        | Cmd::Dict { .. }
+        | Cmd::Config { .. } => None,
     }
 }
 

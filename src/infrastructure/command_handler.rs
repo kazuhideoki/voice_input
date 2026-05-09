@@ -16,7 +16,8 @@ use tokio::time::Duration;
 
 use crate::application::{
     AudioData, AudioDataFormat, CapturedAudio, RecordedAudio, RecordingOptions, RecordingService,
-    TranscriptionEvent, TranscriptionService,
+    TranscriptionEvent, TranscriptionHistoryEntry, TranscriptionHistoryService,
+    TranscriptionService,
 };
 use crate::domain::transcription::FinalizedTranscription;
 use crate::error::{Result, VoiceInputError};
@@ -70,6 +71,7 @@ pub struct CommandHandler<T: AudioBackend> {
     #[allow(dead_code)]
     transcription: Rc<RefCell<TranscriptionService>>,
     media_control: Rc<RefCell<MediaControlService>>,
+    history: Rc<RefCell<TranscriptionHistoryService>>,
     transcription_tx: mpsc::UnboundedSender<TranscriptionMessage>,
     realtime_session: Rc<RefCell<Option<ActiveRealtimeSession>>>,
     ready_realtime_session: Rc<RefCell<Option<PreparedRealtimeSession>>>,
@@ -82,12 +84,14 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         recording: Rc<RefCell<RecordingService<T>>>,
         transcription: Rc<RefCell<TranscriptionService>>,
         media_control: Rc<RefCell<MediaControlService>>,
+        history: Rc<RefCell<TranscriptionHistoryService>>,
         transcription_tx: mpsc::UnboundedSender<TranscriptionMessage>,
     ) -> Self {
         Self {
             recording,
             transcription,
             media_control,
+            history,
             transcription_tx,
             realtime_session: Rc::new(RefCell::new(None)),
             ready_realtime_session: Rc::new(RefCell::new(None)),
@@ -203,6 +207,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 }
             }
             IpcCmd::Status => self.handle_status(),
+            IpcCmd::History => self.handle_history(),
             IpcCmd::ListDevices => self.handle_list_devices(),
             IpcCmd::Health => self.handle_health().await,
         }
@@ -450,6 +455,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         let outcome = stop_active_realtime_session(
             self.recording.clone(),
             self.transcription.clone(),
+            self.history.clone(),
             active,
         )
         .await?;
@@ -484,6 +490,15 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         Ok(IpcResp {
             ok: true,
             msg: format!("state={}", state),
+        })
+    }
+
+    fn handle_history(&self) -> Result<IpcResp> {
+        let entries = self.history.borrow().list();
+
+        Ok(IpcResp {
+            ok: true,
+            msg: format_history_entries(&entries),
         })
     }
 
@@ -592,6 +607,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     fn setup_auto_stop_timer(&self, max_secs: u64) {
         let recording = self.recording.clone();
         let transcription = self.transcription.clone();
+        let history = self.history.clone();
         let realtime_session = self.realtime_session.clone();
         let ready_realtime_session = self.ready_realtime_session.clone();
         let ready_realtime_task = self.ready_realtime_task.clone();
@@ -613,6 +629,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                                 if let Err(error) = stop_active_realtime_session(
                                     recording.clone(),
                                     transcription.clone(),
+                                    history.clone(),
                                     active,
                                 )
                                 .await
@@ -733,9 +750,33 @@ fn ensure_ready_realtime_session(
     *ready_realtime_task.borrow_mut() = Some(task);
 }
 
+fn format_history_entries(entries: &[TranscriptionHistoryEntry]) -> String {
+    if entries.is_empty() {
+        return "(no history)".to_string();
+    }
+
+    let mut lines = vec!["─ History ───────────────".to_string()];
+    for (index, entry) in entries.iter().enumerate() {
+        let text = entry.text.replace('\n', "\\n");
+        let model = entry
+            .model
+            .as_deref()
+            .map_or_else(|| "-".to_string(), ToString::to_string);
+        lines.push(format!("{}. [{}] {}", index + 1, entry.recorded_at, text));
+        lines.push(format!(
+            "   provider={} model={}",
+            entry.provider.as_str(),
+            model
+        ));
+    }
+
+    lines.join("\n")
+}
+
 async fn stop_active_realtime_session<T: AudioBackend + 'static>(
     recording: Rc<RefCell<RecordingService<T>>>,
     transcription: Rc<RefCell<TranscriptionService>>,
+    history: Rc<RefCell<TranscriptionHistoryService>>,
     active: ActiveRealtimeSession,
 ) -> Result<RealtimeStopOutcome> {
     let capture_outcome = match recording.borrow().stop_capture().await {
@@ -781,6 +822,11 @@ async fn stop_active_realtime_session<T: AudioBackend + 'static>(
     };
 
     let finalized = transcription.borrow().finalize_output(raw_output)?;
+    history.borrow_mut().record_finalized(
+        &finalized,
+        capture_outcome.context.transcription_provider,
+        capture_outcome.context.transcription_model.as_deref(),
+    );
     let _ = event_tx.send(TranscriptionEvent::Completed(finalized.clone()));
 
     match input_task.await {
@@ -1244,10 +1290,17 @@ mod tests {
             1,
         )));
         let media_control = Rc::new(RefCell::new(media_control));
+        let history = Rc::new(RefCell::new(TranscriptionHistoryService::new()));
         let (tx, rx) = mpsc::unbounded_channel();
 
         (
-            CommandHandler::new(recording.clone(), transcription, media_control.clone(), tx),
+            CommandHandler::new(
+                recording.clone(),
+                transcription,
+                media_control.clone(),
+                history,
+                tx,
+            ),
             recording,
             media_control,
             rx,
@@ -1262,6 +1315,66 @@ mod tests {
             transcription_provider: None,
             transcription_model: None,
         }
+    }
+
+    fn finalized(text: &str) -> FinalizedTranscription {
+        FinalizedTranscription {
+            text: text.to_string(),
+            low_confidence_selection: None,
+        }
+    }
+
+    /// 空の履歴は空表示として返される
+    #[tokio::test(flavor = "current_thread")]
+    async fn history_command_returns_empty_message_without_entries() {
+        let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+        let media_control = MediaControlService::with_controller(Box::new(
+            DelayedMediaController::new(false, Duration::from_millis(0)),
+        ));
+        let (handler, _recording, _media_control, _rx) = build_handler(backend, media_control);
+
+        let response = handler.handle(IpcCmd::History).await.unwrap();
+
+        assert!(response.ok);
+        assert_eq!(response.msg, "(no history)");
+    }
+
+    /// 履歴は新しい順に表示され、本文改行とprovider/modelを確認できる
+    #[tokio::test(flavor = "current_thread")]
+    async fn history_command_returns_entries_newest_first_with_metadata() {
+        let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+        let media_control = MediaControlService::with_controller(Box::new(
+            DelayedMediaController::new(false, Duration::from_millis(0)),
+        ));
+        let (handler, _recording, _media_control, _rx) = build_handler(backend, media_control);
+
+        handler.history.borrow_mut().record_finalized(
+            &finalized("old entry"),
+            TranscriptionProvider::OpenAi4o,
+            None,
+        );
+        handler.history.borrow_mut().record_finalized(
+            &finalized("new\nentry"),
+            TranscriptionProvider::MlxQwen3Asr,
+            Some("Qwen/Qwen3-ASR-1.7B"),
+        );
+
+        let response = handler.handle(IpcCmd::History).await.unwrap();
+
+        assert!(response.ok);
+        assert!(response.msg.starts_with("─ History"));
+        assert!(response.msg.contains("1. ["));
+        assert!(response.msg.contains("new\\nentry"));
+        assert!(
+            response
+                .msg
+                .contains("provider=mlx-qwen3-asr model=Qwen/Qwen3-ASR-1.7B")
+        );
+        assert!(response.msg.contains("provider=4o model=-"));
+
+        let new_position = response.msg.find("new\\nentry").unwrap();
+        let old_position = response.msg.find("old entry").unwrap();
+        assert!(new_position < old_position);
     }
 
     /// 停止時に転写キューへsession_id付きで送信される

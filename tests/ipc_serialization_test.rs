@@ -90,6 +90,7 @@ fn ipc_cmds_roundtrip_via_json() {
         },
         IpcCmd::Stop,
         IpcCmd::Status,
+        IpcCmd::History,
         IpcCmd::Health,
         IpcCmd::ListDevices,
     ];

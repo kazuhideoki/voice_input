@@ -93,6 +93,7 @@ pub enum IpcCmd {
     },
     /// ステータス取得
     Status,
+    History,
     ListDevices,
     Health,
 }

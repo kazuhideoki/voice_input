@@ -80,6 +80,7 @@ async fn async_main() -> Result<()> {
     let max_concurrent_transcriptions = EnvConfig::get().recommended_transcription_parallelism();
     let semaphore = std::sync::Arc::new(Semaphore::new(max_concurrent_transcriptions));
     let transcription_service = container.transcription_service.clone();
+    let history_service = container.history_service.clone();
 
     text_input::init_worker().map_err(|e| VoiceInputError::SystemError(e.to_string()))?;
     spawn_runtime_recovery_monitor(recording_service.clone(), command_handler.clone());
@@ -91,6 +92,7 @@ async fn async_main() -> Result<()> {
         semaphore.clone(),
         transcription_rx,
         transcription_service,
+        history_service,
         recording_service,
     ));
 
