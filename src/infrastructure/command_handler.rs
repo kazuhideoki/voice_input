@@ -229,7 +229,8 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             ));
         }
 
-        let provider = transcription_provider.unwrap_or(TranscriptionProvider::DEFAULT);
+        let provider =
+            transcription_provider.unwrap_or_else(|| EnvConfig::get().transcription.provider);
         let model = resolve_transcription_model(provider, transcription_model)?;
 
         // 体感開始時間を縮めるため、開始音は録音開始前に鳴らす
