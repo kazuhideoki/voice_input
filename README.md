@@ -132,6 +132,7 @@ app bundle を LaunchAgent で起動するため、再ビルド時の権限再�
 
 - macOS に再ログインした後は LaunchAgent が自動で `voice_inputd` を起動します
 - `voice_inputd` が異常終了した場合は `KeepAlive` により自動で再起動されます
+- push-to-talk の権限不足など起動時に利用者対応が必要な失敗は、再起動ループを避けるためログを出して停止します
 - 長時間スリープ後は daemon が wake を検知して音声入力ストリームとテキスト入力ワーカーの再初期化を試みます
 - wake 復旧が連続で失敗した場合は daemon が終了し、LaunchAgent が再起動します
 

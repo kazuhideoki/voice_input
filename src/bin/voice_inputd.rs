@@ -88,11 +88,24 @@ async fn async_main() -> Result<()> {
     command_handler
         .borrow()
         .warm_realtime_whisper_session_if_enabled();
-    let _push_to_talk_monitor = spawn_push_to_talk_if_enabled(
+    let _push_to_talk_monitor = match spawn_push_to_talk_if_enabled(
         command_handler.clone(),
         recording_service.clone(),
         &EnvConfig::get().push_to_talk,
-    )?;
+    ) {
+        Ok(monitor) => monitor,
+        Err(error) => {
+            eprintln!("Push-to-talk initialization failed: {error}");
+            eprintln!(
+                "voice-inputd is stopping without restart to avoid a LaunchAgent restart loop."
+            );
+            eprintln!(
+                "Grant Accessibility/Input Monitoring permission to VoiceInput.app, or set VOICE_INPUT_PUSH_TO_TALK=false, then restart the daemon."
+            );
+            let _ = fs::remove_file(&path);
+            process::exit(0);
+        }
+    };
 
     spawn_local(spawn_transcription_worker(
         semaphore.clone(),
