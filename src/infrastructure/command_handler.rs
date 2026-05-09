@@ -755,22 +755,11 @@ fn format_history_entries(entries: &[TranscriptionHistoryEntry]) -> String {
         return "(no history)".to_string();
     }
 
-    let mut lines = vec!["─ History ───────────────".to_string()];
-    for (index, entry) in entries.iter().enumerate() {
-        let text = entry.text.replace('\n', "\\n");
-        let model = entry
-            .model
-            .as_deref()
-            .map_or_else(|| "-".to_string(), ToString::to_string);
-        lines.push(format!("{}. [{}] {}", index + 1, entry.recorded_at, text));
-        lines.push(format!(
-            "   provider={} model={}",
-            entry.provider.as_str(),
-            model
-        ));
-    }
-
-    lines.join("\n")
+    entries
+        .iter()
+        .map(|entry| entry.text.replace('\n', "\\n"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 async fn stop_active_realtime_session<T: AudioBackend + 'static>(
@@ -1339,9 +1328,9 @@ mod tests {
         assert_eq!(response.msg, "(no history)");
     }
 
-    /// 履歴は新しい順に表示され、本文改行とprovider/modelを確認できる
+    /// 履歴は新しい順に本文だけが1行ずつ表示される
     #[tokio::test(flavor = "current_thread")]
-    async fn history_command_returns_entries_newest_first_with_metadata() {
+    async fn history_command_returns_entries_newest_first_without_metadata() {
         let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
         let media_control = MediaControlService::with_controller(Box::new(
             DelayedMediaController::new(false, Duration::from_millis(0)),
@@ -1362,19 +1351,40 @@ mod tests {
         let response = handler.handle(IpcCmd::History).await.unwrap();
 
         assert!(response.ok);
-        assert!(response.msg.starts_with("─ History"));
-        assert!(response.msg.contains("1. ["));
-        assert!(response.msg.contains("new\\nentry"));
-        assert!(
-            response
-                .msg
-                .contains("provider=mlx-qwen3-asr model=Qwen/Qwen3-ASR-1.7B")
-        );
-        assert!(response.msg.contains("provider=4o model=-"));
+        assert_eq!(response.msg, "new\\nentry\nold entry");
+        assert!(!response.msg.contains("provider="));
+        assert!(!response.msg.contains("model="));
+        assert!(!response.msg.contains("─ History"));
 
         let new_position = response.msg.find("new\\nentry").unwrap();
         let old_position = response.msg.find("old entry").unwrap();
         assert!(new_position < old_position);
+    }
+
+    /// 履歴表示には時刻やprovider/modelなどのメタ情報を含めない
+    #[tokio::test(flavor = "current_thread")]
+    async fn history_command_omits_all_metadata() {
+        let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+        let media_control = MediaControlService::with_controller(Box::new(
+            DelayedMediaController::new(false, Duration::from_millis(0)),
+        ));
+        let (handler, _recording, _media_control, _rx) = build_handler(backend, media_control);
+
+        handler.history.borrow_mut().record_finalized(
+            &finalized("音声入力をする。"),
+            TranscriptionProvider::OpenAiRealtimeWhisper,
+            Some("gpt-realtime-whisper"),
+        );
+
+        let response = handler.handle(IpcCmd::History).await.unwrap();
+
+        assert!(response.ok);
+        assert_eq!(response.msg, "音声入力をする。");
+        assert!(!response.msg.contains("History"));
+        assert!(!response.msg.contains("2026-"));
+        assert!(!response.msg.contains("provider="));
+        assert!(!response.msg.contains("model="));
+        assert!(!response.msg.contains("realtime-whisper"));
     }
 
     /// 停止時に転写キューへsession_id付きで送信される
