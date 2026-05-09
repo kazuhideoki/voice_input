@@ -37,6 +37,9 @@ pub const PUSH_TO_TALK_HOTKEY_ENV: &str = "VOICE_INPUT_PUSH_TO_TALK_HOTKEY";
 /// push-to-talk のデフォルトホットキー
 pub const DEFAULT_PUSH_TO_TALK_HOTKEY: &str = "opt+8";
 
+/// CLI で未指定のときに使う既定の転写バックエンドを指定する環境変数名
+pub const DEFAULT_TRANSCRIPTION_PROVIDER_ENV: &str = "VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER";
+
 #[cfg(test)]
 use std::sync::Mutex;
 
@@ -280,7 +283,10 @@ impl EnvConfig {
     pub(crate) fn from_env_with_recording_max_duration_secs(
         max_duration_secs_override: Option<u64>,
     ) -> Result<Self, ConfigError> {
-        let provider = TranscriptionProvider::DEFAULT;
+        let provider = match non_empty_env(DEFAULT_TRANSCRIPTION_PROVIDER_ENV) {
+            Some(value) => TranscriptionProvider::parse(&value)?,
+            None => TranscriptionProvider::DEFAULT,
+        };
         let model = TranscriptionProvider::OpenAi4o.default_model().to_string();
         let realtime_whisper_model = load_realtime_whisper_model()?;
         let mlx_qwen3_asr_model = TranscriptionProvider::MlxQwen3Asr
@@ -505,9 +511,10 @@ fn parse_bool_env(name: &'static str) -> Result<bool, ConfigError> {
 mod tests {
     use super::{
         AudioConfig, ConfigError, DEFAULT_AUDIO_PRE_ROLL_MS, DEFAULT_MAX_RECORDING_DURATION_SECS,
-        DEFAULT_PUSH_TO_TALK_HOTKEY, EnvConfig, MAX_AUDIO_PRE_ROLL_MS, PathConfig,
-        PreferredAudioFormat, ProfilingConfig, ProxyConfig, PushToTalkConfig, RecordingConfig,
-        TranscriptionConfig, TranscriptionProvider, lock_test_env,
+        DEFAULT_PUSH_TO_TALK_HOTKEY, DEFAULT_TRANSCRIPTION_PROVIDER_ENV, EnvConfig,
+        MAX_AUDIO_PRE_ROLL_MS, PathConfig, PreferredAudioFormat, ProfilingConfig, ProxyConfig,
+        PushToTalkConfig, RecordingConfig, TranscriptionConfig, TranscriptionProvider,
+        lock_test_env,
     };
     use std::path::PathBuf;
 
@@ -772,10 +779,13 @@ mod tests {
         }
     }
 
-    /// 環境変数ではなく既定の実行バックエンドを使う
+    /// 環境変数がなければ既定の実行バックエンドを使う
     #[test]
     fn default_transcription_provider_is_used_without_provider_env() {
         let _lock = lock_test_env();
+        unsafe {
+            std::env::remove_var(DEFAULT_TRANSCRIPTION_PROVIDER_ENV);
+        }
 
         let config = EnvConfig::from_env().unwrap();
 
@@ -793,6 +803,48 @@ mod tests {
             "Qwen/Qwen3-ASR-1.7B"
         );
         assert_eq!(config.transcription.mlx_qwen3_asr_command, "mlx-qwen3-asr");
+    }
+
+    /// CLI 未指定時の既定転写バックエンドは環境変数から読み込める
+    #[test]
+    fn default_transcription_provider_is_loaded_from_environment() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var(DEFAULT_TRANSCRIPTION_PROVIDER_ENV, "realtime-whisper");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(
+            config.transcription.provider,
+            TranscriptionProvider::OpenAiRealtimeWhisper
+        );
+
+        unsafe {
+            std::env::remove_var(DEFAULT_TRANSCRIPTION_PROVIDER_ENV);
+        }
+    }
+
+    /// CLI 未指定時の既定転写バックエンドは未対応値を拒否する
+    #[test]
+    fn try_from_env_rejects_invalid_default_transcription_provider() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var(DEFAULT_TRANSCRIPTION_PROVIDER_ENV, "openai");
+        }
+
+        let result = EnvConfig::try_from_env();
+
+        assert_eq!(
+            result.unwrap_err(),
+            ConfigError::UnsupportedTranscriptionProvider {
+                value: "openai".to_string(),
+            }
+        );
+
+        unsafe {
+            std::env::remove_var(DEFAULT_TRANSCRIPTION_PROVIDER_ENV);
+        }
     }
 
     /// realtime-whisperモデルは専用の既定モデルを使う
