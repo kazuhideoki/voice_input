@@ -225,6 +225,10 @@ fn setup_app_bundle_creates_launch_agent_for_bundled_daemon() -> Result<(), Box<
         "setup-app-bundle should enable KeepAlive: {plist}"
     );
     assert!(
+        plist.contains("<key>SuccessfulExit</key>") && plist.contains("<false/>"),
+        "setup-app-bundle should restart only after unsuccessful exits: {plist}"
+    );
+    assert!(
         !plist.contains(&fixture.fake_bin_dir.display().to_string()),
         "setup-app-bundle should not bake caller PATH into LaunchAgent environment: {plist}"
     );
