@@ -7,16 +7,20 @@ Rust 製の **音声録音・文字起こし CLI / デーモン** です。
 
 ## 特徴
 
-| 機能                               | 説明                                             |
-| ---------------------------------- | ------------------------------------------------ |
-| **高速録音トグル**                 | 1 コマンドで録音開始 / 停止を切替                |
-| **複数転写バックエンド**           | OpenAI 4o / Realtime Whisper / `mlx-qwen3-asr` を利用可能 |
-| **Apple Music 自動ポーズ/再開**    | 録音中は BGM を一時停止、終了後に自動再生        |
-| **単語リスト置換**                 | 転写テキストを辞書で自動置換                     |
-| **録音→転写まで自動**              | 1 コマンドで録音開始から文字起こしまで           |
-| **直接テキスト入力（デフォルト）** | カーソル位置に直接入力 |
-| **IPC Unix Socket**                | CLI ↔ デーモン間通信は JSON over UDS            |
-| **高速メモリ処理**                 | 一時ファイルを作成せず、メモリ上で音声処理       |
+| 機能                               | 説明                                                   |
+| ---------------------------------- | ------------------------------------------------------ |
+| **高速録音トグル**                 | 1 コマンドで録音開始 / 停止を切替                      |
+| **Push-to-talk**                   | ホットキーを押している間だけ録音                       |
+| **複数転写バックエンド**           | OpenAI 4o / Realtime Whisper / `mlx-qwen3-asr` に対応   |
+| **Pre-roll**                       | 録音開始直前の音声を短く先頭へ付与                     |
+| **直接テキスト入力（デフォルト）** | カーソル位置へ直接入力                                 |
+| **Apple Music 自動ポーズ/再開**    | 録音中だけ再生を止め、終了後に戻す                     |
+| **単語リスト置換**                 | 転写テキストを辞書で自動置換                           |
+| **履歴表示**                       | daemon 起動中の確定転写を `voice_input history` で確認  |
+| **低信頼箇所の選択**               | logprobs から信頼度の低い範囲を選択可能                |
+| **デバッグ入力/保存**              | WAV 入力と録音 WAV 保存に対応                           |
+| **IPC Unix Socket**                | CLI ↔ デーモン間通信は JSON over UDS                    |
+| **高速メモリ処理**                 | OpenAI 系の通常録音処理はメモリ上で完結                |
 
 ## 環境変数準備
 
@@ -24,38 +28,45 @@ Rust 製の **音声録音・文字起こし CLI / デーモン** です。
 cp .env.example .env
 ```
 
-- TRANSCRIPTION_API_KEY=your_openai_api_key_here # OpenAI 利用時のみ
-- OPENAI_TRANSCRIBE_STREAMING=false
-- INPUT_DEVICE_PRIORITY="device1,device2,device3"
-- VOICE_INPUT_PRE_ROLL_MS=500
-- VOICE_INPUT_ENV_PATH=/path/to/.env
-- VOICE_INPUT_SOCKET_PATH=/custom/path/voice_input.sock
-- VOICE_INPUT_SOCKET_DIR=/custom/socket/dir # `VOICE_INPUT_SOCKET_PATH` 未設定時のみ有効
-- XDG_DATA_HOME=/custom/xdg/data
+主な設定:
+
+```sh
+TRANSCRIPTION_API_KEY=your_openai_api_key_here # OpenAI 系利用時のみ
+VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER=realtime-whisper
+OPENAI_TRANSCRIBE_STREAMING=false
+VOICE_INPUT_LOW_CONFIDENCE_SELECTION=false
+VOICE_INPUT_MAX_SECS=30
+VOICE_INPUT_PRE_ROLL_MS=500
+INPUT_DEVICE_PRIORITY="device1,device2,device3"
+VOICE_INPUT_PUSH_TO_TALK=true
+VOICE_INPUT_PUSH_TO_TALK_HOTKEY=opt+8
+```
+
+必要に応じて `VOICE_INPUT_ENV_PATH`、`VOICE_INPUT_SOCKET_PATH`、`VOICE_INPUT_SOCKET_DIR`、`XDG_DATA_HOME` も指定できます。
 
 `.env` はデフォルトでカレントディレクトリから読み込まれ、`VOICE_INPUT_ENV_PATH` が設定されている場合はそのパスが優先されます。
 環境変数は `src/utils/config.rs` の `EnvConfig` で起動時に一度だけ読み込まれます。
-転写バックエンドの既定値は `VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER` で指定できます。対応値は `4o`、`realtime-whisper`、`mlx-qwen3-asr` です。`voice_input start --transcription-provider 4o`、`voice_input start --transcription-provider realtime-whisper`、または `voice_input start --transcription-provider mlx-qwen3-asr` のようにクライアントから指定した場合は CLI フラグが優先されます。`toggle` でも同じフラグを使えます。
-`4o` の既定モデルは `gpt-4o-transcribe` です。軽量モデルを使う場合は `voice_input start --transcription-provider 4o --transcription-model gpt-4o-mini-transcribe` のように指定します。
-`realtime-whisper` は録音中の PCM フレームを OpenAI Realtime API へ送信し、delta を入力先へ逐次反映します。`gpt-realtime-whisper` は server VAD 非対応のため、停止時に手動 commit します。
-`mlx-qwen3-asr` 指定時は `mlx-qwen3-asr` コマンドを使い、録音データは CLI 連携のため一時ファイル経由で渡します。
-`VOICE_INPUT_PRE_ROLL_MS` は `start` / `toggle` 直前のローカル音声リングバッファを録音の先頭へ付与する長さです。既定値は 500ms で、0 を指定すると無効化できます。キー押下前の音声はメモリ上にだけ保持し、送信や保存は録音開始後のデータとして扱う場合に限ります。
-`VOICE_INPUT_PUSH_TO_TALK=true` を設定すると、`VOICE_INPUT_PUSH_TO_TALK_HOTKEY` のキーを押している間だけ daemon が録音します。既定ホットキーは `opt+8` で、対象キーイベントは前面アプリへ渡さず抑制します。
+転写バックエンドは `4o`、`realtime-whisper`、`mlx-qwen3-asr` から選べます。既定値は `VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER`、コマンドごとの上書きは `--transcription-provider` です。
+`4o` は `--transcription-model gpt-4o-mini-transcribe` も指定できます。`realtime-whisper` は録音中に逐次入力し、`mlx-qwen3-asr` はローカルコマンドを使います。
+`VOICE_INPUT_PRE_ROLL_MS` は録音開始直前の音声を先頭へ付与する長さです。既定値は 500ms、0 で無効です。
+`VOICE_INPUT_PUSH_TO_TALK=true` の場合、`VOICE_INPUT_PUSH_TO_TALK_HOTKEY` を押している間だけ録音します。既定は `opt+8` です。
+`VOICE_INPUT_LOW_CONFIDENCE_SELECTION=true` にすると、logprobs が得られる転写では低信頼箇所を選択します。
 
 ## 音声処理
 
-Voice Inputは音声データをメモリ上で直接処理し、一時ファイルを作成しません。
+OpenAI 系の通常録音処理は音声データをメモリ上で直接処理します。
+`mlx-qwen3-asr` 連携では CLI へ渡すため一時音声ファイルを作成し、処理後に削除します。
 
-**利点:**
-- ✅ 高速処理（ファイルI/Oの削除）
-- ✅ ディスク容量を消費しない
-- ✅ セキュリティ向上（一時ファイルが残らない）
-- ✅ SSDの書き込み回数を削減
+**OpenAI 系での利点:**
+- 高速処理（ファイル I/O の削除）
+- ディスク容量を消費しない
+- セキュリティ向上（一時ファイルが残らない）
+- SSD の書き込み回数を削減
 
 **メモリ使用量の目安:**
-- 1分間の録音: 約10MB
-- 5分間の録音: 約50MB
-- 10分間の録音: 約100MB
+- 1 分間の録音: 約 10MB
+- 5 分間の録音: 約 50MB
+- 10 分間の録音: 約 100MB
 
 ## ビルド
 
@@ -107,8 +118,6 @@ cargo build --release
 ./scripts/restart-app-bundle.sh
 ```
 
-この方式では `~/Applications/VoiceInput.app` を構築し、LaunchAgent は bundle 内の `voice_inputd` を起動します。
-初回は `build-app-bundle.sh` で app bundle を配置したあと、システム設定で `VoiceInput.app` に `Microphone` / `Accessibility` 権限を付与し、最後に `restart-app-bundle.sh` で LaunchAgent を再起動してください。push-to-talk を使う場合は `Input Monitoring` 権限も付与してください。
 `restart-app-bundle.sh` は再ビルドや再署名を行わず、権限付与の反映に必要な再起動だけを実行します。
 `cleanup-app-bundle.sh` は bundle を削除したうえで、bundle identifier に対して `Microphone` / `Accessibility` / `Input Monitoring` の TCC 設定を reset します。
 
@@ -168,9 +177,9 @@ launchctl kickstart -k gui/$(id -u)/com.user.voiceinputd
 
 ビルド生成物まで消したい場合は、別途 `cargo clean` を実行してください。
 
-## 使い方（基本）
+## 使い方
 
-録音開始,停止
+録音開始 / 停止 / トグル:
 
 ```sh
 voice_input start
@@ -187,7 +196,22 @@ voice_input toggle --max-secs 90
 
 常に変更したい場合は CLI とデーモンの両方に `VOICE_INPUT_MAX_SECS` を設定してください。
 
-利用可能な入力デバイスを一覧表示
+転写バックエンドを一時的に変える場合:
+
+```sh
+voice_input start --transcription-provider 4o
+voice_input toggle --transcription-provider realtime-whisper
+voice_input start --transcription-provider 4o --transcription-model gpt-4o-mini-transcribe
+```
+
+デバッグ用に WAV を入力したり、録音後の音声を保存できます。
+
+```sh
+voice_input start --input-file /path/to/input.wav
+voice_input start --save-audio /tmp/voice-input-debug.wav
+```
+
+利用可能な入力デバイスを一覧表示:
 
 ```sh
 voice_input --list-devices
@@ -196,10 +220,10 @@ voice_input --list-devices
 入力デバイス名とインデックスを表示します。環境変数 `INPUT_DEVICE_PRIORITY` を
 設定する際の参考にしてください。
 
-録音開始,停止の切り替え+直接入力。
+確定転写の履歴を表示:
 
 ```sh
-voice_input toggle
+voice_input history
 ```
 
 キーを押している間だけ録音する場合は daemon 側の環境変数で有効化します。
@@ -214,7 +238,7 @@ VOICE_INPUT_PUSH_TO_TALK_HOTKEY=opt+8
 
 ## テキスト入力方式
 
-現在のvoice_inputは**直接入力方式のみ**を提供しています。
+現在の voice_input は **直接入力方式のみ**を提供しています。
 
 ```sh
 # デフォルト動作（直接入力）
@@ -225,10 +249,10 @@ voice_input start --prompt "会議メモ。人名は英字優先"
 
 **直接入力の特徴:**
 
-- ✅ クリップボードの内容を保持
-- ✅ 日本語・絵文字を含むすべての文字に対応
-- ✅ 既存のアクセシビリティ権限で動作
-- ✅ 直接入力のため手動ペーストが不要
+- クリップボードの内容を保持
+- 日本語・絵文字を含むすべての文字に対応
+- 既存のアクセシビリティ権限で動作
+- 手動ペーストが不要
 
 デーモンと外部依存の状態をまとめて確認:
 
@@ -262,12 +286,6 @@ voice_input dict remove "誤変換"
 # 登録一覧表示
 voice_input dict list
 ```
-
-## 録音から転写までの一括実行
-
-`voice_input start` / `stop` を明示的に使わなくても、
-`voice_input toggle` 1 回で録音開始→停止→文字起こし→直接入力まで
-完結します。デフォルトではカーソル位置に直接テキストが入力されます。
 
 ## 開発
 
