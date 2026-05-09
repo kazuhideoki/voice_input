@@ -366,6 +366,7 @@ mod tests {
             audio: AudioConfig {
                 input_device_priorities: Vec::new(),
                 preferred_format: PreferredAudioFormat::Flac,
+                pre_roll_ms: crate::utils::config::DEFAULT_AUDIO_PRE_ROLL_MS,
             },
             recording: RecordingConfig {
                 max_duration_secs: 30,
