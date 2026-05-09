@@ -1,0 +1,24 @@
+[
+  {
+    "audio": "samples/1.wav",
+    "model": "gpt-realtime-whisper",
+    "payload_variant": "include_under_input",
+    "include_logprobs": true,
+    "success": false,
+    "elapsed_seconds": 0.8052900830225553,
+    "transcript": "",
+    "completed_event_has_logprobs": false,
+    "delta_events_with_logprobs": 0,
+    "completed_logprobs_count": 0,
+    "first_logprobs_event": null,
+    "min_logprob": null,
+    "max_logprob": null,
+    "avg_logprob": null,
+    "sample_tokens": [],
+    "event_counts": {
+      "session.created": 1,
+      "error": 1
+    },
+    "error": "{\"type\": \"error\", \"event_id\": \"event_DdauJunhz8qUyifLhfWsE\", \"error\": {\"type\": \"invalid_request_error\", \"code\": \"unknown_parameter\", \"message\": \"Unknown parameter: 'session.audio.input.include'.\", \"param\": \"session.audio.input.include\", \"event_id\": null}}"
+  }
+]

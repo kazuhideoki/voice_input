@@ -1,0 +1,146 @@
+[
+  {
+    "audio": "samples/1.wav",
+    "model": "gpt-4o-transcribe",
+    "include_logprobs": true,
+    "success": true,
+    "elapsed_seconds": 1.835923290986102,
+    "transcript": "マクロスを中心に、シェル設定、エディタ設定、各種CLIをまとめて管理するリポジトリです。",
+    "completed_event_has_logprobs": true,
+    "delta_events_with_logprobs": 32,
+    "completed_logprobs_count": 32,
+    "first_logprobs_event": "conversation.item.input_audio_transcription.delta",
+    "min_logprob": -2.2481398582458496,
+    "max_logprob": 0.0,
+    "avg_logprob": -0.17219195783765517,
+    "sample_tokens": [
+      {
+        "token": "マ",
+        "logprob": -2.2481398582458496,
+        "bytes": [
+          227,
+          131,
+          158
+        ]
+      },
+      {
+        "token": "クロ",
+        "logprob": -0.8172661662101746,
+        "bytes": [
+          227,
+          130,
+          175,
+          227,
+          131,
+          173
+        ]
+      },
+      {
+        "token": "ス",
+        "logprob": -0.5744204521179199,
+        "bytes": [
+          227,
+          130,
+          185
+        ]
+      },
+      {
+        "token": "を",
+        "logprob": -0.0005227696383371949,
+        "bytes": [
+          227,
+          130,
+          146
+        ]
+      },
+      {
+        "token": "中心",
+        "logprob": -1.2664456789934775e-06,
+        "bytes": [
+          228,
+          184,
+          173,
+          229,
+          191,
+          131
+        ]
+      },
+      {
+        "token": "に",
+        "logprob": -1.9361264946837764e-07,
+        "bytes": [
+          227,
+          129,
+          171
+        ]
+      },
+      {
+        "token": "、",
+        "logprob": -1.7019813060760498,
+        "bytes": [
+          227,
+          128,
+          129
+        ]
+      },
+      {
+        "token": "シ",
+        "logprob": -0.0003346314188092947,
+        "bytes": [
+          227,
+          130,
+          183
+        ]
+      },
+      {
+        "token": "ェ",
+        "logprob": 0.0,
+        "bytes": [
+          227,
+          130,
+          167
+        ]
+      },
+      {
+        "token": "ル",
+        "logprob": 0.0,
+        "bytes": [
+          227,
+          131,
+          171
+        ]
+      },
+      {
+        "token": "設定",
+        "logprob": -7.896309739408025e-07,
+        "bytes": [
+          232,
+          168,
+          173,
+          229,
+          174,
+          154
+        ]
+      },
+      {
+        "token": "、",
+        "logprob": -0.0829041376709938,
+        "bytes": [
+          227,
+          128,
+          129
+        ]
+      }
+    ],
+    "event_counts": {
+      "session.created": 1,
+      "session.updated": 1,
+      "input_audio_buffer.committed": 1,
+      "conversation.item.added": 1,
+      "conversation.item.done": 1,
+      "conversation.item.input_audio_transcription.delta": 32,
+      "conversation.item.input_audio_transcription.completed": 1
+    },
+    "error": ""
+  }
+]

@@ -1,0 +1,54 @@
+[
+  {
+    "audio": "samples/2.wav",
+    "model": "gpt-realtime-whisper",
+    "include_logprobs": true,
+    "success": true,
+    "elapsed_seconds": 5.579159707995132,
+    "transcript": "既存ファイルをストア管理下へ取り込む場合は、StoreAdapterまたはStoreAdapter Packageを使います。 アンリンクはstore t Dstoreで実行できます。 新しいマックの初期セットアップメモ。一、Apple IDでログインする。二、ホームブルーを入れる。",
+    "completed_event_has_logprobs": false,
+    "delta_events_with_logprobs": 0,
+    "completed_logprobs_count": 0,
+    "first_logprobs_event": null,
+    "min_logprob": null,
+    "max_logprob": null,
+    "avg_logprob": null,
+    "sample_tokens": [],
+    "event_counts": {
+      "session.created": 1,
+      "session.updated": 1,
+      "conversation.item.input_audio_transcription.delta": 71,
+      "input_audio_buffer.committed": 1,
+      "conversation.item.added": 1,
+      "conversation.item.done": 1,
+      "conversation.item.input_audio_transcription.completed": 1
+    },
+    "error": ""
+  },
+  {
+    "audio": "samples/2.wav",
+    "model": "gpt-realtime-whisper",
+    "include_logprobs": false,
+    "success": true,
+    "elapsed_seconds": 6.287555292015895,
+    "transcript": "既存ファイルをシスト管理下へ取り込む場合は、 StoreHアダプトまたはStoreHアダプトパッケージを使います。 アンリンクはストーTディストで実行できます。 新しいマックの初期セットアップメモ。一、Apple IDでログインする。二、ホームブルーを入れる。",
+    "completed_event_has_logprobs": false,
+    "delta_events_with_logprobs": 0,
+    "completed_logprobs_count": 0,
+    "first_logprobs_event": null,
+    "min_logprob": null,
+    "max_logprob": null,
+    "avg_logprob": null,
+    "sample_tokens": [],
+    "event_counts": {
+      "session.created": 1,
+      "session.updated": 1,
+      "conversation.item.input_audio_transcription.delta": 83,
+      "input_audio_buffer.committed": 1,
+      "conversation.item.added": 1,
+      "conversation.item.done": 1,
+      "conversation.item.input_audio_transcription.completed": 1
+    },
+    "error": ""
+  }
+]
