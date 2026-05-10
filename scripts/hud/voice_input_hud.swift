@@ -15,6 +15,31 @@ private struct HudCommand: Decodable {
     let level: Double?
 }
 
+private enum AnchorSource: String {
+    case selectedTextMarkerRange
+    case selectedTextRange
+    case adjacentCharacterRange
+    case focusedElement
+    case mouseFallback
+    case screenFallback
+}
+
+private struct HudAnchor {
+    let rect: NSRect
+    let source: AnchorSource
+    let isPrecise: Bool
+}
+
+private struct HudPlacement {
+    let frame: NSRect
+    let anchor: HudAnchor
+}
+
+private struct ElementSearchItem {
+    let element: AXUIElement
+    let depth: Int
+}
+
 private final class HudView: NSView {
     var state: HudState = .hidden {
         didSet { needsDisplay = true }
@@ -125,6 +150,8 @@ private final class HudController {
     private let view: HudView
     private let logPath: String?
     private var timer: Timer?
+    private var lastPlacement: HudPlacement?
+    private var lastPlacementUpdate = Date.distantPast
 
     init(logPath: String?) {
         self.logPath = logPath
@@ -151,22 +178,29 @@ private final class HudController {
     }
 
     func apply(_ command: HudCommand) {
-        appendLog(command)
+        let stateChanged = command.state != view.state
         view.state = command.state
         view.level = command.level ?? 0
 
         if command.state == .hidden {
+            lastPlacement = nil
+            appendLog(command, placement: nil)
             window.orderOut(nil)
             return
         }
 
-        window.setFrame(positionedFrame(), display: true)
+        let placement = placementForCurrentContext(force: stateChanged)
+        appendLog(command, placement: placement)
+        window.setFrame(placement.frame, display: true)
         window.orderFrontRegardless()
     }
 
-    private func appendLog(_ command: HudCommand) {
+    private func appendLog(_ command: HudCommand, placement: HudPlacement?) {
         guard let logPath else { return }
-        let line = "\(Date().timeIntervalSince1970) state=\(command.state.rawValue) level=\(command.level ?? 0)\n"
+        let anchor = placement.map {
+            " anchor=\($0.anchor.source.rawValue) precise=\($0.anchor.isPrecise) x=\(Int($0.anchor.rect.minX)) y=\(Int($0.anchor.rect.minY))"
+        } ?? ""
+        let line = "\(Date().timeIntervalSince1970) state=\(command.state.rawValue) level=\(command.level ?? 0)\(anchor)\n"
         guard let data = line.data(using: .utf8) else { return }
 
         if FileManager.default.fileExists(atPath: logPath),
@@ -179,27 +213,48 @@ private final class HudController {
         }
     }
 
-    private func positionedFrame() -> NSRect {
-        let size = view.frame.size
-        let visible = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let anchor = caretRectFromAccessibility() ?? focusedElementRectFromAccessibility()
-
-        guard let anchor else {
-            return NSRect(x: visible.midX - size.width / 2, y: visible.minY + 72, width: size.width, height: size.height)
+    private func placementForCurrentContext(force: Bool) -> HudPlacement {
+        let now = Date()
+        if !force,
+           let lastPlacement,
+           now.timeIntervalSince(lastPlacementUpdate) < 0.20 {
+            return lastPlacement
         }
 
-        let screen = NSScreen.screens.first { $0.visibleFrame.intersects(anchor) } ?? NSScreen.main
+        let placement = positionedFrame()
+        lastPlacement = placement
+        lastPlacementUpdate = now
+        return placement
+    }
+
+    private func positionedFrame() -> HudPlacement {
+        let size = view.frame.size
+        let visible = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let anchor = bestAnchorFromAccessibility() ?? mouseFallbackAnchor(in: visible) ?? HudAnchor(
+            rect: NSRect(x: visible.midX, y: visible.minY + 72, width: 1, height: 1),
+            source: .screenFallback,
+            isPrecise: false
+        )
+
+        let screen = NSScreen.screens.first { $0.visibleFrame.intersects(anchor.rect) } ?? NSScreen.main
         let frame = screen?.visibleFrame ?? visible
         let gap: CGFloat = 10
 
-        var x = anchor.maxX + gap
-        var y = anchor.minY - size.height - 6
+        var x: CGFloat
+        var y: CGFloat
+        if anchor.isPrecise {
+            x = anchor.rect.maxX + gap
+            y = anchor.rect.minY - size.height - 6
+        } else {
+            x = anchor.rect.maxX - size.width - 12
+            y = anchor.rect.minY + 12
+        }
 
         if x + size.width > frame.maxX - 8 {
-            x = anchor.minX - size.width - gap
+            x = anchor.rect.minX - size.width - gap
         }
         if y < frame.minY + 8 {
-            y = anchor.maxY + 6
+            y = anchor.rect.maxY + 6
         }
         if x < frame.minX + 8 {
             x = frame.minX + 8
@@ -208,64 +263,222 @@ private final class HudController {
             y = frame.maxY - size.height - 8
         }
 
-        return NSRect(x: x, y: y, width: size.width, height: size.height)
+        return HudPlacement(
+            frame: NSRect(x: x, y: y, width: size.width, height: size.height),
+            anchor: anchor
+        )
     }
 }
 
-private func caretRectFromAccessibility() -> NSRect? {
+private func bestAnchorFromAccessibility() -> HudAnchor? {
     guard AXIsProcessTrusted() else { return nil }
     guard let focused = focusedAccessibilityElement() else { return nil }
 
-    var rangeValue: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(focused, kAXSelectedTextRangeAttribute as CFString, &rangeValue) == .success,
-          let rangeValue else { return nil }
-
-    var range = CFRange()
-    guard AXValueGetValue(rangeValue as! AXValue, .cfRange, &range) else { return nil }
-    if range.length > 0 {
-        range.length = 0
+    if let anchor = preciseCaretAnchor(focused) {
+        return anchor
+    }
+    if let anchor = descendantPreciseCaretAnchor(focused) {
+        return anchor
+    }
+    if let rect = focusedElementRect(focused), isUsefulFocusedElementFallback(rect) {
+        return HudAnchor(rect: rect, source: .focusedElement, isPrecise: false)
     }
 
+    return nil
+}
+
+private func preciseCaretAnchor(_ element: AXUIElement) -> HudAnchor? {
+    if let rect = caretRectFromTextMarkerRange(element) {
+        return HudAnchor(rect: rect, source: .selectedTextMarkerRange, isPrecise: true)
+    }
+    if let rect = caretRectFromSelectedTextRange(element) {
+        return HudAnchor(rect: rect, source: .selectedTextRange, isPrecise: true)
+    }
+    if let rect = caretRectFromAdjacentCharacter(element) {
+        return HudAnchor(rect: rect, source: .adjacentCharacterRange, isPrecise: true)
+    }
+    return nil
+}
+
+private func descendantPreciseCaretAnchor(_ root: AXUIElement) -> HudAnchor? {
+    var queue = childElements(of: root).map { ElementSearchItem(element: $0, depth: 1) }
+    var visited = 0
+    let maxVisited = 80
+    let maxDepth = 4
+
+    while !queue.isEmpty && visited < maxVisited {
+        let item = queue.removeFirst()
+        visited += 1
+
+        if let anchor = preciseCaretAnchor(item.element) {
+            return anchor
+        }
+        if item.depth < maxDepth {
+            queue.append(contentsOf: childElements(of: item.element).map {
+                ElementSearchItem(element: $0, depth: item.depth + 1)
+            })
+        }
+    }
+
+    return nil
+}
+
+private func childElements(of element: AXUIElement) -> [AXUIElement] {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success,
+          let children = value as? [AXUIElement] else { return [] }
+    return children
+}
+
+private func caretRectFromTextMarkerRange(_ element: AXUIElement) -> NSRect? {
+    var markerRange: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, "AXSelectedTextMarkerRange" as CFString, &markerRange) == .success,
+          let markerRange else { return nil }
+
+    var boundsValue: CFTypeRef?
+    guard AXUIElementCopyParameterizedAttributeValue(
+        element,
+        "AXBoundsForTextMarkerRange" as CFString,
+        markerRange,
+        &boundsValue
+    ) == .success,
+    let rect = cgRect(from: boundsValue),
+    isUsableAccessibilityRect(rect) else { return nil }
+
+    return normalizedCaretRect(accessibilityRectToAppKit(rect))
+}
+
+private func caretRectFromSelectedTextRange(_ element: AXUIElement) -> NSRect? {
+    guard let range = selectedTextRange(element) else { return nil }
+    var caretRange = range
+    caretRange.length = 0
+
+    guard let rect = boundsForCharacterRange(caretRange, in: element) else { return nil }
+    return normalizedCaretRect(accessibilityRectToAppKit(rect))
+}
+
+private func caretRectFromAdjacentCharacter(_ element: AXUIElement) -> NSRect? {
+    guard let range = selectedTextRange(element) else { return nil }
+    guard range.location != kCFNotFound else { return nil }
+
+    let characterCount = textCharacterCount(element)
+    let probeLocation: CFIndex
+    let useTrailingEdge: Bool
+    if characterCount == 0 {
+        return nil
+    } else if range.location < characterCount {
+        probeLocation = range.location
+        useTrailingEdge = false
+    } else if range.location > 0 {
+        probeLocation = range.location - 1
+        useTrailingEdge = true
+    } else {
+        return nil
+    }
+
+    guard let rect = boundsForCharacterRange(CFRange(location: probeLocation, length: 1), in: element) else {
+        return nil
+    }
+
+    let appKitRect = accessibilityRectToAppKit(rect)
+    let x = useTrailingEdge ? appKitRect.maxX : appKitRect.minX
+    return NSRect(x: x, y: appKitRect.minY, width: 2, height: max(appKitRect.height, 16))
+}
+
+private func selectedTextRange(_ element: AXUIElement) -> CFRange? {
+    var rangeValue: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &rangeValue) == .success,
+          let rangeAXValue = axValue(from: rangeValue) else { return nil }
+
+    var range = CFRange()
+    guard AXValueGetValue(rangeAXValue, .cfRange, &range) else { return nil }
+    return range
+}
+
+private func boundsForCharacterRange(_ range: CFRange, in element: AXUIElement) -> CGRect? {
+    var range = range
     guard let axRange = AXValueCreate(.cfRange, &range) else { return nil }
     var boundsValue: CFTypeRef?
     guard AXUIElementCopyParameterizedAttributeValue(
-        focused,
+        element,
         kAXBoundsForRangeParameterizedAttribute as CFString,
         axRange,
         &boundsValue
     ) == .success,
-    let boundsValue else { return nil }
+    let rect = cgRect(from: boundsValue),
+    isUsableAccessibilityRect(rect) else { return nil }
 
-    var rect = CGRect.zero
-    guard AXValueGetValue(boundsValue as! AXValue, .cgRect, &rect), !rect.isNull, !rect.isEmpty else {
-        return nil
-    }
-
-    return accessibilityRectToAppKit(rect)
+    return rect
 }
 
-private func focusedElementRectFromAccessibility() -> NSRect? {
-    guard AXIsProcessTrusted() else { return nil }
-    guard let focused = focusedAccessibilityElement() else { return nil }
+private func textCharacterCount(_ element: AXUIElement) -> CFIndex {
+    var value: CFTypeRef?
+    if AXUIElementCopyAttributeValue(element, kAXNumberOfCharactersAttribute as CFString, &value) == .success,
+       let number = value as? NSNumber {
+        return number.intValue
+    }
 
+    if AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
+       let string = value as? String {
+        return string.utf16.count
+    }
+
+    return 0
+}
+
+private func focusedElementRect(_ element: AXUIElement) -> NSRect? {
     var positionValue: CFTypeRef?
     var sizeValue: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(focused, kAXPositionAttribute as CFString, &positionValue) == .success,
-          AXUIElementCopyAttributeValue(focused, kAXSizeAttribute as CFString, &sizeValue) == .success,
-          let positionValue,
-          let sizeValue else { return nil }
+    guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionValue) == .success,
+          AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue) == .success,
+          let positionAXValue = axValue(from: positionValue),
+          let sizeAXValue = axValue(from: sizeValue) else { return nil }
 
     var position = CGPoint.zero
     var size = CGSize.zero
-    guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
-          AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else {
+    guard AXValueGetValue(positionAXValue, .cgPoint, &position),
+          AXValueGetValue(sizeAXValue, .cgSize, &size) else {
         return nil
     }
 
     let rect = CGRect(origin: position, size: size)
-    guard !rect.isNull, !rect.isEmpty else { return nil }
+    guard isUsableElementRect(rect) else { return nil }
 
     return accessibilityRectToAppKit(rect)
+}
+
+private func isUsableAccessibilityRect(_ rect: CGRect) -> Bool {
+    rect.origin.x.isFinite
+        && rect.origin.y.isFinite
+        && rect.size.width.isFinite
+        && rect.size.height.isFinite
+        && !rect.isNull
+        && rect.width >= 0
+        && rect.height > 0
+}
+
+private func isUsableElementRect(_ rect: CGRect) -> Bool {
+    isUsableAccessibilityRect(rect) && rect.width > 0
+}
+
+private func normalizedCaretRect(_ rect: NSRect) -> NSRect {
+    NSRect(x: rect.minX, y: rect.minY, width: max(rect.width, 2), height: max(rect.height, 16))
+}
+
+private func isUsefulFocusedElementFallback(_ rect: NSRect) -> Bool {
+    rect.width <= 900 && rect.height <= 180
+}
+
+private func mouseFallbackAnchor(in visible: NSRect) -> HudAnchor? {
+    let location = NSEvent.mouseLocation
+    let screen = NSScreen.screens.first { $0.frame.contains(location) }
+    let frame = screen?.visibleFrame ?? visible
+    guard frame.contains(location) else { return nil }
+    return HudAnchor(
+        rect: NSRect(x: location.x, y: location.y, width: 1, height: 1),
+        source: .mouseFallback,
+        isPrecise: true
+    )
 }
 
 private func focusedAccessibilityElement() -> AXUIElement? {
@@ -275,6 +488,18 @@ private func focusedAccessibilityElement() -> AXUIElement? {
         return nil
     }
     return focused as! AXUIElement?
+}
+
+private func axValue(from value: CFTypeRef?) -> AXValue? {
+    guard let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+    return (value as! AXValue)
+}
+
+private func cgRect(from value: CFTypeRef?) -> CGRect? {
+    guard let value = axValue(from: value) else { return nil }
+    var rect = CGRect.zero
+    guard AXValueGetValue(value, .cgRect, &rect) else { return nil }
+    return rect
 }
 
 private func accessibilityRectToAppKit(_ rect: CGRect) -> NSRect {
