@@ -33,6 +33,8 @@ pub struct AppConfig {
     pub recording: RecordingConfig,
     /// 最大同時転写数
     pub max_concurrent_transcriptions: usize,
+    /// 録音開始・停止サウンドを再生する
+    pub recording_sounds_enabled: bool,
 }
 
 impl AppConfig {
@@ -45,6 +47,7 @@ impl AppConfig {
                 max_duration_secs: env_config.recording.max_duration_secs,
             },
             max_concurrent_transcriptions: env_config.recommended_transcription_parallelism(),
+            recording_sounds_enabled: env_config.audio.recording_sounds_enabled,
         })
     }
 }
@@ -156,13 +159,16 @@ impl<T: AudioBackend + 'static> ServiceContainer<T> {
         let (tx, rx) = mpsc::unbounded_channel();
 
         // コマンドハンドラーを構築
-        let command_handler = Rc::new(RefCell::new(CommandHandler::new(
-            recording.clone(),
-            transcription.clone(),
-            media_control,
-            history.clone(),
-            tx.clone(),
-        )));
+        let command_handler = Rc::new(RefCell::new(
+            CommandHandler::new_with_recording_sounds_enabled(
+                recording.clone(),
+                transcription.clone(),
+                media_control,
+                history.clone(),
+                tx.clone(),
+                config.recording_sounds_enabled,
+            ),
+        ));
 
         Ok(ServiceContainer {
             command_handler,
@@ -376,6 +382,7 @@ mod tests {
                 input_device_priorities: Vec::new(),
                 preferred_format: PreferredAudioFormat::Flac,
                 pre_roll_ms: crate::utils::config::DEFAULT_AUDIO_PRE_ROLL_MS,
+                recording_sounds_enabled: true,
             },
             recording: RecordingConfig {
                 max_duration_secs: 30,
