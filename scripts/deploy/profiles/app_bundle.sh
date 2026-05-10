@@ -2,12 +2,15 @@
 
 BUILD_CLI_PATH="${VOICE_INPUT_BUILD_CLI_PATH:-${REPO_ROOT}/target/release/voice_input}"
 BUILD_DAEMON_PATH="${VOICE_INPUT_DAEMON_PATH:-${REPO_ROOT}/target/release/voice_inputd}"
+BUILD_HUD_PATH="${VOICE_INPUT_BUILD_HUD_PATH:-${REPO_ROOT}/target/release/voice_input_hud}"
+HUD_SOURCE_PATH="${VOICE_INPUT_HUD_SOURCE_PATH:-${REPO_ROOT}/scripts/hud/voice_input_hud.swift}"
 APP_BUNDLE_PATH="${VOICE_INPUT_APP_BUNDLE_PATH:-$HOME/Applications/VoiceInput.app}"
 APP_BUNDLE_CONTENTS_PATH="${VOICE_INPUT_APP_BUNDLE_CONTENTS_PATH:-${APP_BUNDLE_PATH}/Contents}"
 APP_BUNDLE_MACOS_PATH="${VOICE_INPUT_APP_BUNDLE_MACOS_PATH:-${APP_BUNDLE_CONTENTS_PATH}/MacOS}"
 APP_BUNDLE_INFO_PLIST_PATH="${VOICE_INPUT_APP_BUNDLE_INFO_PLIST_PATH:-${APP_BUNDLE_CONTENTS_PATH}/Info.plist}"
 BUNDLED_CLI_PATH="${VOICE_INPUT_BUNDLED_CLI_PATH:-${APP_BUNDLE_MACOS_PATH}/voice_input}"
 BUNDLED_DAEMON_PATH="${VOICE_INPUT_BUNDLED_DAEMON_PATH:-${APP_BUNDLE_MACOS_PATH}/voice_inputd}"
+BUNDLED_HUD_PATH="${VOICE_INPUT_BUNDLED_HUD_PATH:-${APP_BUNDLE_MACOS_PATH}/voice_input_hud}"
 APP_BUNDLE_IDENTIFIER="${VOICE_INPUT_APP_BUNDLE_IDENTIFIER:-com.user.voiceinput}"
 APP_BUNDLE_CODESIGN_REQUIREMENTS="${VOICE_INPUT_APP_BUNDLE_CODESIGN_REQUIREMENTS:-designated => identifier \"${APP_BUNDLE_IDENTIFIER}\"}"
 
@@ -16,6 +19,20 @@ PROFILE_SUCCESS_NAME="VoiceInput.app"
 
 prepare_profile_layout() {
     mkdir -p "$APP_BUNDLE_MACOS_PATH"
+}
+
+build_profile_artifacts() {
+    if ! command -v swiftc >/dev/null 2>&1; then
+        echo "❌ swiftc is required to build the recording HUD helper." >&2
+        exit 1
+    fi
+
+    if [ ! -f "$HUD_SOURCE_PATH" ]; then
+        echo "❌ HUD source was not found: $HUD_SOURCE_PATH" >&2
+        exit 1
+    fi
+
+    swiftc "$HUD_SOURCE_PATH" -o "$BUILD_HUD_PATH"
 }
 
 write_info_plist() {
@@ -60,11 +77,17 @@ install_profile_artifacts() {
         exit 1
     fi
 
+    if [ ! -x "$BUILD_HUD_PATH" ]; then
+        echo "❌ Built HUD helper was not found: $BUILD_HUD_PATH" >&2
+        exit 1
+    fi
+
     rm -rf "$APP_BUNDLE_PATH"
     mkdir -p "$APP_BUNDLE_MACOS_PATH"
     cp "$BUILD_CLI_PATH" "$BUNDLED_CLI_PATH"
     cp "$BUILD_DAEMON_PATH" "$BUNDLED_DAEMON_PATH"
-    chmod +x "$BUNDLED_CLI_PATH" "$BUNDLED_DAEMON_PATH"
+    cp "$BUILD_HUD_PATH" "$BUNDLED_HUD_PATH"
+    chmod +x "$BUNDLED_CLI_PATH" "$BUNDLED_DAEMON_PATH" "$BUNDLED_HUD_PATH"
     write_info_plist
 }
 

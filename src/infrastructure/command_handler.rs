@@ -15,8 +15,8 @@ use tokio::task::spawn_local;
 use tokio::time::Duration;
 
 use crate::application::{
-    AudioData, AudioDataFormat, CapturedAudio, RecordedAudio, RecordingOptions, RecordingService,
-    TranscriptionEvent, TranscriptionHistoryEntry, TranscriptionHistoryService,
+    AudioData, AudioDataFormat, AudioFrame, CapturedAudio, RecordedAudio, RecordingOptions,
+    RecordingService, TranscriptionEvent, TranscriptionHistoryEntry, TranscriptionHistoryService,
     TranscriptionService,
 };
 use crate::domain::transcription::FinalizedTranscription;
@@ -27,6 +27,7 @@ use crate::infrastructure::{
         realtime_whisper_adapter::{
             RealtimeWhisperConfig, RealtimeWhisperSessionHandle, spawn_realtime_whisper_session,
         },
+        recording_hud::{self, HudState},
         sound::{play_start_sound, play_stop_sound, resume_apple_music},
     },
     media_control_service::MediaControlService,
@@ -261,9 +262,11 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         } else {
             None
         };
-        let audio_frame_tx = realtime_session
+        let realtime_audio_frame_tx = realtime_session
             .as_ref()
             .map(|active| active.session.frame_tx());
+        let hud_audio_frame_tx = Some(recording_hud::start_voice_activity_monitor());
+        let audio_frame_tx = fan_out_audio_frames(realtime_audio_frame_tx, hud_audio_frame_tx);
 
         // 録音オプションを構築
         let options = RecordingOptions {
@@ -279,9 +282,11 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
         // 録音を開始
         let recording = self.recording.clone();
+        recording_hud::set_state(HudState::Detecting);
         let session_id = match recording.borrow().start_recording(options).await {
             Ok(session_id) => session_id,
             Err(error) => {
+                recording_hud::set_state(HudState::Hidden);
                 if let Some(active) = realtime_session.take() {
                     active.session.abort();
                     active.input_task.abort();
@@ -414,6 +419,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     async fn handle_stop(&self) -> Result<IpcResp> {
         // 停止音を再生
         play_stop_sound_if_enabled(self.recording_sounds_enabled);
+        recording_hud::set_state(HudState::Transcribing);
 
         if self.realtime_session.borrow().is_some() {
             return self.handle_stop_realtime().await;
@@ -421,7 +427,13 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
         // 録音を停止
         let recording = self.recording.clone();
-        let outcome = recording.borrow().stop_recording().await?;
+        let outcome = match recording.borrow().stop_recording().await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                recording_hud::set_state(HudState::Hidden);
+                return Err(error);
+            }
+        };
         let audio_bytes = outcome.result.audio_data.bytes.len();
         let save_result = outcome.context.save_audio_path.as_ref().map(|path| {
             (
@@ -481,6 +493,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         )
         .await?;
         self.warm_realtime_whisper_session_if_enabled();
+        recording_hud::set_state(HudState::Hidden);
 
         let msg = match outcome.save_result {
             Some((_requested_path, Ok(saved_path))) => {
@@ -693,6 +706,26 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 println!("Warning: Could not set up auto-stop timer - no cancel receiver");
             }
         });
+    }
+}
+
+fn fan_out_audio_frames(
+    first: Option<mpsc::UnboundedSender<AudioFrame>>,
+    second: Option<mpsc::UnboundedSender<AudioFrame>>,
+) -> Option<mpsc::UnboundedSender<AudioFrame>> {
+    match (first, second) {
+        (None, None) => None,
+        (Some(tx), None) | (None, Some(tx)) => Some(tx),
+        (Some(first), Some(second)) => {
+            let (tx, mut rx) = mpsc::unbounded_channel::<AudioFrame>();
+            spawn_local(async move {
+                while let Some(frame) = rx.recv().await {
+                    let _ = first.send(frame.clone());
+                    let _ = second.send(frame);
+                }
+            });
+            Some(tx)
+        }
     }
 }
 

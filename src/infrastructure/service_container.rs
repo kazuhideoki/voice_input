@@ -352,7 +352,7 @@ mod tests {
     use super::test_helpers::*;
     use crate::utils::config::{
         AudioConfig, EnvConfig, PathConfig, PreferredAudioFormat, ProfilingConfig, ProxyConfig,
-        PushToTalkConfig, RecordingConfig, TranscriptionConfig, TranscriptionProvider,
+        PushToTalkConfig, RecordingConfig, TranscriptionConfig, TranscriptionProvider, UiConfig,
     };
 
     fn mlx_env_config() -> EnvConfig {
@@ -386,6 +386,11 @@ mod tests {
             },
             recording: RecordingConfig {
                 max_duration_secs: 30,
+            },
+            ui: UiConfig {
+                recording_hud_enabled: false,
+                recording_hud_helper_path: None,
+                recording_hud_log_path: None,
             },
             push_to_talk: PushToTalkConfig {
                 enabled: false,
