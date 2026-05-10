@@ -76,6 +76,7 @@ pub struct CommandHandler<T: AudioBackend> {
     realtime_session: Rc<RefCell<Option<ActiveRealtimeSession>>>,
     ready_realtime_session: Rc<RefCell<Option<PreparedRealtimeSession>>>,
     ready_realtime_task: Rc<RefCell<Option<tokio::task::JoinHandle<()>>>>,
+    recording_sounds_enabled: bool,
 }
 
 impl<T: AudioBackend + 'static> CommandHandler<T> {
@@ -87,6 +88,24 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         history: Rc<RefCell<TranscriptionHistoryService>>,
         transcription_tx: mpsc::UnboundedSender<TranscriptionMessage>,
     ) -> Self {
+        Self::new_with_recording_sounds_enabled(
+            recording,
+            transcription,
+            media_control,
+            history,
+            transcription_tx,
+            EnvConfig::get().audio.recording_sounds_enabled,
+        )
+    }
+
+    pub(crate) fn new_with_recording_sounds_enabled(
+        recording: Rc<RefCell<RecordingService<T>>>,
+        transcription: Rc<RefCell<TranscriptionService>>,
+        media_control: Rc<RefCell<MediaControlService>>,
+        history: Rc<RefCell<TranscriptionHistoryService>>,
+        transcription_tx: mpsc::UnboundedSender<TranscriptionMessage>,
+        recording_sounds_enabled: bool,
+    ) -> Self {
         Self {
             recording,
             transcription,
@@ -96,6 +115,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             realtime_session: Rc::new(RefCell::new(None)),
             ready_realtime_session: Rc::new(RefCell::new(None)),
             ready_realtime_task: Rc::new(RefCell::new(None)),
+            recording_sounds_enabled,
         }
     }
 
@@ -234,7 +254,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         let model = resolve_transcription_model(provider, transcription_model)?;
 
         // 体感開始時間を縮めるため、開始音は録音開始前に鳴らす
-        play_start_sound();
+        play_start_sound_if_enabled(self.recording_sounds_enabled);
 
         let mut realtime_session = if provider == TranscriptionProvider::OpenAiRealtimeWhisper {
             Some(self.prepare_realtime_session_for_recording()?)
@@ -393,7 +413,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     /// 録音停止処理
     async fn handle_stop(&self) -> Result<IpcResp> {
         // 停止音を再生
-        play_stop_sound();
+        play_stop_sound_if_enabled(self.recording_sounds_enabled);
 
         if self.realtime_session.borrow().is_some() {
             return self.handle_stop_realtime().await;
@@ -613,6 +633,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         let ready_realtime_session = self.ready_realtime_session.clone();
         let ready_realtime_task = self.ready_realtime_task.clone();
         let tx = self.transcription_tx.clone();
+        let recording_sounds_enabled = self.recording_sounds_enabled;
 
         spawn_local(async move {
             // RecordingServiceからキャンセルレシーバーを取得
@@ -624,7 +645,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                         // 設定された最大録音時間の経過による自動停止
                         if recording.borrow().is_recording() {
                             println!("Auto-stop timer triggered after {}s", max_secs);
-                            play_stop_sound();
+                            play_stop_sound_if_enabled(recording_sounds_enabled);
 
                             if let Some(active) = realtime_session.borrow_mut().take() {
                                 if let Err(error) = stop_active_realtime_session(
@@ -859,6 +880,18 @@ fn requested_audio_format(provider: TranscriptionProvider) -> Option<AudioDataFo
     match provider {
         TranscriptionProvider::OpenAi4o | TranscriptionProvider::OpenAiRealtimeWhisper => None,
         TranscriptionProvider::MlxQwen3Asr => Some(AudioDataFormat::Wav),
+    }
+}
+
+fn play_start_sound_if_enabled(recording_sounds_enabled: bool) {
+    if recording_sounds_enabled {
+        play_start_sound();
+    }
+}
+
+fn play_stop_sound_if_enabled(recording_sounds_enabled: bool) {
+    if recording_sounds_enabled {
+        play_stop_sound();
     }
 }
 
@@ -1269,6 +1302,21 @@ mod tests {
         Rc<RefCell<MediaControlService>>,
         mpsc::UnboundedReceiver<TranscriptionMessage>,
     ) {
+        build_handler_with_recording_sounds_enabled(backend, media_control, true)
+    }
+
+    fn build_handler_with_recording_sounds_enabled<T: AudioBackend + 'static>(
+        backend: T,
+        media_control: MediaControlService,
+        recording_sounds_enabled: bool,
+    ) -> (
+        CommandHandler<T>,
+        Rc<RefCell<RecordingService<T>>>,
+        Rc<RefCell<MediaControlService>>,
+        mpsc::UnboundedReceiver<TranscriptionMessage>,
+    ) {
+        EnvConfig::test_init();
+
         let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
         let recording = Rc::new(RefCell::new(RecordingService::new(
             recorder,
@@ -1284,12 +1332,13 @@ mod tests {
         let (tx, rx) = mpsc::unbounded_channel();
 
         (
-            CommandHandler::new(
+            CommandHandler::new_with_recording_sounds_enabled(
                 recording.clone(),
                 transcription,
                 media_control.clone(),
                 history,
                 tx,
+                recording_sounds_enabled,
             ),
             recording,
             media_control,
@@ -1690,6 +1739,82 @@ mod tests {
             *events.lock().unwrap(),
             vec!["start_sound", "recording_started"]
         );
+    }
+
+    /// サウンド無効設定では手動開始停止時に開始音と停止音を鳴らさない
+    #[tokio::test(flavor = "current_thread")]
+    async fn disabled_recording_sounds_skip_manual_start_and_stop_sounds() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        clear_test_sound_runner();
+        let _cleanup = guard((), |_| clear_test_sound_runner());
+
+        let events = Arc::new(StdMutex::new(Vec::new()));
+        let sound_events = events.clone();
+        set_test_sound_runner(move |_path| {
+            sound_events.lock().unwrap().push("sound");
+        });
+
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let backend = RecordingOrderBackend::new(events.clone());
+                let media_control = MediaControlService::with_controller(Box::new(
+                    DelayedMediaController::new(false, Duration::from_millis(0)),
+                ));
+                let (handler, _recording, _media_control, _rx) =
+                    build_handler_with_recording_sounds_enabled(backend, media_control, false);
+
+                handler.handle(start_cmd()).await.unwrap();
+                handler.handle(IpcCmd::Stop).await.unwrap();
+            })
+            .await;
+
+        assert_eq!(*events.lock().unwrap(), vec!["recording_started"]);
+    }
+
+    /// サウンド無効設定では自動停止時に停止音を鳴らさない
+    #[tokio::test(flavor = "current_thread")]
+    async fn disabled_recording_sounds_skip_auto_stop_sound() {
+        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
+        clear_test_sound_runner();
+        let _cleanup = guard((), |_| clear_test_sound_runner());
+
+        let events = Arc::new(StdMutex::new(Vec::new()));
+        let sound_events = events.clone();
+        set_test_sound_runner(move |_path| {
+            sound_events.lock().unwrap().push("sound");
+        });
+
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let backend = RecordingOrderBackend::new(events.clone());
+                let media_control = MediaControlService::with_controller(Box::new(
+                    DelayedMediaController::new(false, Duration::from_millis(0)),
+                ));
+                let (handler, _recording, _media_control, mut rx) =
+                    build_handler_with_recording_sounds_enabled(backend, media_control, false);
+
+                handler
+                    .handle(IpcCmd::Start {
+                        prompt: None,
+                        save_audio_path: None,
+                        max_duration_secs: Some(1),
+                        transcription_provider: None,
+                        transcription_model: None,
+                    })
+                    .await
+                    .unwrap();
+
+                let message = tokio::time::timeout(Duration::from_millis(1_500), rx.recv())
+                    .await
+                    .expect("auto-stop should enqueue transcription")
+                    .expect("transcription message should exist");
+                assert_eq!(message.session_id, 1);
+            })
+            .await;
+
+        assert_eq!(*events.lock().unwrap(), vec!["recording_started"]);
     }
 
     /// 開始音通知の体感待ち時間を観測できる

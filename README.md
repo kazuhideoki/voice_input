@@ -28,6 +28,7 @@ cp .env.example .env
 - OPENAI_TRANSCRIBE_STREAMING=false
 - INPUT_DEVICE_PRIORITY="device1,device2,device3"
 - VOICE_INPUT_PRE_ROLL_MS=500
+- VOICE_INPUT_RECORDING_SOUNDS=true
 - VOICE_INPUT_ENV_PATH=/path/to/.env
 - VOICE_INPUT_SOCKET_PATH=/custom/path/voice_input.sock
 - VOICE_INPUT_SOCKET_DIR=/custom/socket/dir # `VOICE_INPUT_SOCKET_PATH` 未設定時のみ有効
@@ -40,6 +41,7 @@ cp .env.example .env
 `realtime-whisper` は録音中の PCM フレームを OpenAI Realtime API へ送信し、delta を入力先へ逐次反映します。`gpt-realtime-whisper` は server VAD 非対応のため、停止時に手動 commit します。
 `mlx-qwen3-asr` 指定時は `mlx-qwen3-asr` コマンドを使い、録音データは CLI 連携のため一時ファイル経由で渡します。
 `VOICE_INPUT_PRE_ROLL_MS` は `start` / `toggle` 直前のローカル音声リングバッファを録音の先頭へ付与する長さです。既定値は 500ms で、0 を指定すると無効化できます。キー押下前の音声はメモリ上にだけ保持し、送信や保存は録音開始後のデータとして扱う場合に限ります。
+`VOICE_INPUT_RECORDING_SOUNDS=false` を設定すると、録音開始・停止時の効果音を無効化できます。未指定時は有効です。
 `VOICE_INPUT_PUSH_TO_TALK=true` を設定すると、`VOICE_INPUT_PUSH_TO_TALK_HOTKEY` のキーを押している間だけ daemon が録音します。既定ホットキーは `opt+8` で、対象キーイベントは前面アプリへ渡さず抑制します。
 
 ## 音声処理

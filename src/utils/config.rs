@@ -28,6 +28,9 @@ pub const MAX_AUDIO_PRE_ROLL_MS: u64 = 5_000;
 /// 録音開始時の pre-roll 長を指定する環境変数名
 pub const AUDIO_PRE_ROLL_MS_ENV: &str = "VOICE_INPUT_PRE_ROLL_MS";
 
+/// 録音開始・停止サウンドの有効化を指定する環境変数名
+pub const RECORDING_SOUNDS_ENABLED_ENV: &str = "VOICE_INPUT_RECORDING_SOUNDS";
+
 /// キー押下中だけ録音する push-to-talk を有効にする環境変数名
 pub const PUSH_TO_TALK_ENABLED_ENV: &str = "VOICE_INPUT_PUSH_TO_TALK";
 
@@ -222,6 +225,8 @@ pub struct AudioConfig {
     pub preferred_format: PreferredAudioFormat,
     /// 録音開始時に先頭へ付与するローカル pre-roll 長（ミリ秒）
     pub pre_roll_ms: u64,
+    /// 録音開始・停止サウンドを再生する
+    pub recording_sounds_enabled: bool,
 }
 
 /// 録音フォーマット
@@ -340,6 +345,10 @@ impl EnvConfig {
                 input_device_priorities: csv_env("INPUT_DEVICE_PRIORITY"),
                 preferred_format: PreferredAudioFormat::Flac,
                 pre_roll_ms: audio_pre_roll_ms,
+                recording_sounds_enabled: parse_bool_env_with_default(
+                    RECORDING_SOUNDS_ENABLED_ENV,
+                    true,
+                )?,
             },
             recording: RecordingConfig { max_duration_secs },
             push_to_talk: PushToTalkConfig {
@@ -497,13 +506,17 @@ pub fn parse_audio_pre_roll_ms(value: &str) -> Result<u64, ConfigError> {
 }
 
 fn parse_bool_env(name: &'static str) -> Result<bool, ConfigError> {
+    parse_bool_env_with_default(name, false)
+}
+
+fn parse_bool_env_with_default(name: &'static str, default: bool) -> Result<bool, ConfigError> {
     match std::env::var(name) {
         Ok(value) => match value.as_str() {
             "true" => Ok(true),
             "false" => Ok(false),
             _ => Err(ConfigError::InvalidBooleanEnv { name, value }),
         },
-        Err(_) => Ok(false),
+        Err(_) => Ok(default),
     }
 }
 
@@ -513,8 +526,8 @@ mod tests {
         AudioConfig, ConfigError, DEFAULT_AUDIO_PRE_ROLL_MS, DEFAULT_MAX_RECORDING_DURATION_SECS,
         DEFAULT_PUSH_TO_TALK_HOTKEY, DEFAULT_TRANSCRIPTION_PROVIDER_ENV, EnvConfig,
         MAX_AUDIO_PRE_ROLL_MS, PathConfig, PreferredAudioFormat, ProfilingConfig, ProxyConfig,
-        PushToTalkConfig, RecordingConfig, TranscriptionConfig, TranscriptionProvider,
-        lock_test_env,
+        PushToTalkConfig, RECORDING_SOUNDS_ENABLED_ENV, RecordingConfig, TranscriptionConfig,
+        TranscriptionProvider, lock_test_env,
     };
     use std::path::PathBuf;
 
@@ -535,6 +548,7 @@ mod tests {
                 input_device_priorities: Vec::new(),
                 preferred_format: PreferredAudioFormat::Flac,
                 pre_roll_ms: DEFAULT_AUDIO_PRE_ROLL_MS,
+                recording_sounds_enabled: true,
             },
             recording: RecordingConfig {
                 max_duration_secs: DEFAULT_MAX_RECORDING_DURATION_SECS,
@@ -940,6 +954,59 @@ mod tests {
 
         unsafe {
             std::env::remove_var("VOICE_INPUT_PRE_ROLL_MS");
+        }
+    }
+
+    /// 録音開始・停止サウンドは既定で有効になる
+    #[test]
+    fn recording_sounds_are_enabled_by_default() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::remove_var(RECORDING_SOUNDS_ENABLED_ENV);
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert!(config.audio.recording_sounds_enabled);
+    }
+
+    /// 録音開始・停止サウンドは環境変数で無効化できる
+    #[test]
+    fn recording_sounds_can_be_disabled_from_environment() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var(RECORDING_SOUNDS_ENABLED_ENV, "false");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert!(!config.audio.recording_sounds_enabled);
+
+        unsafe {
+            std::env::remove_var(RECORDING_SOUNDS_ENABLED_ENV);
+        }
+    }
+
+    /// 録音開始・停止サウンド設定はtrue/false以外を許可しない
+    #[test]
+    fn try_from_env_rejects_invalid_recording_sounds_flag() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var(RECORDING_SOUNDS_ENABLED_ENV, "off");
+        }
+
+        let result = EnvConfig::try_from_env();
+
+        assert_eq!(
+            result,
+            Err(ConfigError::InvalidBooleanEnv {
+                name: RECORDING_SOUNDS_ENABLED_ENV,
+                value: "off".to_string(),
+            })
+        );
+
+        unsafe {
+            std::env::remove_var(RECORDING_SOUNDS_ENABLED_ENV);
         }
     }
 
