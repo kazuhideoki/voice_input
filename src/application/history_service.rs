@@ -45,7 +45,7 @@ impl TranscriptionHistoryService {
         provider: TranscriptionProvider,
         model: Option<&str>,
     ) {
-        if self.limit == 0 {
+        if self.limit == 0 || finalized.text.trim().is_empty() {
             return;
         }
 
@@ -121,5 +121,22 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(texts, vec!["third", "second"]);
+    }
+
+    /// 空白だけの確定結果は履歴に記録されない
+    #[test]
+    fn blank_finalized_entries_are_not_recorded() {
+        let mut history = TranscriptionHistoryService::with_limit(10);
+
+        history.record_finalized(&finalized("first"), TranscriptionProvider::OpenAi4o, None);
+        history.record_finalized(&finalized(" \n\t"), TranscriptionProvider::OpenAi4o, None);
+
+        let texts = history
+            .list()
+            .into_iter()
+            .map(|entry| entry.text)
+            .collect::<Vec<_>>();
+
+        assert_eq!(texts, vec!["first"]);
     }
 }
