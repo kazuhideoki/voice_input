@@ -29,6 +29,7 @@ use voice_input::{
     infrastructure::{
         audio::CpalAudioBackend,
         command_handler::CommandHandler,
+        external::recording_hud,
         external::text_input,
         push_to_talk::{self, PushToTalkEvent, PushToTalkMonitor},
         runtime_recovery::{SleepWakeDetector, WakeRecoveryRetryPolicy},
@@ -84,6 +85,7 @@ async fn async_main() -> Result<()> {
     let history_service = container.history_service.clone();
 
     text_input::init_worker().map_err(|e| VoiceInputError::SystemError(e.to_string()))?;
+    recording_hud::init_worker();
     spawn_runtime_recovery_monitor(recording_service.clone(), command_handler.clone());
     command_handler
         .borrow()

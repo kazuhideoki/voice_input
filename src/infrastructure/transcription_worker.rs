@@ -20,7 +20,11 @@ use crate::application::{
 use crate::domain::transcription::{FinalizedTranscription, LowConfidenceSelection};
 use crate::error::Result;
 use crate::infrastructure::command_handler::TranscriptionMessage;
-use crate::infrastructure::external::{sound::resume_apple_music, text_input};
+use crate::infrastructure::external::{
+    recording_hud::{self, HudState},
+    sound::resume_apple_music,
+    text_input,
+};
 use crate::utils::config::{EnvConfig, TranscriptionProvider};
 use crate::utils::profiling;
 use async_trait::async_trait;
@@ -310,9 +314,10 @@ pub async fn spawn_transcription_worker<T: AudioBackend + 'static>(
         let history_service = history_service.clone();
         let recording_service = recording_service.clone();
         spawn_local(async move {
+            let session_id = message.session_id;
             if let Err(e) = handle_transcription(
                 message,
-                recording_service,
+                recording_service.clone(),
                 transcription_service,
                 history_service,
             )
@@ -320,8 +325,29 @@ pub async fn spawn_transcription_worker<T: AudioBackend + 'static>(
             {
                 eprintln!("Transcription handling failed: {}", e);
             }
+            hide_hud_if_no_newer_session(session_id, recording_service);
             drop(permit);
         });
+    }
+}
+
+fn hide_hud_if_no_newer_session<T: AudioBackend>(
+    session_id: u64,
+    recording_service: Rc<RefCell<RecordingService<T>>>,
+) {
+    let should_hide = match recording_service
+        .borrow()
+        .has_started_newer_session(session_id)
+    {
+        Ok(value) => !value,
+        Err(e) => {
+            eprintln!("Failed to check newer session before hiding HUD: {}", e);
+            true
+        }
+    };
+
+    if should_hide {
+        recording_hud::set_state(HudState::Hidden);
     }
 }
 

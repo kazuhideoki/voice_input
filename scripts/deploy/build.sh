@@ -13,6 +13,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 load_profile "${1:-}"
 
 run_release_build
+if declare -F build_profile_artifacts >/dev/null; then
+    build_profile_artifacts
+fi
 
 echo "📦 Installing ${DEPLOY_PROFILE} artifacts..."
 install_profile_artifacts

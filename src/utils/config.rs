@@ -31,6 +31,15 @@ pub const AUDIO_PRE_ROLL_MS_ENV: &str = "VOICE_INPUT_PRE_ROLL_MS";
 /// 録音開始・停止サウンドの有効化を指定する環境変数名
 pub const RECORDING_SOUNDS_ENABLED_ENV: &str = "VOICE_INPUT_RECORDING_SOUNDS";
 
+/// 録音状態HUDの有効化を指定する環境変数名
+pub const RECORDING_HUD_ENABLED_ENV: &str = "VOICE_INPUT_RECORDING_HUD";
+
+/// 録音状態HUDヘルパーのパスを指定する環境変数名
+pub const RECORDING_HUD_HELPER_PATH_ENV: &str = "VOICE_INPUT_RECORDING_HUD_HELPER_PATH";
+
+/// 録音状態HUDが受け取った状態を検証用に書き出すパスを指定する環境変数名
+pub const RECORDING_HUD_LOG_PATH_ENV: &str = "VOICE_INPUT_RECORDING_HUD_LOG_PATH";
+
 /// キー押下中だけ録音する push-to-talk を有効にする環境変数名
 pub const PUSH_TO_TALK_ENABLED_ENV: &str = "VOICE_INPUT_PUSH_TO_TALK";
 
@@ -250,6 +259,17 @@ pub struct RecordingConfig {
     pub max_duration_secs: u64,
 }
 
+/// UI設定
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UiConfig {
+    /// 録音状態HUDを表示する
+    pub recording_hud_enabled: bool,
+    /// 録音状態HUDヘルパーのパス
+    pub recording_hud_helper_path: Option<PathBuf>,
+    /// 録音状態HUDが受け取った状態を書き出す検証用ログ
+    pub recording_hud_log_path: Option<PathBuf>,
+}
+
 /// push-to-talk 設定
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushToTalkConfig {
@@ -272,6 +292,8 @@ pub struct EnvConfig {
     pub audio: AudioConfig,
     /// 録音設定
     pub recording: RecordingConfig,
+    /// UI設定
+    pub ui: UiConfig,
     /// push-to-talk 設定
     pub push_to_talk: PushToTalkConfig,
     /// プロファイリング設定
@@ -351,6 +373,16 @@ impl EnvConfig {
                 )?,
             },
             recording: RecordingConfig { max_duration_secs },
+            ui: UiConfig {
+                recording_hud_enabled: parse_bool_env_with_default(
+                    RECORDING_HUD_ENABLED_ENV,
+                    true,
+                )?,
+                recording_hud_helper_path: non_empty_env(RECORDING_HUD_HELPER_PATH_ENV)
+                    .map(PathBuf::from),
+                recording_hud_log_path: non_empty_env(RECORDING_HUD_LOG_PATH_ENV)
+                    .map(PathBuf::from),
+            },
             push_to_talk: PushToTalkConfig {
                 enabled: parse_bool_env(PUSH_TO_TALK_ENABLED_ENV)?,
                 hotkey: non_empty_env(PUSH_TO_TALK_HOTKEY_ENV)
@@ -526,8 +558,9 @@ mod tests {
         AudioConfig, ConfigError, DEFAULT_AUDIO_PRE_ROLL_MS, DEFAULT_MAX_RECORDING_DURATION_SECS,
         DEFAULT_PUSH_TO_TALK_HOTKEY, DEFAULT_TRANSCRIPTION_PROVIDER_ENV, EnvConfig,
         MAX_AUDIO_PRE_ROLL_MS, PathConfig, PreferredAudioFormat, ProfilingConfig, ProxyConfig,
-        PushToTalkConfig, RECORDING_SOUNDS_ENABLED_ENV, RecordingConfig, TranscriptionConfig,
-        TranscriptionProvider, lock_test_env,
+        PushToTalkConfig, RECORDING_HUD_ENABLED_ENV, RECORDING_HUD_HELPER_PATH_ENV,
+        RECORDING_HUD_LOG_PATH_ENV, RECORDING_SOUNDS_ENABLED_ENV, RecordingConfig,
+        TranscriptionConfig, TranscriptionProvider, UiConfig, lock_test_env,
     };
     use std::path::PathBuf;
 
@@ -552,6 +585,11 @@ mod tests {
             },
             recording: RecordingConfig {
                 max_duration_secs: DEFAULT_MAX_RECORDING_DURATION_SECS,
+            },
+            ui: UiConfig {
+                recording_hud_enabled: true,
+                recording_hud_helper_path: None,
+                recording_hud_log_path: None,
             },
             push_to_talk: PushToTalkConfig {
                 enabled: false,
@@ -968,6 +1006,62 @@ mod tests {
         let config = EnvConfig::from_env().unwrap();
 
         assert!(config.audio.recording_sounds_enabled);
+    }
+
+    /// 録音状態HUDは既定で有効になる
+    #[test]
+    fn recording_hud_is_enabled_by_default() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::remove_var(RECORDING_HUD_ENABLED_ENV);
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert!(config.ui.recording_hud_enabled);
+    }
+
+    /// 録音状態HUDは環境変数で無効化できる
+    #[test]
+    fn recording_hud_can_be_disabled_from_environment() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var(RECORDING_HUD_ENABLED_ENV, "false");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert!(!config.ui.recording_hud_enabled);
+
+        unsafe {
+            std::env::remove_var(RECORDING_HUD_ENABLED_ENV);
+        }
+    }
+
+    /// 録音状態HUDのヘルパーパスと検証ログパスは環境変数から読み込める
+    #[test]
+    fn recording_hud_paths_are_loaded_from_environment() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var(RECORDING_HUD_HELPER_PATH_ENV, "/tmp/voice_input_hud");
+            std::env::set_var(RECORDING_HUD_LOG_PATH_ENV, "/tmp/voice_input_hud.log");
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        assert_eq!(
+            config.ui.recording_hud_helper_path.as_deref(),
+            Some(PathBuf::from("/tmp/voice_input_hud").as_path())
+        );
+        assert_eq!(
+            config.ui.recording_hud_log_path.as_deref(),
+            Some(PathBuf::from("/tmp/voice_input_hud.log").as_path())
+        );
+
+        unsafe {
+            std::env::remove_var(RECORDING_HUD_HELPER_PATH_ENV);
+            std::env::remove_var(RECORDING_HUD_LOG_PATH_ENV);
+        }
     }
 
     /// 録音開始・停止サウンドは環境変数で無効化できる

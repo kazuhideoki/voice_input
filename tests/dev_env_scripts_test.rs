@@ -19,10 +19,13 @@ struct ScriptFixture {
     stderr_path: PathBuf,
     build_cli_path: PathBuf,
     build_daemon_path: PathBuf,
+    build_hud_path: PathBuf,
+    hud_source_path: PathBuf,
     app_bundle_path: PathBuf,
     app_bundle_info_plist_path: PathBuf,
     bundled_cli_path: PathBuf,
     bundled_daemon_path: PathBuf,
+    bundled_hud_path: PathBuf,
 }
 
 impl ScriptFixture {
@@ -40,17 +43,22 @@ impl ScriptFixture {
         let stderr_path = root.join("runtime/voice_inputd.err");
         let build_cli_path = repo_root.join("target/release/voice_input");
         let build_daemon_path = repo_root.join("target/release/voice_inputd");
+        let build_hud_path = repo_root.join("target/release/voice_input_hud");
+        let hud_source_path = repo_root.join("scripts/hud/voice_input_hud.swift");
         let app_bundle_path = home_dir.join("Applications/VoiceInput.app");
         let app_bundle_info_plist_path = app_bundle_path.join("Contents/Info.plist");
         let bundled_cli_path = app_bundle_path.join("Contents/MacOS/voice_input");
         let bundled_daemon_path = app_bundle_path.join("Contents/MacOS/voice_inputd");
+        let bundled_hud_path = app_bundle_path.join("Contents/MacOS/voice_input_hud");
 
         fs::create_dir_all(&fake_bin_dir)?;
         fs::create_dir_all(&state_dir)?;
         fs::create_dir_all(&repo_root)?;
+        fs::create_dir_all(hud_source_path.parent().expect("hud source parent"))?;
         fs::create_dir_all(home_dir.join("Library/LaunchAgents"))?;
         fs::create_dir_all(&user_python_bin_dir)?;
         fs::create_dir_all(root.join("runtime"))?;
+        fs::write(&hud_source_path, "import AppKit\n")?;
 
         write_executable(
             &fake_bin_dir.join("launchctl"),
@@ -117,6 +125,34 @@ exit 0
         )?;
 
         write_executable(
+            &fake_bin_dir.join("swiftc"),
+            r#"#!/bin/sh
+echo "$@" >> "$FAKE_STATE_DIR/swiftc.log"
+output=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    shift
+    output="$1"
+    break
+  fi
+  shift
+done
+if [ -z "$output" ]; then
+  echo "missing -o" >&2
+  exit 1
+fi
+mkdir -p "$(dirname "$output")"
+cat > "$output" <<'EOF'
+#!/bin/sh
+echo "$0 $@" >> "$FAKE_STATE_DIR/hud.log"
+exit 0
+EOF
+chmod +x "$output"
+exit 0
+"#,
+        )?;
+
+        write_executable(
             &fake_bin_dir.join("pkill"),
             r#"#!/bin/sh
 echo "$@" >> "$FAKE_STATE_DIR/pkill.log"
@@ -145,10 +181,13 @@ exit 0
             stderr_path,
             build_cli_path,
             build_daemon_path,
+            build_hud_path,
+            hud_source_path,
             app_bundle_path,
             app_bundle_info_plist_path,
             bundled_cli_path,
             bundled_daemon_path,
+            bundled_hud_path,
         })
     }
 
@@ -173,6 +212,8 @@ exit 0
         command.env("VOICE_INPUT_STDOUT_PATH", &self.stdout_path);
         command.env("VOICE_INPUT_STDERR_PATH", &self.stderr_path);
         command.env("VOICE_INPUT_BUILD_CLI_PATH", &self.build_cli_path);
+        command.env("VOICE_INPUT_BUILD_HUD_PATH", &self.build_hud_path);
+        command.env("VOICE_INPUT_HUD_SOURCE_PATH", &self.hud_source_path);
         command.env("VOICE_INPUT_APP_BUNDLE_PATH", &self.app_bundle_path);
         command.env(
             "VOICE_INPUT_APP_BUNDLE_INFO_PLIST_PATH",
@@ -180,6 +221,7 @@ exit 0
         );
         command.env("VOICE_INPUT_BUNDLED_CLI_PATH", &self.bundled_cli_path);
         command.env("VOICE_INPUT_BUNDLED_DAEMON_PATH", &self.bundled_daemon_path);
+        command.env("VOICE_INPUT_BUNDLED_HUD_PATH", &self.bundled_hud_path);
         command.env("VOICE_INPUT_APP_BUNDLE_IDENTIFIER", "com.user.voiceinput");
         command
     }
@@ -269,12 +311,20 @@ fn setup_then_build_app_bundle_installs_bundle_and_bootstraps_launch_agent()
         "release daemon was not built"
     );
     assert!(
+        fixture.build_hud_path.exists(),
+        "release HUD helper was not built"
+    );
+    assert!(
         fixture.bundled_cli_path.exists(),
         "bundled cli was not created"
     );
     assert!(
         fixture.bundled_daemon_path.exists(),
         "bundled daemon was not created"
+    );
+    assert!(
+        fixture.bundled_hud_path.exists(),
+        "bundled HUD helper was not created"
     );
     assert!(
         fixture.app_bundle_info_plist_path.exists(),
