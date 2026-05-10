@@ -254,11 +254,20 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             transcription_provider.unwrap_or_else(|| EnvConfig::get().transcription.provider);
         let model = resolve_transcription_model(provider, transcription_model)?;
 
+        // キー押下直後の視覚フィードバックを優先するため、音や録音準備より先にHUDを出す
+        recording_hud::set_state(HudState::Detecting);
+
         // 体感開始時間を縮めるため、開始音は録音開始前に鳴らす
         play_start_sound_if_enabled(self.recording_sounds_enabled);
 
         let mut realtime_session = if provider == TranscriptionProvider::OpenAiRealtimeWhisper {
-            Some(self.prepare_realtime_session_for_recording()?)
+            match self.prepare_realtime_session_for_recording() {
+                Ok(session) => Some(session),
+                Err(error) => {
+                    recording_hud::set_state(HudState::Hidden);
+                    return Err(error);
+                }
+            }
         } else {
             None
         };
@@ -282,7 +291,6 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
         // 録音を開始
         let recording = self.recording.clone();
-        recording_hud::set_state(HudState::Detecting);
         let session_id = match recording.borrow().start_recording(options).await {
             Ok(session_id) => session_id,
             Err(error) => {
