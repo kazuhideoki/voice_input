@@ -37,6 +37,7 @@ OPENAI_TRANSCRIBE_STREAMING=false
 VOICE_INPUT_LOW_CONFIDENCE_SELECTION=false
 VOICE_INPUT_MAX_SECS=30
 VOICE_INPUT_PRE_ROLL_MS=500
+VOICE_INPUT_RECORDING_SOUNDS=true
 INPUT_DEVICE_PRIORITY="device1,device2,device3"
 VOICE_INPUT_PUSH_TO_TALK=true
 VOICE_INPUT_PUSH_TO_TALK_HOTKEY=opt+8
@@ -49,6 +50,7 @@ VOICE_INPUT_PUSH_TO_TALK_HOTKEY=opt+8
 転写バックエンドは `4o`、`realtime-whisper`、`mlx-qwen3-asr` から選べます。既定値は `VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER`、コマンドごとの上書きは `--transcription-provider` です。
 `4o` は `--transcription-model gpt-4o-mini-transcribe` も指定できます。`realtime-whisper` は録音中に逐次入力し、`mlx-qwen3-asr` はローカルコマンドを使います。
 `VOICE_INPUT_PRE_ROLL_MS` は録音開始直前の音声を先頭へ付与する長さです。既定値は 500ms、0 で無効です。
+`VOICE_INPUT_RECORDING_SOUNDS=false` を設定すると、録音開始・停止時の効果音を無効化できます。未指定時は有効です。
 `VOICE_INPUT_PUSH_TO_TALK=true` の場合、`VOICE_INPUT_PUSH_TO_TALK_HOTKEY` を押している間だけ録音します。既定は `opt+8` です。
 `VOICE_INPUT_LOW_CONFIDENCE_SELECTION=true` にすると、logprobs が得られる転写では低信頼箇所を選択します。
 
