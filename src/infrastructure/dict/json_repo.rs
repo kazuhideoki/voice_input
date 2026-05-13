@@ -1,10 +1,10 @@
 //! JSON ファイル版 DictRepository 実装
 use crate::application::DictRepository;
 #[cfg(test)]
-use crate::domain::dict::EntryStatus;
-use crate::domain::dict::WordEntry;
+use crate::domain::dict::{DictTerm, DictVariant};
+use crate::domain::dict::{DictionaryDocument, EntryStatus, WordEntry};
 use crate::infrastructure::config::AppConfig;
-use serde_json::{from_reader, to_writer_pretty};
+use crate::infrastructure::dict::migration;
 use std::{fs, io::Result, path::PathBuf};
 
 pub struct JsonFileDictRepo {
@@ -30,21 +30,61 @@ impl Default for JsonFileDictRepo {
 
 impl DictRepository for JsonFileDictRepo {
     fn load(&self) -> Result<Vec<WordEntry>> {
-        if !self.path.exists() {
-            return Ok(vec![]);
-        }
-        let f = fs::File::open(&self.path)?;
-        Ok(from_reader::<_, Vec<WordEntry>>(f)?)
+        Ok(self.load_dictionary()?.to_word_entries())
     }
 
     fn save(&self, all: &[WordEntry]) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let f = fs::File::create(&self.path)?;
-        to_writer_pretty(f, all)?;
+        let mut document = if self.path.exists() {
+            self.load_dictionary()?
+        } else {
+            DictionaryDocument::from_word_entries(all.to_vec())
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?
+        };
+        merge_word_entries(&mut document, all)?;
+        self.save_dictionary(&document)
+    }
+
+    fn load_dictionary(&self) -> Result<DictionaryDocument> {
+        migration::load_or_migrate(&self.path)
+    }
+
+    fn save_dictionary(&self, document: &DictionaryDocument) -> Result<()> {
+        migration::save_document(&self.path, document)?;
         Ok(())
     }
+}
+
+fn merge_word_entries(document: &mut DictionaryDocument, entries: &[WordEntry]) -> Result<()> {
+    let incoming = DictionaryDocument::from_word_entries(entries.to_vec())
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+
+    for incoming_term in incoming.terms {
+        let Some(term) = document
+            .terms
+            .iter_mut()
+            .find(|term| term.term == incoming_term.term)
+        else {
+            document.terms.push(incoming_term);
+            continue;
+        };
+
+        for incoming_variant in incoming_term.variants {
+            if let Some(variant) = term
+                .variants
+                .iter_mut()
+                .find(|variant| variant.surface == incoming_variant.surface)
+            {
+                variant.hit = incoming_variant.hit;
+                if term.status == EntryStatus::Active {
+                    variant.status = incoming_variant.status;
+                }
+            } else {
+                term.variants.push(incoming_variant);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 // === Unit tests ==========================================================
@@ -75,18 +115,21 @@ mod tests {
     #[test]
     fn save_and_load_roundtrip() {
         let (repo, _tmp) = repo_in_tmp();
-        let list = vec![WordEntry {
-            surface: "foo".into(),
-            replacement: "bar".into(),
-            hit: 1,
-            status: EntryStatus::Active,
-        }];
-        repo.save(&list).expect("save");
-        let loaded = repo.load().expect("load");
-        assert_eq!(loaded.len(), list.len());
-        assert_eq!(loaded[0].surface, list[0].surface);
-        assert_eq!(loaded[0].replacement, list[0].replacement);
-        assert_eq!(loaded[0].hit, list[0].hit);
+        let document = DictionaryDocument {
+            version: crate::domain::dict::CURRENT_DICTIONARY_VERSION,
+            terms: vec![DictTerm {
+                term: "bar".into(),
+                status: EntryStatus::Active,
+                variants: vec![DictVariant {
+                    surface: "foo".into(),
+                    hit: 1,
+                    status: EntryStatus::Active,
+                }],
+            }],
+        };
+        repo.save_dictionary(&document).expect("save");
+        let loaded = repo.load_dictionary().expect("load");
+        assert_eq!(loaded, document);
     }
 
     /// シンボリックリンクの辞書保存でもリンク自体は維持されてリンク先だけ更新される
@@ -94,20 +137,33 @@ mod tests {
     fn save_keeps_symbolic_link_and_updates_target_file() {
         let tmp = TempDir::new().expect("create tempdir");
         let actual_path = tmp.path().join("actual-dictionary.json");
-        fs::write(&actual_path, "[]").expect("write initial dictionary");
+        fs::write(
+            &actual_path,
+            r#"{
+  "version": 2,
+  "terms": []
+}"#,
+        )
+        .expect("write initial dictionary");
 
         let link_path = tmp.path().join("dictionary.json");
         symlink(&actual_path, &link_path).expect("create symlink");
 
         let repo = JsonFileDictRepo { path: link_path };
-        let list = vec![WordEntry {
-            surface: "foo".into(),
-            replacement: "bar".into(),
-            hit: 1,
-            status: EntryStatus::Active,
-        }];
+        let document = DictionaryDocument {
+            version: crate::domain::dict::CURRENT_DICTIONARY_VERSION,
+            terms: vec![DictTerm {
+                term: "bar".into(),
+                status: EntryStatus::Active,
+                variants: vec![DictVariant {
+                    surface: "foo".into(),
+                    hit: 1,
+                    status: EntryStatus::Active,
+                }],
+            }],
+        };
 
-        repo.save(&list).expect("save");
+        repo.save_dictionary(&document).expect("save");
 
         assert!(
             fs::symlink_metadata(tmp.path().join("dictionary.json"))
@@ -117,7 +173,59 @@ mod tests {
         );
 
         let loaded = fs::read_to_string(&actual_path).expect("read actual dictionary");
+        assert!(loaded.contains("\"version\": 2"));
+        assert!(loaded.contains("\"term\": \"bar\""));
         assert!(loaded.contains("\"surface\": \"foo\""));
-        assert!(loaded.contains("\"replacement\": \"bar\""));
+    }
+
+    /// フラット保存ではv2固有の空termとterm状態を保持しつつhitを更新できる
+    #[test]
+    fn save_flat_entries_preserves_terms_and_updates_variant_hits() {
+        let (repo, _tmp) = repo_in_tmp();
+        let document = DictionaryDocument {
+            version: crate::domain::dict::CURRENT_DICTIONARY_VERSION,
+            terms: vec![
+                DictTerm {
+                    term: "OpenAI".into(),
+                    status: EntryStatus::Active,
+                    variants: vec![DictVariant {
+                        surface: "オープンAI".into(),
+                        hit: 1,
+                        status: EntryStatus::Active,
+                    }],
+                },
+                DictTerm {
+                    term: "未登録語".into(),
+                    status: EntryStatus::Draft,
+                    variants: Vec::new(),
+                },
+            ],
+        };
+        repo.save_dictionary(&document).expect("save document");
+
+        repo.save(&[WordEntry {
+            surface: "オープンAI".into(),
+            replacement: "OpenAI".into(),
+            hit: 3,
+            status: EntryStatus::Active,
+        }])
+        .expect("save flat entries");
+
+        let loaded = repo.load_dictionary().expect("load document");
+        assert_eq!(loaded.terms.len(), 2);
+        let updated = loaded
+            .terms
+            .iter()
+            .find(|term| term.term == "OpenAI")
+            .expect("updated term");
+        assert_eq!(updated.variants[0].hit, 3);
+
+        let empty_term = loaded
+            .terms
+            .iter()
+            .find(|term| term.term == "未登録語")
+            .expect("empty term");
+        assert_eq!(empty_term.status, EntryStatus::Draft);
+        assert!(empty_term.variants.is_empty());
     }
 }

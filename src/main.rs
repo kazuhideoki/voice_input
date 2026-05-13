@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use voice_input::{
     application::DictionaryService,
     cli::{Cli, Cmd, ConfigCmd, ConfigField, DictCmd},
-    domain::dict::{EntryStatus, WordEntry},
     infrastructure::{config::AppConfig, dict::JsonFileDictRepo},
     ipc::{IpcCmd, send_cmd},
     load_env,
@@ -105,33 +104,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Dict { action } => {
             let service = DictionaryService::new(Box::new(JsonFileDictRepo::new()));
             match action {
-                DictCmd::Add {
-                    surface,
-                    replacement,
-                } => {
-                    service.upsert(WordEntry {
-                        surface: surface.clone(),
-                        replacement,
-                        hit: 0,
-                        status: EntryStatus::Active,
-                    })?;
-                    println!("✅ Added/updated entry for “{surface}”");
+                DictCmd::AddTerm { term } => {
+                    service.add_term(&term)?;
+                    println!("✅ Added/updated term “{term}”");
                 }
-                DictCmd::Remove { surface } => {
-                    if service.delete(&surface)? {
-                        println!("🗑️  Removed “{surface}”");
+                DictCmd::AddVariant { term, surface } => {
+                    service.add_variant(&term, &surface)?;
+                    println!("✅ Added/updated variant “{surface}” → “{term}”");
+                }
+                DictCmd::RemoveTerm { term } => {
+                    if service.delete_term(&term)? {
+                        println!("🗑️  Removed term “{term}”");
                     } else {
-                        println!("ℹ️  No entry found for “{surface}”");
+                        println!("ℹ️  No term found for “{term}”");
+                    }
+                }
+                DictCmd::RemoveVariant { term, surface } => {
+                    if service.delete_variant(&term, &surface)? {
+                        println!("🗑️  Removed variant “{surface}” from “{term}”");
+                    } else {
+                        println!("ℹ️  No variant found for “{surface}” in “{term}”");
                     }
                 }
                 DictCmd::List => {
-                    let list = service.list()?;
-                    if list.is_empty() {
+                    let document = service.list()?;
+                    if document.terms.is_empty() {
                         println!("(no entries)");
                     } else {
                         println!("─ Dictionary ───────────────");
-                        for e in list {
-                            println!("• {:<20} → {} [{}]", e.surface, e.replacement, e.status);
+                        for term in document.terms {
+                            println!("• {} [{}]", term.term, term.status);
+                            for variant in term.variants {
+                                println!(
+                                    "  - {:<20} hit={} [{}]",
+                                    variant.surface, variant.hit, variant.status
+                                );
+                            }
                         }
                     }
                 }

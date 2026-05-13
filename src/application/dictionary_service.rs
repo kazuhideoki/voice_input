@@ -1,10 +1,23 @@
-use crate::domain::dict::{WordEntry, remove_entry, upsert_entry};
+use crate::domain::dict::{
+    DictTerm, DictVariant, DictionaryConflictError, DictionaryDocument, EntryStatus, WordEntry,
+};
 use std::io;
 
 /// 辞書永続化 port
 pub trait DictRepository: Send + Sync {
     fn load(&self) -> io::Result<Vec<WordEntry>>;
     fn save(&self, all: &[WordEntry]) -> io::Result<()>;
+
+    /// v2 辞書ドキュメントを読み込む。
+    fn load_dictionary(&self) -> io::Result<DictionaryDocument> {
+        DictionaryDocument::from_word_entries(self.load()?)
+            .map_err(dictionary_conflict_to_invalid_data)
+    }
+
+    /// v2 辞書ドキュメントを保存する。
+    fn save_dictionary(&self, document: &DictionaryDocument) -> io::Result<()> {
+        self.save(&document.to_word_entries())
+    }
 }
 
 /// 辞書更新ユースケース
@@ -19,99 +32,192 @@ impl DictionaryService {
     }
 
     /// 辞書一覧を取得。
-    pub fn list(&self) -> io::Result<Vec<WordEntry>> {
-        self.repo.load()
+    pub fn list(&self) -> io::Result<DictionaryDocument> {
+        self.repo.load_dictionary()
     }
 
-    /// 追加または更新。
-    pub fn upsert(&self, entry: WordEntry) -> io::Result<()> {
-        let mut list = self.repo.load()?;
-        upsert_entry(&mut list, entry);
-        self.repo.save(&list)
+    /// 対象語句を追加する。
+    pub fn add_term(&self, term: &str) -> io::Result<()> {
+        let mut document = self.repo.load_dictionary()?;
+        ensure_term(&mut document, term);
+        self.repo.save_dictionary(&document)
     }
 
-    /// surface で削除。戻り値 true=削除した / false=見つからず
-    pub fn delete(&self, surface: &str) -> io::Result<bool> {
-        let mut list = self.repo.load()?;
-        let deleted = remove_entry(&mut list, surface);
+    /// 対象語句へ変換する候補を追加する。
+    pub fn add_variant(&self, term: &str, surface: &str) -> io::Result<()> {
+        let mut document = self.repo.load_dictionary()?;
+        ensure_variant_is_available(&document, term, surface)?;
+        let term_entry = ensure_term(&mut document, term);
+        if let Some(variant) = term_entry
+            .variants
+            .iter_mut()
+            .find(|variant| variant.surface == surface)
+        {
+            variant.status = EntryStatus::Active;
+        } else {
+            term_entry.variants.push(DictVariant {
+                surface: surface.to_string(),
+                hit: 0,
+                status: EntryStatus::Active,
+            });
+        }
+        self.repo.save_dictionary(&document)
+    }
+
+    /// 対象語句を削除する。戻り値 true=削除した / false=見つからず。
+    pub fn delete_term(&self, term: &str) -> io::Result<bool> {
+        let mut document = self.repo.load_dictionary()?;
+        let len_before = document.terms.len();
+        document.terms.retain(|entry| entry.term != term);
+        let deleted = len_before != document.terms.len();
         if deleted {
-            self.repo.save(&list)?;
+            self.repo.save_dictionary(&document)?;
+        }
+        Ok(deleted)
+    }
+
+    /// 対象語句から候補を削除する。戻り値 true=削除した / false=見つからず。
+    pub fn delete_variant(&self, term: &str, surface: &str) -> io::Result<bool> {
+        let mut document = self.repo.load_dictionary()?;
+        let Some(term_entry) = document.terms.iter_mut().find(|entry| entry.term == term) else {
+            return Ok(false);
+        };
+        let len_before = term_entry.variants.len();
+        term_entry
+            .variants
+            .retain(|variant| variant.surface != surface);
+        let deleted = len_before != term_entry.variants.len();
+        if deleted {
+            self.repo.save_dictionary(&document)?;
         }
         Ok(deleted)
     }
 }
 
+fn ensure_term<'a>(document: &'a mut DictionaryDocument, term: &str) -> &'a mut DictTerm {
+    if let Some(index) = document.terms.iter().position(|entry| entry.term == term) {
+        return &mut document.terms[index];
+    }
+    document.terms.push(DictTerm {
+        term: term.to_string(),
+        status: EntryStatus::Active,
+        variants: Vec::new(),
+    });
+    document.terms.last_mut().expect("term was just pushed")
+}
+
+fn ensure_variant_is_available(
+    document: &DictionaryDocument,
+    term: &str,
+    surface: &str,
+) -> io::Result<()> {
+    if let Some(existing_term) = document.terms.iter().find(|entry| {
+        entry.term != term
+            && entry
+                .variants
+                .iter()
+                .any(|variant| variant.surface == surface)
+    }) {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "dictionary variant {:?} is already assigned to {:?}",
+                surface, existing_term.term
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn dictionary_conflict_to_invalid_data(error: DictionaryConflictError) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::dict::EntryStatus;
     use std::sync::Mutex;
 
     struct InMemoryDictRepo {
-        entries: Mutex<Vec<WordEntry>>,
+        document: Mutex<DictionaryDocument>,
     }
 
     impl InMemoryDictRepo {
-        fn new(entries: Vec<WordEntry>) -> Self {
+        fn new(document: DictionaryDocument) -> Self {
             Self {
-                entries: Mutex::new(entries),
+                document: Mutex::new(document),
             }
         }
     }
 
     impl DictRepository for InMemoryDictRepo {
         fn load(&self) -> io::Result<Vec<WordEntry>> {
-            Ok(self.entries.lock().unwrap().clone())
+            Ok(self.document.lock().unwrap().to_word_entries())
         }
 
         fn save(&self, all: &[WordEntry]) -> io::Result<()> {
-            *self.entries.lock().unwrap() = all.to_vec();
+            *self.document.lock().unwrap() =
+                DictionaryDocument::from_word_entries(all.to_vec()).unwrap();
+            Ok(())
+        }
+
+        fn load_dictionary(&self) -> io::Result<DictionaryDocument> {
+            Ok(self.document.lock().unwrap().clone())
+        }
+
+        fn save_dictionary(&self, document: &DictionaryDocument) -> io::Result<()> {
+            *self.document.lock().unwrap() = document.clone();
             Ok(())
         }
     }
 
-    /// upsertで追加と更新ができる
+    /// 対象語句と候補を追加できる
     #[test]
-    fn upsert_adds_and_updates_entries() {
-        let service = DictionaryService::new(Box::new(InMemoryDictRepo::new(Vec::new())));
+    fn add_term_and_variant_registers_dictionary_term() {
+        let service =
+            DictionaryService::new(Box::new(InMemoryDictRepo::new(DictionaryDocument::empty())));
 
-        service
-            .upsert(WordEntry {
-                surface: "foo".into(),
-                replacement: "bar".into(),
-                hit: 0,
-                status: EntryStatus::Active,
-            })
-            .expect("upsert add");
-
-        service
-            .upsert(WordEntry {
-                surface: "foo".into(),
-                replacement: "baz".into(),
-                hit: 2,
-                status: EntryStatus::Active,
-            })
-            .expect("upsert update");
+        service.add_term("bar").expect("add term");
+        service.add_variant("bar", "foo").expect("add variant");
 
         let loaded = service.list().expect("load");
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].surface, "foo");
-        assert_eq!(loaded[0].replacement, "baz");
-        assert_eq!(loaded[0].hit, 2);
+        assert_eq!(loaded.terms.len(), 1);
+        assert_eq!(loaded.terms[0].term, "bar");
+        assert_eq!(loaded.terms[0].variants[0].surface, "foo");
     }
 
-    /// deleteでエントリが削除される
+    /// 対象語句と候補を削除できる
     #[test]
-    fn delete_removes_entry() {
-        let service = DictionaryService::new(Box::new(InMemoryDictRepo::new(vec![WordEntry {
-            surface: "foo".into(),
-            replacement: "bar".into(),
-            hit: 0,
-            status: EntryStatus::Active,
-        }])));
+    fn delete_term_and_variant_removes_dictionary_items() {
+        let service = DictionaryService::new(Box::new(InMemoryDictRepo::new(DictionaryDocument {
+            version: crate::domain::dict::CURRENT_DICTIONARY_VERSION,
+            terms: vec![DictTerm {
+                term: "bar".into(),
+                status: EntryStatus::Active,
+                variants: vec![DictVariant {
+                    surface: "foo".into(),
+                    hit: 0,
+                    status: EntryStatus::Active,
+                }],
+            }],
+        })));
 
-        assert!(service.delete("foo").expect("delete existing"));
-        assert!(!service.delete("foo").expect("delete missing"));
-        assert!(service.list().expect("load").is_empty());
+        assert!(
+            service
+                .delete_variant("bar", "foo")
+                .expect("delete variant")
+        );
+        assert!(
+            service
+                .list()
+                .expect("load")
+                .terms
+                .first()
+                .expect("term")
+                .variants
+                .is_empty()
+        );
+        assert!(service.delete_term("bar").expect("delete term"));
+        assert!(service.list().expect("load").terms.is_empty());
     }
 }

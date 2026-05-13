@@ -270,6 +270,8 @@ voice_input health
 転写されたテキストは、ユーザー定義の辞書を通して自動的に置換されます。
 辞書は JSON 形式で `~/Library/Application Support/voice_input/dictionary.json` に保存され、
 CLI から編集できます。
+旧形式の辞書ファイルは読み込み時に自動で現行形式へ移行され、移行前の内容は
+`dictionary.json.v1.bak` として残ります。
 
 保存先を変更したい場合は次のコマンドを実行してください。設定は同ディレクトリの
 `config.json` に記録され、変更時には旧ファイルが `<旧パス>.bak` として残ります。
@@ -279,11 +281,17 @@ voice_input config set dict-path /path/to/shared/dictionary.json
 ```
 
 ```sh
-# 単語登録または更新
-voice_input dict add "誤変換" "正しい語"
+# 対象語句を登録
+voice_input dict add-term "OpenAI"
 
-# 単語削除
-voice_input dict remove "誤変換"
+# 対象語句へ変換する候補を登録
+voice_input dict add-variant "OpenAI" "オープンAI"
+
+# 対象語句を削除
+voice_input dict remove-term "OpenAI"
+
+# 対象語句から候補を削除
+voice_input dict remove-variant "OpenAI" "オープンAI"
 
 # 登録一覧表示
 voice_input dict list

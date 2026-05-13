@@ -1,7 +1,13 @@
 //! 単語辞書エンティティとリポジトリ抽象 – ドメイン層
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
 use std::ops::Range;
+
+/// 現在の辞書ファイル形式バージョン。
+pub const CURRENT_DICTIONARY_VERSION: u32 = 2;
 
 /// 1 単語エントリ
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,11 +21,14 @@ pub struct WordEntry {
 
 /// 単語エントリの状態
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum EntryStatus {
     /// 置換に利用される
     #[default]
+    #[serde(alias = "Active")]
     Active,
     /// 無効状態
+    #[serde(alias = "Draft")]
     Draft,
 }
 
@@ -44,6 +53,134 @@ pub struct ReplacementSpanMapping {
 pub struct ReplacementOutput {
     pub text: String,
     pub span_mappings: Vec<ReplacementSpanMapping>,
+}
+
+/// 辞書ファイル全体。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DictionaryDocument {
+    pub version: u32,
+    pub terms: Vec<DictTerm>,
+}
+
+/// 正規化後に出力したい対象語句。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DictTerm {
+    pub term: String,
+    #[serde(default)]
+    pub status: EntryStatus,
+    #[serde(default)]
+    pub variants: Vec<DictVariant>,
+}
+
+/// 対象語句へ変換する表記ゆれや誤変換候補。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DictVariant {
+    pub surface: String,
+    #[serde(default)]
+    pub hit: u32,
+    #[serde(default)]
+    pub status: EntryStatus,
+}
+
+/// 同じ候補が複数の対象語句へ紐付けられている。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DictionaryConflictError {
+    pub surface: String,
+    pub existing_term: String,
+    pub conflicting_term: String,
+}
+
+impl fmt::Display for DictionaryConflictError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "dictionary variant {:?} is assigned to both {:?} and {:?}",
+            self.surface, self.existing_term, self.conflicting_term
+        )
+    }
+}
+
+impl Error for DictionaryConflictError {}
+
+impl DictionaryDocument {
+    /// 空の v2 辞書を作成する。
+    pub fn empty() -> Self {
+        Self {
+            version: CURRENT_DICTIONARY_VERSION,
+            terms: Vec::new(),
+        }
+    }
+
+    /// 旧形式のフラットなエントリ配列から v2 辞書を作成する。
+    pub fn from_word_entries(entries: Vec<WordEntry>) -> Result<Self, DictionaryConflictError> {
+        let mut assigned_terms: BTreeMap<String, String> = BTreeMap::new();
+        let mut terms: Vec<DictTerm> = Vec::new();
+
+        for entry in entries {
+            if let Some(existing_term) = assigned_terms.get(&entry.surface) {
+                if existing_term != &entry.replacement {
+                    return Err(DictionaryConflictError {
+                        surface: entry.surface,
+                        existing_term: existing_term.clone(),
+                        conflicting_term: entry.replacement,
+                    });
+                }
+            } else {
+                assigned_terms.insert(entry.surface.clone(), entry.replacement.clone());
+            }
+
+            let term = match terms.iter_mut().find(|term| term.term == entry.replacement) {
+                Some(term) => term,
+                None => {
+                    terms.push(DictTerm {
+                        term: entry.replacement.clone(),
+                        status: EntryStatus::Active,
+                        variants: Vec::new(),
+                    });
+                    terms.last_mut().expect("term was just pushed")
+                }
+            };
+
+            if let Some(variant) = term
+                .variants
+                .iter_mut()
+                .find(|variant| variant.surface == entry.surface)
+            {
+                variant.hit += entry.hit;
+                variant.status = entry.status;
+            } else {
+                term.variants.push(DictVariant {
+                    surface: entry.surface,
+                    hit: entry.hit,
+                    status: entry.status,
+                });
+            }
+        }
+
+        Ok(Self {
+            version: CURRENT_DICTIONARY_VERSION,
+            terms,
+        })
+    }
+
+    /// 辞書適用用のフラットな置換エントリへ展開する。
+    pub fn to_word_entries(&self) -> Vec<WordEntry> {
+        self.terms
+            .iter()
+            .flat_map(|term| {
+                term.variants.iter().map(|variant| WordEntry {
+                    surface: variant.surface.clone(),
+                    replacement: term.term.clone(),
+                    hit: variant.hit,
+                    status: if term.status == EntryStatus::Active {
+                        variant.status
+                    } else {
+                        EntryStatus::Draft
+                    },
+                })
+            })
+            .collect()
+    }
 }
 
 /// 与えられた文字列に辞書を適用して置換を行います。

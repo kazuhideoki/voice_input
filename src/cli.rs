@@ -79,13 +79,18 @@ pub enum Cmd {
 
 #[derive(Subcommand)]
 pub enum DictCmd {
-    /// 登録 or 置換
-    Add {
-        surface: String,
-        replacement: String,
-    },
-    /// 削除
-    Remove { surface: String },
+    /// 対象語句を追加
+    #[command(name = "add-term")]
+    AddTerm { term: String },
+    /// 対象語句へ変換する候補を追加
+    #[command(name = "add-variant")]
+    AddVariant { term: String, surface: String },
+    /// 対象語句を削除
+    #[command(name = "remove-term")]
+    RemoveTerm { term: String },
+    /// 対象語句から候補を削除
+    #[command(name = "remove-variant")]
+    RemoveVariant { term: String, surface: String },
     /// 一覧表示
     List,
 }

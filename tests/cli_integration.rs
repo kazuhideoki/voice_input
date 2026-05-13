@@ -229,17 +229,29 @@ fn health_check_runs() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// 辞書の追加・一覧・削除ができる
+/// 辞書の対象語句と候補の追加・一覧・削除ができる
 #[test]
 #[cfg_attr(feature = "ci-test", ignore)]
 fn dict_add_list_remove() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = TempDir::new()?;
 
-    let mut add_cmd = Command::cargo_bin("voice_input");
-    add_cmd
-        .args(["dict", "add", "foo", "bar"])
+    let mut add_term_cmd = Command::cargo_bin("voice_input");
+    add_term_cmd
+        .args(["dict", "add-term", "bar"])
         .env("XDG_DATA_HOME", tmp.path());
-    add_cmd.assert().success().stdout(str::contains("Added"));
+    add_term_cmd
+        .assert()
+        .success()
+        .stdout(str::contains("Added"));
+
+    let mut add_variant_cmd = Command::cargo_bin("voice_input");
+    add_variant_cmd
+        .args(["dict", "add-variant", "bar", "foo"])
+        .env("XDG_DATA_HOME", tmp.path());
+    add_variant_cmd
+        .assert()
+        .success()
+        .stdout(str::contains("variant"));
 
     let mut list_cmd = Command::cargo_bin("voice_input");
     list_cmd
@@ -249,7 +261,7 @@ fn dict_add_list_remove() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut remove_cmd = Command::cargo_bin("voice_input");
     remove_cmd
-        .args(["dict", "remove", "foo"])
+        .args(["dict", "remove-variant", "bar", "foo"])
         .env("XDG_DATA_HOME", tmp.path());
     remove_cmd
         .assert()
@@ -271,7 +283,7 @@ fn config_set_moves_dict() -> Result<(), Box<dyn std::error::Error>> {
 
     // create dictionary at default location
     let mut add = Command::cargo_bin("voice_input");
-    add.args(["dict", "add", "foo", "bar"])
+    add.args(["dict", "add-variant", "bar", "foo"])
         .env("XDG_DATA_HOME", data_home);
     add.assert().success();
 
