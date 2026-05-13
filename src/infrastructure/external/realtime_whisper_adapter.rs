@@ -583,7 +583,7 @@ mod tests {
         AudioData, DictRepository, TranscriptionClient, TranscriptionClientOptions,
         TranscriptionService,
     };
-    use crate::domain::dict::{EntryStatus, WordEntry};
+    use crate::domain::dict::WordEntry;
     use crate::domain::transcription::LowConfidenceSelection;
     use async_trait::async_trait;
 
@@ -595,7 +595,6 @@ mod tests {
                 surface: "テスト".to_string(),
                 replacement: "test".to_string(),
                 hit: 0,
-                status: EntryStatus::Active,
             }])
         }
 

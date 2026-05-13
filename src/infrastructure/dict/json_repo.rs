@@ -2,7 +2,7 @@
 use crate::application::DictRepository;
 #[cfg(test)]
 use crate::domain::dict::{DictTerm, DictVariant};
-use crate::domain::dict::{DictionaryDocument, EntryStatus, WordEntry};
+use crate::domain::dict::{DictionaryDocument, WordEntry};
 use crate::infrastructure::config::AppConfig;
 use crate::infrastructure::dict::migration;
 use std::{fs, io::Result, path::PathBuf};
@@ -75,9 +75,6 @@ fn merge_word_entries(document: &mut DictionaryDocument, entries: &[WordEntry]) 
                 .find(|variant| variant.surface == incoming_variant.surface)
             {
                 variant.hit = incoming_variant.hit;
-                if term.status == EntryStatus::Active {
-                    variant.status = incoming_variant.status;
-                }
             } else {
                 term.variants.push(incoming_variant);
             }
@@ -119,11 +116,9 @@ mod tests {
             version: crate::domain::dict::CURRENT_DICTIONARY_VERSION,
             terms: vec![DictTerm {
                 term: "bar".into(),
-                status: EntryStatus::Active,
                 variants: vec![DictVariant {
                     surface: "foo".into(),
                     hit: 1,
-                    status: EntryStatus::Active,
                 }],
             }],
         };
@@ -154,11 +149,9 @@ mod tests {
             version: crate::domain::dict::CURRENT_DICTIONARY_VERSION,
             terms: vec![DictTerm {
                 term: "bar".into(),
-                status: EntryStatus::Active,
                 variants: vec![DictVariant {
                     surface: "foo".into(),
                     hit: 1,
-                    status: EntryStatus::Active,
                 }],
             }],
         };
@@ -178,25 +171,22 @@ mod tests {
         assert!(loaded.contains("\"surface\": \"foo\""));
     }
 
-    /// フラット保存ではv2固有の空termとterm状態を保持しつつhitを更新できる
+    /// フラット保存ではv2固有の空termを保持しつつhitを更新できる
     #[test]
-    fn save_flat_entries_preserves_terms_and_updates_variant_hits() {
+    fn save_flat_entries_preserves_empty_terms_and_updates_variant_hits() {
         let (repo, _tmp) = repo_in_tmp();
         let document = DictionaryDocument {
             version: crate::domain::dict::CURRENT_DICTIONARY_VERSION,
             terms: vec![
                 DictTerm {
                     term: "OpenAI".into(),
-                    status: EntryStatus::Active,
                     variants: vec![DictVariant {
                         surface: "オープンAI".into(),
                         hit: 1,
-                        status: EntryStatus::Active,
                     }],
                 },
                 DictTerm {
                     term: "未登録語".into(),
-                    status: EntryStatus::Draft,
                     variants: Vec::new(),
                 },
             ],
@@ -207,7 +197,6 @@ mod tests {
             surface: "オープンAI".into(),
             replacement: "OpenAI".into(),
             hit: 3,
-            status: EntryStatus::Active,
         }])
         .expect("save flat entries");
 
@@ -225,7 +214,6 @@ mod tests {
             .iter()
             .find(|term| term.term == "未登録語")
             .expect("empty term");
-        assert_eq!(empty_term.status, EntryStatus::Draft);
         assert!(empty_term.variants.is_empty());
     }
 }

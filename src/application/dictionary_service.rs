@@ -1,5 +1,5 @@
 use crate::domain::dict::{
-    DictTerm, DictVariant, DictionaryConflictError, DictionaryDocument, EntryStatus, WordEntry,
+    DictTerm, DictVariant, DictionaryConflictError, DictionaryDocument, WordEntry,
 };
 use std::io;
 
@@ -48,17 +48,14 @@ impl DictionaryService {
         let mut document = self.repo.load_dictionary()?;
         ensure_variant_is_available(&document, term, surface)?;
         let term_entry = ensure_term(&mut document, term);
-        if let Some(variant) = term_entry
+        if !term_entry
             .variants
-            .iter_mut()
-            .find(|variant| variant.surface == surface)
+            .iter()
+            .any(|variant| variant.surface == surface)
         {
-            variant.status = EntryStatus::Active;
-        } else {
             term_entry.variants.push(DictVariant {
                 surface: surface.to_string(),
                 hit: 0,
-                status: EntryStatus::Active,
             });
         }
         self.repo.save_dictionary(&document)
@@ -100,7 +97,6 @@ fn ensure_term<'a>(document: &'a mut DictionaryDocument, term: &str) -> &'a mut 
     }
     document.terms.push(DictTerm {
         term: term.to_string(),
-        status: EntryStatus::Active,
         variants: Vec::new(),
     });
     document.terms.last_mut().expect("term was just pushed")
@@ -193,11 +189,9 @@ mod tests {
             version: crate::domain::dict::CURRENT_DICTIONARY_VERSION,
             terms: vec![DictTerm {
                 term: "bar".into(),
-                status: EntryStatus::Active,
                 variants: vec![DictVariant {
                     surface: "foo".into(),
                     hit: 0,
-                    status: EntryStatus::Active,
                 }],
             }],
         })));

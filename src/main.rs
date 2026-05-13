@@ -133,12 +133,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         println!("─ Dictionary ───────────────");
                         for term in document.terms {
-                            println!("• {} [{}]", term.term, term.status);
+                            println!("• {}", term.term);
                             for variant in term.variants {
-                                println!(
-                                    "  - {:<20} hit={} [{}]",
-                                    variant.surface, variant.hit, variant.status
-                                );
+                                println!("  - {:<20} hit={}", variant.surface, variant.hit);
                             }
                         }
                     }

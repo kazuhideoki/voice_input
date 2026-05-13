@@ -176,7 +176,7 @@ fn map_raw_range_to_processed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::dict::{EntryStatus, WordEntry, apply_replacements_with_mappings};
+    use crate::domain::dict::{WordEntry, apply_replacements_with_mappings};
 
     /// 辞書変換後テキスト上で低信頼語の選択範囲を組み立てられる
     #[test]
@@ -196,7 +196,6 @@ mod tests {
                 surface: "テスト".to_string(),
                 replacement: "test".to_string(),
                 hit: 0,
-                status: EntryStatus::Active,
             }],
         );
 
@@ -255,7 +254,6 @@ mod tests {
                 surface: "東京都".to_string(),
                 replacement: "Tokyo".to_string(),
                 hit: 0,
-                status: EntryStatus::Active,
             }],
         );
 

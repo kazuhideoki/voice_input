@@ -424,7 +424,6 @@ mod tests {
                     surface: "テスト".to_string(),
                     replacement: "test".to_string(),
                     hit: 0,
-                    status: crate::domain::dict::EntryStatus::Active,
                 }],
             }
         }

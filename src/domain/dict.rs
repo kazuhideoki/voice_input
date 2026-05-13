@@ -15,30 +15,6 @@ pub struct WordEntry {
     pub surface: String,     // 転写文中の語
     pub replacement: String, // 置換後
     pub hit: u32,            // 使用回数（学習用）
-    #[serde(default)]
-    pub status: EntryStatus, // 有効 / ドラフト
-}
-
-/// 単語エントリの状態
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum EntryStatus {
-    /// 置換に利用される
-    #[default]
-    #[serde(alias = "Active")]
-    Active,
-    /// 無効状態
-    #[serde(alias = "Draft")]
-    Draft,
-}
-
-impl std::fmt::Display for EntryStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EntryStatus::Active => write!(f, "active"),
-            EntryStatus::Draft => write!(f, "draft"),
-        }
-    }
 }
 
 /// 辞書適用時の文字位置対応
@@ -67,8 +43,6 @@ pub struct DictionaryDocument {
 pub struct DictTerm {
     pub term: String,
     #[serde(default)]
-    pub status: EntryStatus,
-    #[serde(default)]
     pub variants: Vec<DictVariant>,
 }
 
@@ -78,8 +52,6 @@ pub struct DictVariant {
     pub surface: String,
     #[serde(default)]
     pub hit: u32,
-    #[serde(default)]
-    pub status: EntryStatus,
 }
 
 /// 同じ候補が複数の対象語句へ紐付けられている。
@@ -134,7 +106,6 @@ impl DictionaryDocument {
                 None => {
                     terms.push(DictTerm {
                         term: entry.replacement.clone(),
-                        status: EntryStatus::Active,
                         variants: Vec::new(),
                     });
                     terms.last_mut().expect("term was just pushed")
@@ -147,12 +118,10 @@ impl DictionaryDocument {
                 .find(|variant| variant.surface == entry.surface)
             {
                 variant.hit += entry.hit;
-                variant.status = entry.status;
             } else {
                 term.variants.push(DictVariant {
                     surface: entry.surface,
                     hit: entry.hit,
-                    status: entry.status,
                 });
             }
         }
@@ -172,11 +141,6 @@ impl DictionaryDocument {
                     surface: variant.surface.clone(),
                     replacement: term.term.clone(),
                     hit: variant.hit,
-                    status: if term.status == EntryStatus::Active {
-                        variant.status
-                    } else {
-                        EntryStatus::Draft
-                    },
                 })
             })
             .collect()
@@ -197,10 +161,7 @@ pub fn apply_replacements_with_mappings(
     text: &str,
     entries: &mut [WordEntry],
 ) -> ReplacementOutput {
-    for e in entries
-        .iter_mut()
-        .filter(|e| e.status == EntryStatus::Active)
-    {
+    for e in entries.iter_mut() {
         let count = text.matches(&e.surface).count();
         e.hit += count as u32;
     }
@@ -212,7 +173,7 @@ pub fn apply_replacements_with_mappings(
     let chars: Vec<char> = text.chars().collect();
     while i < chars.len() {
         let mut replaced = false;
-        for e in entries.iter().filter(|e| e.status == EntryStatus::Active) {
+        for e in entries.iter() {
             let surface_chars: Vec<char> = e.surface.chars().collect();
             if i + surface_chars.len() <= chars.len()
                 && chars[i..i + surface_chars.len()] == surface_chars[..]
@@ -277,13 +238,11 @@ mod tests {
                 surface: "foo".into(),
                 replacement: "bar".into(),
                 hit: 0,
-                status: EntryStatus::Active,
             },
             WordEntry {
                 surface: "bar".into(),
                 replacement: "baz".into(),
                 hit: 1,
-                status: EntryStatus::Active,
             },
         ];
 
@@ -300,7 +259,6 @@ mod tests {
             surface: "テスト".into(),
             replacement: "test".into(),
             hit: 0,
-            status: EntryStatus::Active,
         }];
 
         let out = apply_replacements_with_mappings("これはテストです", &mut entries);
@@ -337,28 +295,25 @@ mod tests {
         );
     }
 
-    /// Draft状態のエントリは置換対象にならない
+    /// 全てのエントリが置換対象になる
     #[test]
-    fn draft_entries_are_ignored() {
+    fn all_entries_are_applied() {
         let mut entries = vec![
             WordEntry {
                 surface: "foo".into(),
                 replacement: "bar".into(),
                 hit: 0,
-                status: EntryStatus::Draft,
             },
             WordEntry {
                 surface: "bar".into(),
                 replacement: "baz".into(),
                 hit: 0,
-                status: EntryStatus::Active,
             },
         ];
 
         let out = apply_replacements("foo bar", &mut entries);
-        assert_eq!(out, "foo baz");
-        // foo should not count because entry is draft
-        assert_eq!(entries[0].hit, 0);
+        assert_eq!(out, "bar baz");
+        assert_eq!(entries[0].hit, 1);
         assert_eq!(entries[1].hit, 1);
     }
 
@@ -369,7 +324,6 @@ mod tests {
             surface: "foo".into(),
             replacement: "bar".into(),
             hit: 1,
-            status: EntryStatus::Active,
         }];
 
         upsert_entry(
@@ -378,14 +332,12 @@ mod tests {
                 surface: "foo".into(),
                 replacement: "baz".into(),
                 hit: 2,
-                status: EntryStatus::Draft,
             },
         );
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].replacement, "baz");
         assert_eq!(entries[0].hit, 2);
-        assert_eq!(entries[0].status, EntryStatus::Draft);
     }
 
     /// surface一致のエントリを削除できる
@@ -396,13 +348,11 @@ mod tests {
                 surface: "foo".into(),
                 replacement: "bar".into(),
                 hit: 0,
-                status: EntryStatus::Active,
             },
             WordEntry {
                 surface: "baz".into(),
                 replacement: "qux".into(),
                 hit: 0,
-                status: EntryStatus::Active,
             },
         ];
 
