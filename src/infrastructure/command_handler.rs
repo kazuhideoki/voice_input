@@ -460,6 +460,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 model: outcome.context.transcription_model,
             })
             .map_err(|e| {
+                recording_hud::set_state(HudState::Hidden);
                 VoiceInputError::SystemError(format!(
                     "Failed to send to transcription queue: {}",
                     e
@@ -492,16 +493,24 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         let active = self.realtime_session.borrow_mut().take().ok_or_else(|| {
             VoiceInputError::SystemError("realtime session not found".to_string())
         })?;
+        let session_id = active.session_id;
 
-        let outcome = stop_active_realtime_session(
+        let outcome = match stop_active_realtime_session(
             self.recording.clone(),
             self.transcription.clone(),
             self.history.clone(),
             active,
         )
-        .await?;
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                hide_hud_if_no_newer_session(session_id, self.recording.clone());
+                return Err(error);
+            }
+        };
         self.warm_realtime_whisper_session_if_enabled();
-        recording_hud::set_state(HudState::Hidden);
+        hide_hud_if_no_newer_session(session_id, self.recording.clone());
 
         let msg = match outcome.save_result {
             Some((_requested_path, Ok(saved_path))) => {
@@ -669,6 +678,8 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                             play_stop_sound_if_enabled(recording_sounds_enabled);
 
                             if let Some(active) = realtime_session.borrow_mut().take() {
+                                recording_hud::set_state(HudState::Transcribing);
+                                let session_id = active.session_id;
                                 if let Err(error) = stop_active_realtime_session(
                                     recording.clone(),
                                     transcription.clone(),
@@ -686,22 +697,36 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                                         ready_realtime_task.clone(),
                                     );
                                 }
-                            } else if let Ok(outcome) = recording.borrow().stop_recording().await {
-                                if let Some(path) = &outcome.context.save_audio_path {
-                                    if let Err(error) = save_audio_file(
-                                        path,
-                                        &outcome.result.audio_data,
-                                    ) {
-                                        eprintln!("Failed to save audio file: {}", error);
+                                hide_hud_if_no_newer_session(session_id, recording.clone());
+                            } else {
+                                match recording.borrow().stop_recording().await {
+                                    Ok(outcome) => {
+                                        if let Some(path) = &outcome.context.save_audio_path {
+                                            if let Err(error) =
+                                                save_audio_file(path, &outcome.result.audio_data)
+                                            {
+                                                eprintln!("Failed to save audio file: {}", error);
+                                            }
+                                        }
+                                        if let Err(error) = tx.send(TranscriptionMessage {
+                                            result: outcome.result,
+                                            resume_music: outcome.context.music_was_playing,
+                                            session_id: outcome.context.session_id,
+                                            provider: outcome.context.transcription_provider,
+                                            model: outcome.context.transcription_model,
+                                        }) {
+                                            eprintln!(
+                                                "Failed to send auto-stop transcription: {}",
+                                                error
+                                            );
+                                            recording_hud::set_state(HudState::Hidden);
+                                        }
+                                    }
+                                    Err(error) => {
+                                        eprintln!("Auto-stop recording stop failed: {}", error);
+                                        recording_hud::set_state(HudState::Hidden);
                                     }
                                 }
-                                let _ = tx.send(TranscriptionMessage {
-                                    result: outcome.result,
-                                    resume_music: outcome.context.music_was_playing,
-                                    session_id: outcome.context.session_id,
-                                    provider: outcome.context.transcription_provider,
-                                    model: outcome.context.transcription_model,
-                                });
                             }
                         }
                     }
@@ -714,6 +739,33 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 println!("Warning: Could not set up auto-stop timer - no cancel receiver");
             }
         });
+    }
+}
+
+fn hide_hud_if_no_newer_session<T: AudioBackend>(
+    session_id: u64,
+    recording: Rc<RefCell<RecordingService<T>>>,
+) {
+    let no_newer_session = match recording.borrow().has_started_newer_session(session_id) {
+        Ok(value) => !value,
+        Err(error) => {
+            eprintln!("Failed to check newer session before hiding HUD: {}", error);
+            true
+        }
+    };
+    let is_active_session = match recording.borrow().is_active_session(session_id) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!(
+                "Failed to check active session before hiding HUD: {}",
+                error
+            );
+            false
+        }
+    };
+
+    if no_newer_session && !is_active_session {
+        recording_hud::set_state(HudState::Hidden);
     }
 }
 
