@@ -297,6 +297,34 @@ fn dict_add_variant_creates_missing_term() -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+/// 辞書の候補追加コマンドは複数候補を一括登録できる
+#[test]
+fn dict_add_variant_registers_multiple_surfaces() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = TempDir::new()?;
+
+    let mut add_variant_cmd = Command::cargo_bin("voice_input");
+    add_variant_cmd
+        .args(["dict", "add-variant", "bar", "foo", "baz"])
+        .env("XDG_DATA_HOME", tmp.path());
+    add_variant_cmd
+        .assert()
+        .success()
+        .stdout(str::contains("Created term"));
+
+    let mut list_cmd = Command::cargo_bin("voice_input");
+    list_cmd
+        .args(["dict", "list"])
+        .env("XDG_DATA_HOME", tmp.path());
+    list_cmd
+        .assert()
+        .success()
+        .stdout(str::contains("bar"))
+        .stdout(str::contains("foo"))
+        .stdout(str::contains("baz"));
+
+    Ok(())
+}
+
 /// dict-path変更時に辞書が移動される
 #[test]
 #[cfg_attr(feature = "ci-test", ignore)]

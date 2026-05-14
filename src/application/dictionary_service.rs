@@ -50,19 +50,29 @@ impl DictionaryService {
 
     /// 対象語句へ変換する候補を追加する。
     pub fn add_variant(&self, term: &str, surface: &str) -> io::Result<AddVariantResult> {
+        self.add_variants(term, &[surface.to_string()])
+    }
+
+    /// 対象語句へ変換する候補を複数追加する。
+    pub fn add_variants(&self, term: &str, surfaces: &[String]) -> io::Result<AddVariantResult> {
         let mut document = self.repo.load_dictionary()?;
-        ensure_variant_is_available(&document, term, surface)?;
+        for surface in surfaces {
+            ensure_variant_surface_is_not_empty(surface)?;
+            ensure_variant_is_available(&document, term, surface)?;
+        }
         let term_created = !document.terms.iter().any(|entry| entry.term == term);
         let term_entry = ensure_term(&mut document, term);
-        if !term_entry
-            .variants
-            .iter()
-            .any(|variant| variant.surface == surface)
-        {
-            term_entry.variants.push(DictVariant {
-                surface: surface.to_string(),
-                hit: 0,
-            });
+        for surface in surfaces {
+            if !term_entry
+                .variants
+                .iter()
+                .any(|variant| variant.surface == surface.as_str())
+            {
+                term_entry.variants.push(DictVariant {
+                    surface: surface.clone(),
+                    hit: 0,
+                });
+            }
         }
         self.repo.save_dictionary(&document)?;
         Ok(AddVariantResult { term_created })
@@ -127,6 +137,16 @@ fn ensure_variant_is_available(
                 "dictionary variant {:?} is already assigned to {:?}",
                 surface, existing_term.term
             ),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_variant_surface_is_not_empty(surface: &str) -> io::Result<()> {
+    if surface.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "dictionary variant surface must not be empty",
         ));
     }
     Ok(())
@@ -203,6 +223,42 @@ mod tests {
         assert_eq!(loaded.terms.len(), 1);
         assert_eq!(loaded.terms[0].term, "bar");
         assert_eq!(loaded.terms[0].variants[0].surface, "foo");
+    }
+
+    /// 対象語句へ複数の候補を一括で追加できる
+    #[test]
+    fn add_variants_registers_multiple_surfaces() {
+        let service =
+            DictionaryService::new(Box::new(InMemoryDictRepo::new(DictionaryDocument::empty())));
+        let surfaces = vec!["foo".to_string(), "baz".to_string()];
+
+        let result = service
+            .add_variants("bar", &surfaces)
+            .expect("add variants");
+
+        let loaded = service.list().expect("load");
+        assert!(result.term_created);
+        assert_eq!(loaded.terms.len(), 1);
+        assert_eq!(loaded.terms[0].term, "bar");
+        assert_eq!(loaded.terms[0].variants.len(), 2);
+        assert_eq!(loaded.terms[0].variants[0].surface, "foo");
+        assert_eq!(loaded.terms[0].variants[1].surface, "baz");
+    }
+
+    /// 空の候補を含む一括追加は辞書を更新せずに失敗する
+    #[test]
+    fn add_variants_rejects_empty_surface_without_saving() {
+        let service =
+            DictionaryService::new(Box::new(InMemoryDictRepo::new(DictionaryDocument::empty())));
+        let surfaces = vec!["foo".to_string(), String::new()];
+
+        let error = match service.add_variants("bar", &surfaces) {
+            Ok(_) => panic!("empty surface should fail"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(service.list().expect("load").terms.is_empty());
     }
 
     /// 対象語句と候補を削除できる

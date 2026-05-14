@@ -84,7 +84,11 @@ pub enum DictCmd {
     AddTerm { term: String },
     /// 対象語句へ変換する候補を追加
     #[command(name = "add-variant")]
-    AddVariant { term: String, surface: String },
+    AddVariant {
+        term: String,
+        #[arg(required = true)]
+        surfaces: Vec<String>,
+    },
     /// 対象語句を削除
     #[command(name = "remove-term")]
     RemoveTerm { term: String },
