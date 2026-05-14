@@ -41,13 +41,6 @@ impl DictionaryService {
         self.repo.load_dictionary()
     }
 
-    /// 対象語句を追加する。
-    pub fn add_term(&self, term: &str) -> io::Result<()> {
-        let mut document = self.repo.load_dictionary()?;
-        ensure_term(&mut document, term);
-        self.repo.save_dictionary(&document)
-    }
-
     /// 対象語句へ変換する候補を追加する。
     pub fn add_variant(&self, term: &str, surface: &str) -> io::Result<AddVariantResult> {
         self.add_variants(term, &[surface.to_string()])
@@ -192,22 +185,6 @@ mod tests {
             *self.document.lock().unwrap() = document.clone();
             Ok(())
         }
-    }
-
-    /// 対象語句と候補を追加できる
-    #[test]
-    fn add_term_and_variant_registers_dictionary_term() {
-        let service =
-            DictionaryService::new(Box::new(InMemoryDictRepo::new(DictionaryDocument::empty())));
-
-        service.add_term("bar").expect("add term");
-        let result = service.add_variant("bar", "foo").expect("add variant");
-
-        let loaded = service.list().expect("load");
-        assert!(!result.term_created);
-        assert_eq!(loaded.terms.len(), 1);
-        assert_eq!(loaded.terms[0].term, "bar");
-        assert_eq!(loaded.terms[0].variants[0].surface, "foo");
     }
 
     /// 対象語句が未登録でも候補追加と同時に対象語句を作成できる

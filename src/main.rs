@@ -104,11 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Dict { action } => {
             let service = DictionaryService::new(Box::new(JsonFileDictRepo::new()));
             match action {
-                DictCmd::AddTerm { term } => {
-                    service.add_term(&term)?;
-                    println!("✅ Added/updated term “{term}”");
-                }
-                DictCmd::AddVariant { term, surfaces } => {
+                DictCmd::Add { term, surfaces } => {
                     let result = service.add_variants(&term, &surfaces)?;
                     let variants = surfaces.join(", ");
                     if result.term_created {

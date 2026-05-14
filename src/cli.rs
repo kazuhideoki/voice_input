@@ -79,12 +79,9 @@ pub enum Cmd {
 
 #[derive(Subcommand)]
 pub enum DictCmd {
-    /// 対象語句を追加
-    #[command(name = "add-term")]
-    AddTerm { term: String },
     /// 対象語句へ変換する候補を追加
-    #[command(name = "add-variant")]
-    AddVariant {
+    #[command(name = "add")]
+    Add {
         term: String,
         #[arg(required = true)]
         surfaces: Vec<String>,

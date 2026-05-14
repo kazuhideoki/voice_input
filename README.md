@@ -281,11 +281,8 @@ voice_input config set dict-path /path/to/shared/dictionary.json
 ```
 
 ```sh
-# 対象語句を登録
-voice_input dict add-term "OpenAI"
-
 # 対象語句へ変換する候補を登録
-voice_input dict add-variant "OpenAI" "オープンAI"
+voice_input dict add "OpenAI" "オープンAI"
 
 # 対象語句を削除
 voice_input dict remove-term "OpenAI"

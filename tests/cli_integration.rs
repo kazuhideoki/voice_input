@@ -234,23 +234,14 @@ fn health_check_runs() -> Result<(), Box<dyn std::error::Error>> {
 fn dict_add_list_remove() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = TempDir::new()?;
 
-    let mut add_term_cmd = Command::cargo_bin("voice_input");
-    add_term_cmd
-        .args(["dict", "add-term", "bar"])
+    let mut add_cmd = Command::cargo_bin("voice_input");
+    add_cmd
+        .args(["dict", "add", "bar", "foo"])
         .env("XDG_DATA_HOME", tmp.path());
-    add_term_cmd
+    add_cmd
         .assert()
         .success()
-        .stdout(str::contains("Added"));
-
-    let mut add_variant_cmd = Command::cargo_bin("voice_input");
-    add_variant_cmd
-        .args(["dict", "add-variant", "bar", "foo"])
-        .env("XDG_DATA_HOME", tmp.path());
-    add_variant_cmd
-        .assert()
-        .success()
-        .stdout(str::contains("existing term"));
+        .stdout(str::contains("Created term"));
 
     let mut list_cmd = Command::cargo_bin("voice_input");
     list_cmd
@@ -272,14 +263,14 @@ fn dict_add_list_remove() -> Result<(), Box<dyn std::error::Error>> {
 
 /// 対象語句未登録でも候補追加時に対象語句を作成してログで判別できる
 #[test]
-fn dict_add_variant_creates_missing_term() -> Result<(), Box<dyn std::error::Error>> {
+fn dict_add_creates_missing_term() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = TempDir::new()?;
 
-    let mut add_variant_cmd = Command::cargo_bin("voice_input");
-    add_variant_cmd
-        .args(["dict", "add-variant", "bar", "foo"])
+    let mut add_cmd = Command::cargo_bin("voice_input");
+    add_cmd
+        .args(["dict", "add", "bar", "foo"])
         .env("XDG_DATA_HOME", tmp.path());
-    add_variant_cmd
+    add_cmd
         .assert()
         .success()
         .stdout(str::contains("Created term"));
@@ -299,14 +290,14 @@ fn dict_add_variant_creates_missing_term() -> Result<(), Box<dyn std::error::Err
 
 /// 辞書の候補追加コマンドは複数候補を一括登録できる
 #[test]
-fn dict_add_variant_registers_multiple_surfaces() -> Result<(), Box<dyn std::error::Error>> {
+fn dict_add_registers_multiple_surfaces() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = TempDir::new()?;
 
-    let mut add_variant_cmd = Command::cargo_bin("voice_input");
-    add_variant_cmd
-        .args(["dict", "add-variant", "bar", "foo", "baz"])
+    let mut add_cmd = Command::cargo_bin("voice_input");
+    add_cmd
+        .args(["dict", "add", "bar", "foo", "baz"])
         .env("XDG_DATA_HOME", tmp.path());
-    add_variant_cmd
+    add_cmd
         .assert()
         .success()
         .stdout(str::contains("Created term"));
@@ -337,7 +328,7 @@ fn config_set_moves_dict() -> Result<(), Box<dyn std::error::Error>> {
 
     // create dictionary at default location
     let mut add = Command::cargo_bin("voice_input");
-    add.args(["dict", "add-variant", "bar", "foo"])
+    add.args(["dict", "add", "bar", "foo"])
         .env("XDG_DATA_HOME", data_home);
     add.assert().success();
 
