@@ -109,8 +109,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("✅ Added/updated term “{term}”");
                 }
                 DictCmd::AddVariant { term, surface } => {
-                    service.add_variant(&term, &surface)?;
-                    println!("✅ Added/updated variant “{surface}” → “{term}”");
+                    let result = service.add_variant(&term, &surface)?;
+                    if result.term_created {
+                        println!("✅ Created term “{term}” and added/updated variant “{surface}”");
+                    } else {
+                        println!("✅ Added/updated variant “{surface}” to existing term “{term}”");
+                    }
                 }
                 DictCmd::RemoveTerm { term } => {
                     if service.delete_term(&term)? {

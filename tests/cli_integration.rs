@@ -231,7 +231,6 @@ fn health_check_runs() -> Result<(), Box<dyn std::error::Error>> {
 
 /// 辞書の対象語句と候補の追加・一覧・削除ができる
 #[test]
-#[cfg_attr(feature = "ci-test", ignore)]
 fn dict_add_list_remove() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = TempDir::new()?;
 
@@ -251,7 +250,7 @@ fn dict_add_list_remove() -> Result<(), Box<dyn std::error::Error>> {
     add_variant_cmd
         .assert()
         .success()
-        .stdout(str::contains("variant"));
+        .stdout(str::contains("existing term"));
 
     let mut list_cmd = Command::cargo_bin("voice_input");
     list_cmd
@@ -267,6 +266,33 @@ fn dict_add_list_remove() -> Result<(), Box<dyn std::error::Error>> {
         .assert()
         .success()
         .stdout(str::contains("Removed"));
+
+    Ok(())
+}
+
+/// 対象語句未登録でも候補追加時に対象語句を作成してログで判別できる
+#[test]
+fn dict_add_variant_creates_missing_term() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = TempDir::new()?;
+
+    let mut add_variant_cmd = Command::cargo_bin("voice_input");
+    add_variant_cmd
+        .args(["dict", "add-variant", "bar", "foo"])
+        .env("XDG_DATA_HOME", tmp.path());
+    add_variant_cmd
+        .assert()
+        .success()
+        .stdout(str::contains("Created term"));
+
+    let mut list_cmd = Command::cargo_bin("voice_input");
+    list_cmd
+        .args(["dict", "list"])
+        .env("XDG_DATA_HOME", tmp.path());
+    list_cmd
+        .assert()
+        .success()
+        .stdout(str::contains("bar"))
+        .stdout(str::contains("foo"));
 
     Ok(())
 }

@@ -25,6 +25,11 @@ pub struct DictionaryService {
     repo: Box<dyn DictRepository>,
 }
 
+/// 候補追加時に対象語句が新規作成されたかを表す結果。
+pub struct AddVariantResult {
+    pub term_created: bool,
+}
+
 impl DictionaryService {
     /// リポジトリを注入して新しいサービスを作成。
     pub fn new(repo: Box<dyn DictRepository>) -> Self {
@@ -44,9 +49,10 @@ impl DictionaryService {
     }
 
     /// 対象語句へ変換する候補を追加する。
-    pub fn add_variant(&self, term: &str, surface: &str) -> io::Result<()> {
+    pub fn add_variant(&self, term: &str, surface: &str) -> io::Result<AddVariantResult> {
         let mut document = self.repo.load_dictionary()?;
         ensure_variant_is_available(&document, term, surface)?;
+        let term_created = !document.terms.iter().any(|entry| entry.term == term);
         let term_entry = ensure_term(&mut document, term);
         if !term_entry
             .variants
@@ -58,7 +64,8 @@ impl DictionaryService {
                 hit: 0,
             });
         }
-        self.repo.save_dictionary(&document)
+        self.repo.save_dictionary(&document)?;
+        Ok(AddVariantResult { term_created })
     }
 
     /// 対象語句を削除する。戻り値 true=削除した / false=見つからず。
@@ -174,9 +181,25 @@ mod tests {
             DictionaryService::new(Box::new(InMemoryDictRepo::new(DictionaryDocument::empty())));
 
         service.add_term("bar").expect("add term");
-        service.add_variant("bar", "foo").expect("add variant");
+        let result = service.add_variant("bar", "foo").expect("add variant");
 
         let loaded = service.list().expect("load");
+        assert!(!result.term_created);
+        assert_eq!(loaded.terms.len(), 1);
+        assert_eq!(loaded.terms[0].term, "bar");
+        assert_eq!(loaded.terms[0].variants[0].surface, "foo");
+    }
+
+    /// 対象語句が未登録でも候補追加と同時に対象語句を作成できる
+    #[test]
+    fn add_variant_creates_missing_dictionary_term() {
+        let service =
+            DictionaryService::new(Box::new(InMemoryDictRepo::new(DictionaryDocument::empty())));
+
+        let result = service.add_variant("bar", "foo").expect("add variant");
+
+        let loaded = service.list().expect("load");
+        assert!(result.term_created);
         assert_eq!(loaded.terms.len(), 1);
         assert_eq!(loaded.terms[0].term, "bar");
         assert_eq!(loaded.terms[0].variants[0].surface, "foo");
