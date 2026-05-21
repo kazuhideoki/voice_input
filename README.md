@@ -366,3 +366,7 @@ targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
 - **ローカル環境**: `cargo test` ですべてのテストを実行
 - **環境依存テストを避けたい場合**: `cargo test --features ci-test` で環境依存のテストをスキップ
 - **無視されるテスト**: 音声デバイス、デーモンプロセス、GUI操作が必要なテスト
+
+## License
+
+MIT
