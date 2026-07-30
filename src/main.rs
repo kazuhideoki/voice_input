@@ -33,65 +33,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     /* ───── コマンド解析 ──────────── */
     match cli.cmd.unwrap_or(Cmd::Toggle {
-        prompt: None,
         save_audio: None,
         max_secs: None,
         input_file: None,
         transcription_provider: None,
-        transcription_model: None,
     }) {
         /* 録音系 → IPC */
         Cmd::Start {
-            prompt,
             save_audio,
             max_secs,
             input_file,
             transcription_provider,
-            transcription_model,
         } => {
             let cmd = match canonicalize_input_file(input_file)? {
                 Some(input_file_path) => IpcCmd::StartWithInputFile {
-                    prompt,
                     save_audio_path: save_audio,
                     max_duration_secs: max_secs,
                     input_file_path,
                     transcription_provider,
-                    transcription_model,
                 },
                 None => IpcCmd::Start {
-                    prompt,
                     save_audio_path: save_audio,
                     max_duration_secs: max_secs,
                     transcription_provider,
-                    transcription_model,
                 },
             };
             relay(cmd)?;
         }
         Cmd::Stop => relay(IpcCmd::Stop)?,
         Cmd::Toggle {
-            prompt,
             save_audio,
             max_secs,
             input_file,
             transcription_provider,
-            transcription_model,
         } => {
             let cmd = match canonicalize_input_file(input_file)? {
                 Some(input_file_path) => IpcCmd::ToggleWithInputFile {
-                    prompt,
                     save_audio_path: save_audio,
                     max_duration_secs: max_secs,
                     input_file_path,
                     transcription_provider,
-                    transcription_model,
                 },
                 None => IpcCmd::Toggle {
-                    prompt,
                     save_audio_path: save_audio,
                     max_duration_secs: max_secs,
                     transcription_provider,
-                    transcription_model,
                 },
             };
             relay(cmd)?;

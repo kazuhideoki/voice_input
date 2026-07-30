@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 
 
 OPENAI_TRANSCRIPTIONS_URL = "https://api.openai.com/v1/audio/transcriptions"
+GPT_TRANSCRIBE_MODEL = "gpt-transcribe"
 PYANNOTE_BASE_URL = "https://api.pyannote.ai/v1"
 TERMINAL_STATUSES = {"succeeded", "failed", "canceled"}
 
@@ -121,11 +122,11 @@ def audio_duration_seconds(path: Path) -> float:
         return wav.getnframes() / float(wav.getframerate())
 
 
-def transcribe_openai(audio_path: Path, model: str, api_key: str) -> tuple[str, dict[str, Any]]:
+def transcribe_openai(audio_path: Path, api_key: str) -> tuple[str, dict[str, Any]]:
     boundary, body = multipart_body(
         {
-            "model": model,
-            "language": "ja",
+            "model": GPT_TRANSCRIBE_MODEL,
+            "languages[]": "ja",
             "response_format": "json",
         },
         "file",
@@ -266,7 +267,6 @@ def main() -> int:
     parser.add_argument("--audio-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, default=Path(".tmp/asr-benchmark"))
     parser.add_argument("--repetitions", type=int, default=5)
-    parser.add_argument("--openai-model", default="gpt-4o-transcribe")
     parser.add_argument("--pyannote-model", default="parakeet-tdt-0.6b-v3")
     parser.add_argument("--pyannote-api-key", default="sk_a28eae16b86d40c0a5d09ada4419b30d")
     parser.add_argument("--poll-seconds", type=int, default=10)
@@ -295,7 +295,7 @@ def main() -> int:
             for path in audio_paths
         ],
         "repetitions": args.repetitions,
-        "openai_model": args.openai_model,
+        "openai_model": GPT_TRANSCRIBE_MODEL,
         "pyannote_model": args.pyannote_model,
     }
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -322,8 +322,8 @@ def main() -> int:
                 raw: dict[str, Any] = {}
                 try:
                     if provider == "openai":
-                        text, raw = transcribe_openai(audio_path, args.openai_model, openai_api_key)
-                        model = args.openai_model
+                        text, raw = transcribe_openai(audio_path, openai_api_key)
+                        model = GPT_TRANSCRIBE_MODEL
                         status = "succeeded"
                     else:
                         text, raw, job_id, status = transcribe_pyannote(
@@ -336,7 +336,7 @@ def main() -> int:
                         model = args.pyannote_model
                     success = True
                 except Exception as exc:  # noqa: BLE001 - benchmark should keep collecting failures.
-                    model = args.openai_model if provider == "openai" else args.pyannote_model
+                    model = GPT_TRANSCRIBE_MODEL if provider == "openai" else args.pyannote_model
                     success = False
                     error = str(exc)
                 elapsed = time.monotonic() - started

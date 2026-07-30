@@ -18,13 +18,15 @@ use tokio_tungstenite::tungstenite::{
 };
 
 use crate::application::{AudioFrame, TranscriptionClientError, TranscriptionEvent};
-use crate::domain::transcription::{TranscriptionOutput, TranscriptionToken};
+use crate::domain::transcription::TranscriptionOutput;
 use crate::error::{Result, VoiceInputError};
 use crate::utils::config::TranscriptionConfig;
 use crate::utils::profiling;
 
 const OPENAI_REALTIME_TRANSCRIPTION_URL: &str =
     "wss://api.openai.com/v1/realtime?intent=transcription";
+const REALTIME_WHISPER_MODEL: &str = "gpt-realtime-whisper";
+const TRANSCRIPTION_LANGUAGE: &str = "ja";
 const REALTIME_SAMPLE_RATE: u32 = 24_000;
 const APPEND_CHUNK_MS: usize = 100;
 const APPEND_CHUNK_BYTES: usize = REALTIME_SAMPLE_RATE as usize * 2 * APPEND_CHUNK_MS / 1000;
@@ -38,27 +40,18 @@ const OPENAI_SAFETY_IDENTIFIER: HeaderName = HeaderName::from_static("openai-saf
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RealtimeWhisperConfig {
     api_key: String,
-    model: String,
-    language: String,
 }
 
 impl RealtimeWhisperConfig {
     /// 転写設定から Realtime Whisper 設定を作成する。
-    pub fn from_transcription_config(
-        config: &TranscriptionConfig,
-        language: String,
-    ) -> Result<Self> {
+    pub fn from_transcription_config(config: &TranscriptionConfig) -> Result<Self> {
         let api_key = config.api_key.clone().ok_or_else(|| {
             VoiceInputError::from(TranscriptionClientError::Initialization {
                 message: "OPENAI_API_KEY environment variable is not set".to_string(),
             })
         })?;
 
-        Ok(Self {
-            api_key,
-            model: config.realtime_whisper_model.clone(),
-            language,
-        })
+        Ok(Self { api_key })
     }
 }
 
@@ -196,7 +189,7 @@ async fn run_realtime_whisper_session(
     profiling::log_point("realtime_whisper.websocket.connected", "");
     let (mut write, mut read) = stream.split();
 
-    if let Err(error) = send_json(&mut write, build_session_update_payload(&config)).await {
+    if let Err(error) = send_json(&mut write, build_session_update_payload()).await {
         notify_ready(&mut ready_tx, Err(request_error(&error.to_string())));
         return Err(error);
     }
@@ -293,7 +286,7 @@ fn build_realtime_request(api_key: &str) -> Result<Request<()>> {
     Ok(request)
 }
 
-fn build_session_update_payload(config: &RealtimeWhisperConfig) -> serde_json::Value {
+fn build_session_update_payload() -> serde_json::Value {
     json!({
         "type": "session.update",
         "session": {
@@ -305,15 +298,12 @@ fn build_session_update_payload(config: &RealtimeWhisperConfig) -> serde_json::V
                         "rate": REALTIME_SAMPLE_RATE,
                     },
                     "transcription": {
-                        "model": config.model,
-                        "language": config.language,
+                        "model": REALTIME_WHISPER_MODEL,
+                        "language": TRANSCRIPTION_LANGUAGE,
                     },
                     "turn_detection": null,
                 }
             },
-            "include": [
-                "item.input_audio_transcription.logprobs",
-            ],
         }
     })
 }
@@ -452,7 +442,6 @@ struct RealtimeEvent {
     delta: Option<String>,
     text: Option<String>,
     transcript: Option<String>,
-    logprobs: Option<Vec<RealtimeLogprobPayload>>,
     error: Option<RealtimeErrorPayload>,
 }
 
@@ -470,14 +459,7 @@ impl RealtimeEvent {
             .or(self.text)
             .or(self.transcript)
             .unwrap_or_default();
-        let tokens = self
-            .logprobs
-            .unwrap_or_default()
-            .into_iter()
-            .map(|token| TranscriptionToken::new(token.token, token.logprob))
-            .collect();
-
-        TranscriptionOutput { text, tokens }
+        TranscriptionOutput::from_text(text)
     }
 
     fn error_message(&self) -> String {
@@ -486,12 +468,6 @@ impl RealtimeEvent {
             .and_then(|error| error.message.clone())
             .unwrap_or_else(|| "realtime API returned an error event".to_string())
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct RealtimeLogprobPayload {
-    token: String,
-    logprob: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -579,42 +555,6 @@ fn pcm_i16_le_bytes(samples: &[i16]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::{
-        AudioData, DictRepository, TranscriptionClient, TranscriptionClientOptions,
-        TranscriptionService,
-    };
-    use crate::domain::dict::WordEntry;
-    use crate::domain::transcription::LowConfidenceSelection;
-    use async_trait::async_trait;
-
-    struct MockDictRepo;
-
-    impl DictRepository for MockDictRepo {
-        fn load(&self) -> std::io::Result<Vec<WordEntry>> {
-            Ok(vec![WordEntry {
-                surface: "テスト".to_string(),
-                replacement: "test".to_string(),
-                hit: 0,
-            }])
-        }
-
-        fn save(&self, _entries: &[WordEntry]) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct UnusedTranscriptionClient;
-
-    #[async_trait]
-    impl TranscriptionClient for UnusedTranscriptionClient {
-        async fn transcribe(
-            &self,
-            _audio: AudioData,
-            _options: &TranscriptionClientOptions,
-        ) -> Result<TranscriptionOutput> {
-            unreachable!("finalize_output does not call transcription client")
-        }
-    }
 
     /// Realtime API の delta event から増分文字列を取り出せる
     #[test]
@@ -627,69 +567,33 @@ mod tests {
         assert_eq!(event.text_delta().as_deref(), Some("こん"));
     }
 
-    /// Realtime API の session.update では転写 logprobs を要求する
+    /// Realtime API の session.update はモデルと言語を固定する
     #[test]
-    fn session_update_requests_transcription_logprobs() {
-        let config = RealtimeWhisperConfig {
-            api_key: "secret".to_string(),
-            model: "gpt-realtime-whisper".to_string(),
-            language: "ja".to_string(),
-        };
-
-        let payload = build_session_update_payload(&config);
+    fn session_update_uses_fixed_model_and_language() {
+        let payload = build_session_update_payload();
 
         assert_eq!(
-            payload["session"]["include"],
-            json!(["item.input_audio_transcription.logprobs"])
+            payload["session"]["audio"]["input"]["transcription"]["model"],
+            json!("gpt-realtime-whisper")
         );
+        assert_eq!(
+            payload["session"]["audio"]["input"]["transcription"]["language"],
+            json!("ja")
+        );
+        assert!(payload["session"].get("include").is_none());
     }
 
-    /// Realtime API の完了 event から最終文字列と token logprobs を取り出せる
+    /// Realtime API の完了 event から最終文字列を取り出せる
     #[test]
-    fn realtime_completed_event_maps_logprobs_to_tokens() {
+    fn realtime_completed_event_returns_transcript() {
         let event = parse_realtime_event(
-            r#"{"type":"conversation.item.input_audio_transcription.completed","transcript":"こんにちは","logprobs":[{"token":"こん","bytes":[227,129,147,227,130,147],"logprob":-0.2},{"token":"にちは","bytes":[227,129,171,227,129,161,227,129,175],"logprob":-1.4}]}"#,
+            r#"{"type":"conversation.item.input_audio_transcription.completed","transcript":"こんにちは"}"#,
         )
         .unwrap();
 
         assert_eq!(
             event.into_transcription_output(),
-            TranscriptionOutput {
-                text: "こんにちは".to_string(),
-                tokens: vec![
-                    TranscriptionToken::new("こん", -0.2),
-                    TranscriptionToken::new("にちは", -1.4),
-                ],
-            }
-        );
-    }
-
-    /// Realtime API の token logprobs は辞書変換後の低信頼選択へ反映できる
-    #[test]
-    fn realtime_logprobs_feed_low_confidence_selection_after_finalization() {
-        let event = parse_realtime_event(
-            r#"{"type":"conversation.item.input_audio_transcription.completed","transcript":"これはテストです","logprobs":[{"token":"これは","logprob":-0.1},{"token":"テスト","logprob":-1.4},{"token":"です","logprob":-0.1}]}"#,
-        )
-        .unwrap();
-        let service = TranscriptionService::new(
-            Box::new(UnusedTranscriptionClient),
-            Box::new(MockDictRepo),
-            1,
-        );
-
-        let finalized = service
-            .finalize_output_with_low_confidence_selection_for_test(
-                event.into_transcription_output(),
-            )
-            .unwrap();
-
-        assert_eq!(finalized.text, "これはtestです");
-        assert_eq!(
-            finalized.low_confidence_selection,
-            Some(LowConfidenceSelection {
-                start_char_index: 3,
-                char_count: 4,
-            })
+            TranscriptionOutput::from_text("こんにちは")
         );
     }
 

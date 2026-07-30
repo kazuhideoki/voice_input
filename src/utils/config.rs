@@ -52,6 +52,9 @@ pub const DEFAULT_PUSH_TO_TALK_HOTKEY: &str = "opt+8";
 /// CLI で未指定のときに使う既定の転写バックエンドを指定する環境変数名
 pub const DEFAULT_TRANSCRIPTION_PROVIDER_ENV: &str = "VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER";
 
+/// mlx-qwen3-asr で利用する固定モデル
+const DEFAULT_MLX_QWEN3_ASR_MODEL: &str = "Qwen/Qwen3-ASR-1.7B";
+
 #[cfg(test)]
 use std::sync::Mutex;
 
@@ -69,13 +72,9 @@ pub(crate) fn lock_test_env() -> std::sync::MutexGuard<'static, ()> {
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ConfigError {
     #[error(
-        "transcription provider '{value}' is unsupported. Supported providers: 4o, realtime-whisper, mlx-qwen3-asr"
+        "transcription provider '{value}' is unsupported. Supported providers: gpt-transcribe, realtime-whisper, mlx-qwen3-asr"
     )]
     UnsupportedTranscriptionProvider { value: String },
-    #[error(
-        "transcription model '{value}' is unsupported for provider {provider}. Supported models: gpt-4o-mini-transcribe, gpt-4o-transcribe, gpt-realtime-whisper"
-    )]
-    UnsupportedTranscriptionModel { provider: String, value: String },
     #[error("VOICE_INPUT_MAX_SECS must be a positive integer: {value}")]
     InvalidMaxDurationSecs { value: String },
     #[error("VOICE_INPUT_PRE_ROLL_MS must be an integer between 0 and 5000: {value}")]
@@ -87,22 +86,22 @@ pub enum ConfigError {
 /// 転写バックエンド種別
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TranscriptionProvider {
-    #[serde(rename = "4o")]
-    OpenAi4o,
+    #[serde(rename = "gpt-transcribe")]
+    GptTranscribe,
     #[serde(rename = "realtime-whisper")]
-    OpenAiRealtimeWhisper,
+    RealtimeWhisper,
     #[serde(rename = "mlx-qwen3-asr")]
     MlxQwen3Asr,
 }
 
 impl TranscriptionProvider {
-    pub const DEFAULT: Self = Self::OpenAi4o;
+    pub const DEFAULT: Self = Self::GptTranscribe;
 
     /// 文字列から転写バックエンド設定を生成
     pub fn parse(value: &str) -> Result<Self, ConfigError> {
         match value {
-            "4o" => Ok(Self::OpenAi4o),
-            "realtime-whisper" => Ok(Self::OpenAiRealtimeWhisper),
+            "gpt-transcribe" => Ok(Self::GptTranscribe),
+            "realtime-whisper" => Ok(Self::RealtimeWhisper),
             "mlx-qwen3-asr" => Ok(Self::MlxQwen3Asr),
             unsupported => Err(ConfigError::UnsupportedTranscriptionProvider {
                 value: unsupported.to_string(),
@@ -110,48 +109,18 @@ impl TranscriptionProvider {
         }
     }
 
-    /// 環境変数未指定時のモデル名を返す
-    pub fn default_model(&self) -> &'static str {
-        match self {
-            Self::OpenAi4o => "gpt-4o-transcribe",
-            Self::OpenAiRealtimeWhisper => "gpt-realtime-whisper",
-            Self::MlxQwen3Asr => "Qwen/Qwen3-ASR-1.7B",
-        }
-    }
-
-    /// モデル名を検証する
-    pub fn validate_model(&self, value: &str) -> Result<(), ConfigError> {
-        match self {
-            Self::OpenAi4o => match value {
-                "gpt-4o-mini-transcribe" | "gpt-4o-transcribe" => Ok(()),
-                unsupported => Err(ConfigError::UnsupportedTranscriptionModel {
-                    provider: self.as_str().to_string(),
-                    value: unsupported.to_string(),
-                }),
-            },
-            Self::OpenAiRealtimeWhisper => match value {
-                "gpt-realtime-whisper" => Ok(()),
-                unsupported => Err(ConfigError::UnsupportedTranscriptionModel {
-                    provider: self.as_str().to_string(),
-                    value: unsupported.to_string(),
-                }),
-            },
-            Self::MlxQwen3Asr => Ok(()),
-        }
-    }
-
     /// バックエンド名を文字列で取得
     pub fn as_str(&self) -> &str {
         match self {
-            Self::OpenAi4o => "4o",
-            Self::OpenAiRealtimeWhisper => "realtime-whisper",
+            Self::GptTranscribe => "gpt-transcribe",
+            Self::RealtimeWhisper => "realtime-whisper",
             Self::MlxQwen3Asr => "mlx-qwen3-asr",
         }
     }
 
     /// OpenAI API キーを利用する provider かどうかを返す
     pub fn uses_openai_api(&self) -> bool {
-        matches!(self, Self::OpenAi4o | Self::OpenAiRealtimeWhisper)
+        matches!(self, Self::GptTranscribe | Self::RealtimeWhisper)
     }
 }
 
@@ -162,18 +131,12 @@ pub struct TranscriptionConfig {
     pub provider: TranscriptionProvider,
     /// 転写サービス APIキー
     pub api_key: Option<String>,
-    /// 転写モデル名
-    pub model: String,
-    /// OpenAI Realtime Whisper のモデル名
-    pub realtime_whisper_model: String,
     /// mlx-qwen3-asr のモデル名
     pub mlx_qwen3_asr_model: String,
     /// ストリーミング直接入力を有効にする
     pub streaming_enabled: bool,
     /// 転写ログ保存先パス
     pub log_path: Option<PathBuf>,
-    /// 低信頼語の自動選択を有効にする
-    pub low_confidence_selection_enabled: bool,
     /// mlx-qwen3-asr コマンド名
     pub mlx_qwen3_asr_command: String,
 }
@@ -314,11 +277,7 @@ impl EnvConfig {
             Some(value) => TranscriptionProvider::parse(&value)?,
             None => TranscriptionProvider::DEFAULT,
         };
-        let model = TranscriptionProvider::OpenAi4o.default_model().to_string();
-        let realtime_whisper_model = load_realtime_whisper_model()?;
-        let mlx_qwen3_asr_model = TranscriptionProvider::MlxQwen3Asr
-            .default_model()
-            .to_string();
+        let mlx_qwen3_asr_model = DEFAULT_MLX_QWEN3_ASR_MODEL.to_string();
         let streaming_enabled = parse_bool_env("OPENAI_TRANSCRIBE_STREAMING")?;
         let mlx_qwen3_asr_command = "mlx-qwen3-asr".to_string();
         let audio_pre_roll_ms = match std::env::var(AUDIO_PRE_ROLL_MS_ENV) {
@@ -348,14 +307,9 @@ impl EnvConfig {
                 provider,
                 api_key: non_empty_env("TRANSCRIPTION_API_KEY")
                     .or_else(|| non_empty_env("OPENAI_API_KEY")),
-                model,
-                realtime_whisper_model,
                 mlx_qwen3_asr_model,
                 streaming_enabled,
                 log_path: non_empty_env("OPENAI_TRANSCRIPTION_LOG_PATH").map(PathBuf::from),
-                low_confidence_selection_enabled: parse_bool_env(
-                    "VOICE_INPUT_LOW_CONFIDENCE_SELECTION",
-                )?,
                 mlx_qwen3_asr_command,
             },
             proxy: ProxyConfig {
@@ -499,14 +453,6 @@ fn csv_env(name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn load_realtime_whisper_model() -> Result<String, ConfigError> {
-    let model = TranscriptionProvider::OpenAiRealtimeWhisper
-        .default_model()
-        .to_string();
-    TranscriptionProvider::OpenAiRealtimeWhisper.validate_model(&model)?;
-    Ok(model)
-}
-
 /// 最大録音時間の秒数を検証して返す
 pub fn parse_max_duration_secs(value: &str) -> Result<u64, ConfigError> {
     let secs = value
@@ -601,14 +547,11 @@ mod tests {
 
     fn openai_transcription_config() -> TranscriptionConfig {
         TranscriptionConfig {
-            provider: TranscriptionProvider::OpenAi4o,
+            provider: TranscriptionProvider::GptTranscribe,
             api_key: None,
-            model: "gpt-4o-transcribe".to_string(),
-            realtime_whisper_model: "gpt-realtime-whisper".to_string(),
             mlx_qwen3_asr_model: "Qwen/Qwen3-ASR-1.7B".to_string(),
             streaming_enabled: false,
             log_path: None,
-            low_confidence_selection_enabled: false,
             mlx_qwen3_asr_command: "mlx-qwen3-asr".to_string(),
         }
     }
@@ -617,12 +560,12 @@ mod tests {
     #[test]
     fn supported_transcription_providers_are_parsed() {
         assert_eq!(
-            TranscriptionProvider::parse("4o").unwrap(),
-            TranscriptionProvider::OpenAi4o
+            TranscriptionProvider::parse("gpt-transcribe").unwrap(),
+            TranscriptionProvider::GptTranscribe
         );
         assert_eq!(
             TranscriptionProvider::parse("realtime-whisper").unwrap(),
-            TranscriptionProvider::OpenAiRealtimeWhisper
+            TranscriptionProvider::RealtimeWhisper
         );
         assert_eq!(
             TranscriptionProvider::parse("mlx-qwen3-asr").unwrap(),
@@ -630,38 +573,15 @@ mod tests {
         );
     }
 
-    /// OpenAI の未対応モデルは設定値として拒否する
+    /// 廃止した4oプロバイダ名は受け付けない
     #[test]
-    fn unsupported_openai_model_is_rejected() {
-        let error = TranscriptionProvider::OpenAi4o
-            .validate_model("whisper-1")
-            .unwrap_err();
+    fn removed_4o_provider_is_rejected() {
+        let error = TranscriptionProvider::parse("4o").unwrap_err();
         assert_eq!(
             error,
-            ConfigError::UnsupportedTranscriptionModel {
-                provider: "4o".to_string(),
-                value: "whisper-1".to_string(),
+            ConfigError::UnsupportedTranscriptionProvider {
+                value: "4o".to_string(),
             }
-        );
-    }
-
-    /// Realtime Whisper は専用モデルを受け入れる
-    #[test]
-    fn realtime_whisper_accepts_realtime_whisper_model() {
-        assert!(
-            TranscriptionProvider::OpenAiRealtimeWhisper
-                .validate_model("gpt-realtime-whisper")
-                .is_ok()
-        );
-    }
-
-    /// mlx-qwen3-asr は Hugging Face のモデル名をそのまま受け入れる
-    #[test]
-    fn mlx_qwen3_asr_accepts_hugging_face_model_name() {
-        assert!(
-            TranscriptionProvider::MlxQwen3Asr
-                .validate_model("Qwen/Qwen3-ASR-1.7B")
-                .is_ok()
         );
     }
 
@@ -728,31 +648,6 @@ mod tests {
 
         unsafe {
             std::env::remove_var("OPENAI_TRANSCRIPTION_LOG_PATH");
-        }
-    }
-
-    /// 低信頼語の自動選択は既定で無効
-    #[test]
-    fn low_confidence_selection_is_disabled_by_default() {
-        let config = sample_env_config(openai_transcription_config());
-
-        assert!(!config.transcription.low_confidence_selection_enabled);
-    }
-
-    /// 低信頼語の自動選択は環境変数で有効化できる
-    #[test]
-    fn low_confidence_selection_flag_is_loaded_from_environment() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_LOW_CONFIDENCE_SELECTION", "true");
-        }
-
-        let config = EnvConfig::from_env().unwrap();
-
-        assert!(config.transcription.low_confidence_selection_enabled);
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_LOW_CONFIDENCE_SELECTION");
         }
     }
 
@@ -843,12 +738,7 @@ mod tests {
 
         assert_eq!(
             config.transcription.provider,
-            TranscriptionProvider::OpenAi4o
-        );
-        assert_eq!(config.transcription.model, "gpt-4o-transcribe");
-        assert_eq!(
-            config.transcription.realtime_whisper_model,
-            "gpt-realtime-whisper"
+            TranscriptionProvider::GptTranscribe
         );
         assert_eq!(
             config.transcription.mlx_qwen3_asr_model,
@@ -869,7 +759,7 @@ mod tests {
 
         assert_eq!(
             config.transcription.provider,
-            TranscriptionProvider::OpenAiRealtimeWhisper
+            TranscriptionProvider::RealtimeWhisper
         );
 
         unsafe {
@@ -897,20 +787,6 @@ mod tests {
         unsafe {
             std::env::remove_var(DEFAULT_TRANSCRIPTION_PROVIDER_ENV);
         }
-    }
-
-    /// realtime-whisperモデルは専用の既定モデルを使う
-    #[test]
-    fn realtime_whisper_model_uses_default_model() {
-        let _lock = lock_test_env();
-
-        let config = EnvConfig::from_env().unwrap();
-
-        assert_eq!(
-            config.transcription.realtime_whisper_model,
-            "gpt-realtime-whisper"
-        );
-        assert_eq!(config.transcription.model, "gpt-4o-transcribe");
     }
 
     /// mlx-qwen3-asr コマンドは既定コマンドを使う
@@ -1285,29 +1161,6 @@ mod tests {
         }
     }
 
-    /// 低信頼語選択設定はtrue/false以外を許可しない
-    #[test]
-    fn try_from_env_rejects_invalid_low_confidence_flag() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_LOW_CONFIDENCE_SELECTION", "ture");
-        }
-
-        let result = EnvConfig::try_from_env();
-
-        assert_eq!(
-            result,
-            Err(ConfigError::InvalidBooleanEnv {
-                name: "VOICE_INPUT_LOW_CONFIDENCE_SELECTION",
-                value: "ture".to_string(),
-            })
-        );
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_LOW_CONFIDENCE_SELECTION");
-        }
-    }
-
     /// ストリーミング設定はfalseを明示しても正常に無効化できる
     #[test]
     fn try_from_env_accepts_explicit_false_streaming_flag() {
@@ -1322,24 +1175,6 @@ mod tests {
 
         unsafe {
             std::env::remove_var("OPENAI_TRANSCRIBE_STREAMING");
-        }
-    }
-
-    /// 低信頼語選択設定はfalseを明示しても正常に無効化できる
-    #[test]
-    fn try_from_env_accepts_explicit_false_low_confidence_flag() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_LOW_CONFIDENCE_SELECTION", "false");
-        }
-
-        let result =
-            EnvConfig::try_from_env().expect("low confidence selection=false should be valid");
-
-        assert!(!result.transcription.low_confidence_selection_enabled);
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_LOW_CONFIDENCE_SELECTION");
         }
     }
 

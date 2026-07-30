@@ -35,11 +35,13 @@ fn copy_only_flag_is_rejected() {
 
 /// ヘルプに廃止フラグが表示されない
 #[test]
-fn help_hides_clipboard_flags() {
+fn help_hides_removed_flags() {
     let output = run_cmd(&["start", "--help"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("--copy-and-paste"));
     assert!(!stdout.contains("--copy-only"));
+    assert!(!stdout.contains("--prompt"));
+    assert!(!stdout.contains("--transcription-model"));
 }
 
 /// startコマンドがデフォルト引数で実行できる
@@ -160,36 +162,37 @@ fn start_command_accepts_realtime_whisper_transcription_provider() {
     assert!(!stderr.contains("error: invalid value"));
 }
 
-/// toggleコマンドで4o転写バックエンドを指定できる
+/// toggleコマンドでGPT Transcribe転写バックエンドを指定できる
 #[test]
-fn toggle_command_accepts_4o_transcription_provider() {
-    let output = run_cmd(&["toggle", "--transcription-provider", "4o"]);
+fn toggle_command_accepts_gpt_transcribe_provider() {
+    let output = run_cmd(&["toggle", "--transcription-provider", "gpt-transcribe"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("error: unexpected argument"));
     assert!(!stderr.contains("error: invalid value"));
 }
 
-/// startコマンドで4o mini転写モデルを指定できる
+/// startコマンドは廃止した4o転写バックエンドを拒否する
 #[test]
-fn start_command_accepts_4o_mini_transcription_model() {
-    let output = run_cmd(&[
-        "start",
-        "--transcription-provider",
-        "4o",
-        "--transcription-model",
-        "gpt-4o-mini-transcribe",
-    ]);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stderr.contains("error: unexpected argument"));
-    assert!(!stderr.contains("error: invalid value"));
-}
-
-/// startコマンドは未対応の転写モデルを拒否する
-#[test]
-fn start_command_rejects_unsupported_transcription_model() {
-    let output = run_cmd(&["start", "--transcription-model", "whisper-1"]);
+fn start_command_rejects_removed_4o_provider() {
+    let output = run_cmd(&["start", "--transcription-provider", "4o"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("invalid value"));
+}
+
+/// startコマンドは廃止した転写モデル指定を拒否する
+#[test]
+fn start_command_rejects_removed_transcription_model_flag() {
+    let output = run_cmd(&["start", "--transcription-model", "gpt-transcribe"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unexpected argument") || stderr.contains("found argument"));
+}
+
+/// startコマンドは廃止したプロンプト指定を拒否する
+#[test]
+fn start_command_rejects_removed_prompt_flag() {
+    let output = run_cmd(&["start", "--prompt", "context"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unexpected argument") || stderr.contains("found argument"));
 }
 
 /// startコマンドは旧OpenAI別名を受け付けない

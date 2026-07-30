@@ -10,12 +10,10 @@ use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 
 use crate::application::{AudioData, DictRepository};
-use crate::domain::dict::apply_replacements_with_mappings;
-use crate::domain::transcription::{
-    FinalizedTranscription, TranscriptionOutput, TranscriptionToken, plan_low_confidence_selection,
-};
+use crate::domain::dict::apply_replacements;
+use crate::domain::transcription::{FinalizedTranscription, TranscriptionOutput};
 use crate::error::{Result, VoiceInputError};
-use crate::utils::config::{EnvConfig, TranscriptionProvider};
+use crate::utils::config::TranscriptionProvider;
 use crate::utils::profiling;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -38,8 +36,6 @@ pub struct TranscriptionLogEntry {
     pub raw_text: String,
     /// 辞書適用後の全文
     pub processed_text: String,
-    /// トークン情報
-    pub tokens: Vec<TranscriptionToken>,
 }
 
 /// 転写ログの非同期保存要求
@@ -72,12 +68,8 @@ pub trait TranscriptionClient: Send + Sync {
 /// 転写クライアントへ渡す実行時オプション
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TranscriptionClientOptions {
-    /// 言語設定
-    pub language: String,
     /// 転写バックエンド
     pub provider: TranscriptionProvider,
-    /// 転写モデル
-    pub model: Option<String>,
 }
 
 /// ストリーミング転写イベント
@@ -92,28 +84,17 @@ pub enum TranscriptionEvent {
 /// 転写オプション
 #[derive(Clone, Debug)]
 pub struct TranscriptionOptions {
-    /// 言語設定
-    pub language: String,
-    /// プロンプト（コンテキスト）
-    pub prompt: Option<String>,
     /// 転写バックエンド
     pub provider: TranscriptionProvider,
-    /// 転写モデル
-    pub model: Option<String>,
 }
 
 impl Default for TranscriptionOptions {
     fn default() -> Self {
         Self {
-            language: "ja".to_string(),
-            prompt: None,
             provider: TranscriptionProvider::DEFAULT,
-            model: None,
         }
     }
 }
-
-const LOW_CONFIDENCE_THRESHOLD: f64 = 0.3;
 
 /// 転写サービス
 pub struct TranscriptionService {
@@ -173,9 +154,7 @@ impl TranscriptionService {
         // 転写実行
         let api_timer = profiling::Timer::start("transcription.api");
         let client_options = TranscriptionClientOptions {
-            language: options.language.clone(),
             provider: options.provider,
-            model: options.model.clone(),
         };
         let output = self.client.transcribe(audio, &client_options).await?;
         api_timer.log();
@@ -187,19 +166,13 @@ impl TranscriptionService {
             dict_timer.log_with(&format!(
                 "text_len={} processed_len={}",
                 output.text.len(),
-                processed.text.len()
+                processed.len()
             ));
         } else {
             dict_timer.log();
         }
 
-        let finalized = self.build_finalized_transcription(
-            &output,
-            &processed,
-            EnvConfig::get()
-                .transcription
-                .low_confidence_selection_enabled,
-        );
+        let finalized = self.build_finalized_transcription(&processed);
         self.enqueue_transcription_log(&output, &finalized.text);
 
         if profiling::enabled() {
@@ -225,9 +198,7 @@ impl TranscriptionService {
 
         let api_timer = profiling::Timer::start("transcription.streaming_api");
         let client_options = TranscriptionClientOptions {
-            language: options.language.clone(),
             provider: options.provider,
-            model: options.model.clone(),
         };
         let output = self
             .client
@@ -241,19 +212,13 @@ impl TranscriptionService {
             dict_timer.log_with(&format!(
                 "text_len={} processed_len={}",
                 output.text.len(),
-                processed.text.len()
+                processed.len()
             ));
         } else {
             dict_timer.log();
         }
 
-        let finalized = self.build_finalized_transcription(
-            &output,
-            &processed,
-            EnvConfig::get()
-                .transcription
-                .low_confidence_selection_enabled,
-        );
+        let finalized = self.build_finalized_transcription(&processed);
         self.enqueue_transcription_log(&output, &finalized.text);
         let _ = event_tx.send(TranscriptionEvent::Completed(finalized.clone()));
 
@@ -274,61 +239,30 @@ impl TranscriptionService {
             dict_timer.log_with(&format!(
                 "text_len={} processed_len={}",
                 output.text.len(),
-                processed.text.len()
+                processed.len()
             ));
         } else {
             dict_timer.log();
         }
 
-        let finalized = self.build_finalized_transcription(
-            &output,
-            &processed,
-            EnvConfig::get()
-                .transcription
-                .low_confidence_selection_enabled,
-        );
+        let finalized = self.build_finalized_transcription(&processed);
         self.enqueue_transcription_log(&output, &finalized.text);
         Ok(finalized)
     }
 
-    #[cfg(test)]
-    pub(crate) fn finalize_output_with_low_confidence_selection_for_test(
-        &self,
-        output: TranscriptionOutput,
-    ) -> Result<FinalizedTranscription> {
-        let processed = self.apply_dictionary(&output.text)?;
-        Ok(self.build_finalized_transcription(&output, &processed, true))
-    }
-
-    fn build_finalized_transcription(
-        &self,
-        output: &TranscriptionOutput,
-        processed: &crate::domain::dict::ReplacementOutput,
-        low_confidence_selection_enabled: bool,
-    ) -> FinalizedTranscription {
-        let low_confidence_selection = if low_confidence_selection_enabled {
-            plan_low_confidence_selection(
-                output,
-                &processed.span_mappings,
-                LOW_CONFIDENCE_THRESHOLD,
-            )
-        } else {
-            None
-        };
-
+    fn build_finalized_transcription(&self, processed: &str) -> FinalizedTranscription {
         FinalizedTranscription {
-            text: processed.text.clone(),
-            low_confidence_selection,
+            text: processed.to_string(),
         }
     }
 
     /// 辞書変換を適用
-    fn apply_dictionary(&self, text: &str) -> Result<crate::domain::dict::ReplacementOutput> {
+    fn apply_dictionary(&self, text: &str) -> Result<String> {
         let mut entries = self.dict_repo.load().map_err(|e| {
             VoiceInputError::SystemError(format!("Failed to load dictionary: {}", e))
         })?;
 
-        let result = apply_replacements_with_mappings(text, &mut entries);
+        let result = apply_replacements(text, &mut entries);
 
         // 変更があった場合は保存
         if entries.iter().any(|e| e.hit > 0) {
@@ -350,7 +284,6 @@ impl TranscriptionService {
             recorded_at: chrono::Utc::now().to_rfc3339(),
             raw_text: output.text.clone(),
             processed_text: processed_text.to_string(),
-            tokens: output.tokens.clone(),
         };
 
         if let Err(error) = log_writer.enqueue(entry) {
@@ -367,9 +300,7 @@ impl TranscriptionService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::transcription::{
-        FinalizedTranscription, TranscriptionOutput, TranscriptionToken,
-    };
+    use crate::domain::transcription::{FinalizedTranscription, TranscriptionOutput};
     use crate::utils::config::EnvConfig;
     use crate::utils::profiling;
     use async_trait::async_trait;
@@ -569,7 +500,6 @@ mod tests {
             event,
             TranscriptionEvent::Completed(FinalizedTranscription {
                 text: "これはtestです".to_string(),
-                low_confidence_selection: None,
             })
         );
     }
@@ -637,47 +567,32 @@ mod tests {
                 TranscriptionEvent::Delta("テストです".to_string()),
                 TranscriptionEvent::Completed(FinalizedTranscription {
                     text: "これはtestです".to_string(),
-                    low_confidence_selection: None,
                 }),
             ]
         );
     }
 
-    /// ログ保存が有効な場合は辞書適用前後とトークン情報を保存要求できる
+    /// ログ保存が有効な場合は辞書適用前後のテキストを保存要求できる
     #[tokio::test]
     async fn transcription_log_is_enqueued_with_raw_and_processed_text() {
         init_env_config();
-        struct MockClientWithTokens;
+        struct MockLoggingClient;
 
         #[async_trait]
-        impl TranscriptionClient for MockClientWithTokens {
+        impl TranscriptionClient for MockLoggingClient {
             async fn transcribe(
                 &self,
                 _audio: AudioData,
                 _options: &TranscriptionClientOptions,
             ) -> Result<TranscriptionOutput> {
-                Ok(TranscriptionOutput {
-                    text: "これはテストです".to_string(),
-                    tokens: vec![
-                        TranscriptionToken {
-                            token: "これは".to_string(),
-                            logprob: -0.1,
-                            confidence: 0.9048374180359595,
-                        },
-                        TranscriptionToken {
-                            token: "テスト".to_string(),
-                            logprob: -1.2,
-                            confidence: 0.30119421191220214,
-                        },
-                    ],
-                })
+                Ok(TranscriptionOutput::from_text("これはテストです"))
             }
         }
 
         let log_writer = MockLogWriter::new();
         let recorded_entries = log_writer.entries.clone();
         let service = TranscriptionService::with_log_writer(
-            Box::new(MockClientWithTokens),
+            Box::new(MockLoggingClient),
             Box::new(MockDictRepo::new()),
             1,
             Box::new(log_writer),
@@ -700,21 +615,6 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].raw_text, "これはテストです");
         assert_eq!(entries[0].processed_text, "これはtestです");
-        assert_eq!(
-            entries[0].tokens,
-            vec![
-                TranscriptionToken {
-                    token: "これは".to_string(),
-                    logprob: -0.1,
-                    confidence: 0.9048374180359595,
-                },
-                TranscriptionToken {
-                    token: "テスト".to_string(),
-                    logprob: -1.2,
-                    confidence: 0.30119421191220214,
-                },
-            ]
-        );
     }
 
     /// ログ保存が無効な場合は保存要求を行わない

@@ -17,7 +17,7 @@ use crate::application::{
     RecordingService, TranscriptionEvent, TranscriptionHistoryService, TranscriptionOptions,
     TranscriptionService,
 };
-use crate::domain::transcription::{FinalizedTranscription, LowConfidenceSelection};
+use crate::domain::transcription::FinalizedTranscription;
 use crate::error::Result;
 use crate::infrastructure::command_handler::TranscriptionMessage;
 use crate::infrastructure::external::{
@@ -30,9 +30,8 @@ use crate::utils::profiling;
 use async_trait::async_trait;
 
 /// 転写結果を処理
-pub async fn handle_transcription<T: AudioBackend>(
+pub async fn handle_transcription(
     message: TranscriptionMessage,
-    recording_service: Rc<RefCell<RecordingService<T>>>,
     transcription_service: Rc<RefCell<TranscriptionService>>,
     history_service: Rc<RefCell<TranscriptionHistoryService>>,
 ) -> Result<()> {
@@ -40,9 +39,8 @@ pub async fn handle_transcription<T: AudioBackend>(
     let TranscriptionMessage {
         result,
         resume_music,
-        session_id,
+        session_id: _,
         provider,
-        model,
     } = message;
 
     // エラーが発生しても確実に音楽を再開するためにdeferパターンで実装
@@ -56,14 +54,9 @@ pub async fn handle_transcription<T: AudioBackend>(
     });
 
     // 転写オプションを構築
-    let options = TranscriptionOptions {
-        language: "ja".to_string(),
-        prompt: None, // メモリモードではプロンプトファイルを使用しない
-        provider,
-        model: model.clone(),
-    };
+    let options = TranscriptionOptions { provider };
 
-    let finalized = if provider == TranscriptionProvider::OpenAi4o
+    let finalized = if provider == TranscriptionProvider::GptTranscribe
         && EnvConfig::get().transcription.streaming_enabled
     {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -76,18 +69,10 @@ pub async fn handle_transcription<T: AudioBackend>(
             .transcribe_streaming(result.audio_data, options, event_tx)
             .await?;
 
-        let streamed_finalized = match input_task.await {
-            Ok(value) => value,
+        match input_task.await {
+            Ok(_) => {}
             Err(e) => {
                 eprintln!("Streaming input task failed: {}", e);
-                None
-            }
-        };
-
-        if let Some((finalized_for_selection, input_succeeded)) = streamed_finalized.as_ref() {
-            if *input_succeeded {
-                maybe_select_low_confidence(finalized_for_selection, session_id, recording_service)
-                    .await;
             }
         }
 
@@ -97,10 +82,7 @@ pub async fn handle_transcription<T: AudioBackend>(
             .borrow()
             .transcribe(result.audio_data, options)
             .await?;
-        let input_succeeded = type_text_with_profile(&finalized.text).await;
-        if input_succeeded {
-            maybe_select_low_confidence(&finalized, session_id, recording_service).await;
-        }
+        type_text_with_profile(&finalized.text).await;
         finalized
     };
 
@@ -111,7 +93,7 @@ pub async fn handle_transcription<T: AudioBackend>(
     }
     history_service
         .borrow_mut()
-        .record_finalized(&finalized, provider, model.as_deref());
+        .record_finalized(&finalized, provider);
 
     Ok(())
 }
@@ -238,14 +220,14 @@ impl TextApplier for ProfiledTextApplier {
 
 pub(crate) async fn process_streaming_text_input(
     event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<TranscriptionEvent>,
-) -> Option<(FinalizedTranscription, bool)> {
+) -> Option<FinalizedTranscription> {
     process_streaming_events(event_rx, &ProfiledTextApplier).await
 }
 
 async fn process_streaming_events(
     event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<TranscriptionEvent>,
     text_applier: &dyn TextApplier,
-) -> Option<(FinalizedTranscription, bool)> {
+) -> Option<FinalizedTranscription> {
     let mut rendered_text = String::new();
     let mut input_succeeded = true;
     while let Some(event) = event_rx.recv().await {
@@ -270,20 +252,20 @@ async fn process_streaming_events(
             }
             TranscriptionEvent::Completed(finalized) if rendered_text.is_empty() => {
                 if input_succeeded {
-                    input_succeeded = text_applier.type_text(&finalized.text).await;
+                    text_applier.type_text(&finalized.text).await;
                 }
-                return Some((finalized, input_succeeded));
+                return Some(finalized);
             }
             TranscriptionEvent::Completed(finalized) => {
                 // 一度でも direct input に失敗したら、入力先との同期は崩れたとみなす。
                 // その状態で後続 delta や最終 patch を送り続けると、既存テキスト破壊の
                 // 可能性があるため、以後はイベントを受け流すだけにして副作用を止める。
                 if input_succeeded {
-                    input_succeeded = text_applier
+                    text_applier
                         .patch_text_continuous(&rendered_text, &finalized.text)
                         .await;
                 }
-                return Some((finalized, input_succeeded));
+                return Some(finalized);
             }
         }
     }
@@ -315,13 +297,8 @@ pub async fn spawn_transcription_worker<T: AudioBackend + 'static>(
         let recording_service = recording_service.clone();
         spawn_local(async move {
             let session_id = message.session_id;
-            if let Err(e) = handle_transcription(
-                message,
-                recording_service.clone(),
-                transcription_service,
-                history_service,
-            )
-            .await
+            if let Err(e) =
+                handle_transcription(message, transcription_service, history_service).await
             {
                 eprintln!("Transcription handling failed: {}", e);
             }
@@ -351,86 +328,11 @@ fn hide_hud_if_no_newer_session<T: AudioBackend>(
     }
 }
 
-async fn select_recent_range_with_profile(trailing_char_count: usize, char_count: usize) {
-    let input_timer = profiling::Timer::start("text_input.select_recent_range");
-    match text_input::select_recent_range(trailing_char_count, char_count).await {
-        Ok(_) => {
-            if profiling::enabled() {
-                input_timer.log_with(&format!(
-                    "ok=true trailing_char_count={} char_count={}",
-                    trailing_char_count, char_count
-                ));
-            } else {
-                input_timer.log();
-            }
-        }
-        Err(e) => {
-            if profiling::enabled() {
-                input_timer.log_with(&format!(
-                    "ok=false trailing_char_count={} char_count={}",
-                    trailing_char_count, char_count
-                ));
-            } else {
-                input_timer.log();
-            }
-            eprintln!("Direct input selection failed: {}", e);
-        }
-    }
-}
-
-pub(crate) async fn maybe_select_low_confidence<T: AudioBackend>(
-    finalized: &FinalizedTranscription,
-    session_id: u64,
-    recording_service: Rc<RefCell<RecordingService<T>>>,
-) {
-    let Some(selection) = finalized.low_confidence_selection.as_ref() else {
-        return;
-    };
-
-    let should_skip = match recording_service
-        .borrow()
-        .has_started_newer_session(session_id)
-    {
-        Ok(value) => value,
-        Err(e) => {
-            eprintln!("Failed to check newer session before selection: {}", e);
-            true
-        }
-    };
-
-    if should_skip {
-        return;
-    }
-
-    let total_char_count = finalized.text.chars().count();
-    if let Some((trailing_char_count, char_count)) =
-        selection_to_recent_range(selection, total_char_count)
-    {
-        select_recent_range_with_profile(trailing_char_count, char_count).await;
-    }
-}
-
-fn selection_to_recent_range(
-    selection: &LowConfidenceSelection,
-    total_char_count: usize,
-) -> Option<(usize, usize)> {
-    let selection_end = selection
-        .start_char_index
-        .checked_add(selection.char_count)?;
-    if selection.char_count == 0 || selection_end > total_char_count {
-        return None;
-    }
-
-    Some((total_char_count - selection_end, selection.char_count))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        TextApplier, diff_text_for_patch, process_streaming_events, selection_to_recent_range,
-    };
+    use super::{TextApplier, diff_text_for_patch, process_streaming_events};
     use crate::application::TranscriptionEvent;
-    use crate::domain::transcription::{FinalizedTranscription, LowConfidenceSelection};
+    use crate::domain::transcription::FinalizedTranscription;
     use async_trait::async_trait;
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
@@ -501,7 +403,6 @@ mod tests {
         event_tx
             .send(TranscriptionEvent::Completed(FinalizedTranscription {
                 text: "これはtestです".to_string(),
-                low_confidence_selection: None,
             }))
             .unwrap();
         drop(event_tx);
@@ -519,13 +420,9 @@ mod tests {
         assert!(completed.get());
         assert_eq!(
             finalized,
-            Some((
-                FinalizedTranscription {
-                    text: "これはtestです".to_string(),
-                    low_confidence_selection: None,
-                },
-                true,
-            ))
+            Some(FinalizedTranscription {
+                text: "これはtestです".to_string(),
+            })
         );
     }
 
@@ -573,7 +470,6 @@ mod tests {
         event_tx
             .send(TranscriptionEvent::Completed(FinalizedTranscription {
                 text: "これはテストです".to_string(),
-                low_confidence_selection: None,
             }))
             .unwrap();
         drop(event_tx);
@@ -590,13 +486,9 @@ mod tests {
         );
         assert_eq!(
             finalized,
-            Some((
-                FinalizedTranscription {
-                    text: "これはテストです".to_string(),
-                    low_confidence_selection: None,
-                },
-                true,
-            ))
+            Some(FinalizedTranscription {
+                text: "これはテストです".to_string(),
+            })
         );
     }
 
@@ -644,7 +536,6 @@ mod tests {
         event_tx
             .send(TranscriptionEvent::Completed(FinalizedTranscription {
                 text: "これは".to_string(),
-                low_confidence_selection: None,
             }))
             .unwrap();
         drop(event_tx);
@@ -660,30 +551,15 @@ mod tests {
         );
         assert_eq!(
             finalized,
-            Some((
-                FinalizedTranscription {
-                    text: "これは".to_string(),
-                    low_confidence_selection: None,
-                },
-                true,
-            ))
+            Some(FinalizedTranscription {
+                text: "これは".to_string(),
+            })
         );
     }
 
-    /// 選択範囲は末尾基準の相対移動量へ変換できる
-    #[test]
-    fn selection_plan_converts_to_recent_range() {
-        let selection = LowConfidenceSelection {
-            start_char_index: 3,
-            char_count: 4,
-        };
-
-        assert_eq!(selection_to_recent_range(&selection, 9), Some((2, 4)));
-    }
-
-    /// ストリーミング入力が失敗した場合は成功フラグを落として返す
+    /// ストリーミング入力が失敗しても確定結果は返す
     #[tokio::test]
-    async fn streaming_events_report_failed_input_for_selection_guard() {
+    async fn streaming_events_return_finalized_text_after_input_failure() {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
 
         struct FailingTextApplier;
@@ -706,10 +582,6 @@ mod tests {
         event_tx
             .send(TranscriptionEvent::Completed(FinalizedTranscription {
                 text: "失敗".to_string(),
-                low_confidence_selection: Some(LowConfidenceSelection {
-                    start_char_index: 0,
-                    char_count: 2,
-                }),
             }))
             .unwrap();
         drop(event_tx);
@@ -718,16 +590,9 @@ mod tests {
 
         assert_eq!(
             finalized,
-            Some((
-                FinalizedTranscription {
-                    text: "失敗".to_string(),
-                    low_confidence_selection: Some(LowConfidenceSelection {
-                        start_char_index: 0,
-                        char_count: 2,
-                    }),
-                },
-                false,
-            ))
+            Some(FinalizedTranscription {
+                text: "失敗".to_string(),
+            })
         );
     }
 
@@ -776,10 +641,6 @@ mod tests {
         event_tx
             .send(TranscriptionEvent::Completed(FinalizedTranscription {
                 text: "これはtestです".to_string(),
-                low_confidence_selection: Some(LowConfidenceSelection {
-                    start_char_index: 3,
-                    char_count: 4,
-                }),
             }))
             .unwrap();
         drop(event_tx);
@@ -789,16 +650,9 @@ mod tests {
         assert_eq!(*calls.borrow(), vec!["type:これは".to_string()]);
         assert_eq!(
             finalized,
-            Some((
-                FinalizedTranscription {
-                    text: "これはtestです".to_string(),
-                    low_confidence_selection: Some(LowConfidenceSelection {
-                        start_char_index: 3,
-                        char_count: 4,
-                    }),
-                },
-                false,
-            ))
+            Some(FinalizedTranscription {
+                text: "これはtestです".to_string(),
+            })
         );
     }
 }

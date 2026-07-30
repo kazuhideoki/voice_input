@@ -38,14 +38,10 @@ pub struct ActiveRecordingSession {
     pub cancel: Option<oneshot::Sender<()>>,
     /// 録音開始時にApple Musicが再生中だったか
     pub music_was_playing: bool,
-    /// 録音開始時点で取得した選択テキストまたはCLIプロンプト
-    pub start_prompt: Option<String>,
     /// 録音停止後に音声データを保存するパス
     pub save_audio_path: Option<PathBuf>,
     /// 録音停止後に使う転写バックエンド
     pub transcription_provider: TranscriptionProvider,
-    /// 録音停止後に使う転写モデル
-    pub transcription_model: Option<String>,
     /// 転写バックエンドが要求する音声形式
     pub requested_audio_format: Option<AudioDataFormat>,
     /// このセッションの最大録音時間（秒）
@@ -62,10 +58,8 @@ impl ActiveRecordingSession {
             session_id,
             cancel: Some(cancel),
             music_was_playing: false,
-            start_prompt: options.prompt,
             save_audio_path: options.save_audio_path,
             transcription_provider: options.transcription_provider,
-            transcription_model: options.transcription_model,
             requested_audio_format: options.requested_audio_format,
             max_duration_secs,
         }
@@ -96,10 +90,10 @@ impl RecordingState {
         }
     }
 
-    fn context_info(&self) -> (Option<String>, bool) {
+    fn music_was_playing(&self) -> bool {
         match self {
-            Self::Idle => (None, false),
-            Self::Recording(session) => (session.start_prompt.clone(), session.music_was_playing),
+            Self::Idle => false,
+            Self::Recording(session) => session.music_was_playing,
         }
     }
 
@@ -127,11 +121,9 @@ impl RecordingState {
             Self::Idle => Err(VoiceInputError::RecordingNotStarted),
             Self::Recording(session) => Ok(StoppedSessionContext {
                 session_id: session.session_id,
-                start_prompt: session.start_prompt.clone(),
                 music_was_playing: session.music_was_playing,
                 save_audio_path: session.save_audio_path.clone(),
                 transcription_provider: session.transcription_provider,
-                transcription_model: session.transcription_model.clone(),
                 requested_audio_format: session.requested_audio_format,
             }),
         }
@@ -149,11 +141,9 @@ impl RecordingState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StoppedSessionContext {
     pub session_id: u64,
-    pub start_prompt: Option<String>,
     pub music_was_playing: bool,
     pub save_audio_path: Option<PathBuf>,
     pub transcription_provider: TranscriptionProvider,
-    pub transcription_model: Option<String>,
     pub requested_audio_format: Option<AudioDataFormat>,
 }
 
@@ -196,14 +186,10 @@ impl Default for RecordingConfig {
 /// 録音オプション
 #[derive(Clone, Debug)]
 pub struct RecordingOptions {
-    /// 録音開始時のプロンプト
-    pub prompt: Option<String>,
     /// 録音停止後に音声データを保存するパス
     pub save_audio_path: Option<PathBuf>,
     /// 録音停止後に使う転写バックエンド
     pub transcription_provider: TranscriptionProvider,
-    /// 録音停止後に使う転写モデル
-    pub transcription_model: Option<String>,
     /// 転写バックエンドが要求する音声形式
     pub requested_audio_format: Option<AudioDataFormat>,
     /// 録音中 PCM フレームの送信先
@@ -217,10 +203,8 @@ pub struct RecordingOptions {
 impl Default for RecordingOptions {
     fn default() -> Self {
         Self {
-            prompt: None,
             save_audio_path: None,
             transcription_provider: TranscriptionProvider::DEFAULT,
-            transcription_model: None,
             requested_audio_format: None,
             audio_frame_tx: None,
             input_file_path: None,
@@ -465,13 +449,13 @@ impl<T: AudioBackend> RecordingService<T> {
             .and_then(|ctx| ctx.state.active_max_duration_secs())
     }
 
-    /// 録音コンテキストの情報を取得
-    pub fn get_context_info(&self) -> Result<(Option<String>, bool)> {
+    /// 録音開始時にApple Musicが再生中だったかを取得
+    pub fn music_was_playing(&self) -> Result<bool> {
         let ctx = self
             .context
             .lock()
             .map_err(|e| VoiceInputError::SystemError(format!("Context lock error: {}", e)))?;
-        Ok(ctx.state.context_info())
+        Ok(ctx.state.music_was_playing())
     }
 
     /// Apple Music再生状態を設定
@@ -769,11 +753,7 @@ mod tests {
         // 3回の開始・停止サイクルを実行
         for i in 0..3 {
             // 録音開始
-            let options = RecordingOptions {
-                prompt: Some(format!("Test {}", i)),
-                save_audio_path: None,
-                ..RecordingOptions::default()
-            };
+            let options = RecordingOptions::default();
             let session_id = service.start_recording(options).await.unwrap();
             assert!(session_id > 0, "Session ID should be positive");
             assert!(service.is_recording(), "Should be recording after start");
@@ -908,7 +888,6 @@ mod tests {
 
         service
             .start_recording(RecordingOptions {
-                prompt: None,
                 save_audio_path: Some(PathBuf::from("sample.wav")),
                 ..RecordingOptions::default()
             })
@@ -976,7 +955,7 @@ mod tests {
         {
             let ctx = service.context.lock().unwrap();
             assert_eq!(ctx.state, RecordingState::Idle);
-            assert_eq!(ctx.state.context_info(), (None, false));
+            assert!(!ctx.state.music_was_playing());
         }
 
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -986,19 +965,13 @@ mod tests {
 
         runtime.block_on(async {
             service
-                .start_recording(RecordingOptions {
-                    prompt: Some("prompt".to_string()),
-                    save_audio_path: None,
-                    ..RecordingOptions::default()
-                })
+                .start_recording(RecordingOptions::default())
                 .await
                 .unwrap();
         });
 
         service.set_music_was_playing(true).unwrap();
-        let (prompt, music_was_playing) = service.get_context_info().unwrap();
-        assert_eq!(prompt, Some("prompt".to_string()));
-        assert!(music_was_playing);
+        assert!(service.music_was_playing().unwrap());
     }
 
     /// 現在のセッション一致判定が取得できる
@@ -1070,11 +1043,7 @@ mod tests {
         let service = RecordingService::new(recorder, config);
 
         let session_id = service
-            .start_recording(RecordingOptions {
-                prompt: Some("prompt".to_string()),
-                save_audio_path: None,
-                ..RecordingOptions::default()
-            })
+            .start_recording(RecordingOptions::default())
             .await
             .unwrap();
         service.set_music_was_playing(true).unwrap();
@@ -1088,9 +1057,6 @@ mod tests {
         );
         assert!(service.is_recording());
         assert!(service.is_active_session(session_id).unwrap());
-        assert_eq!(
-            service.get_context_info().unwrap(),
-            (Some("prompt".to_string()), true)
-        );
+        assert!(service.music_was_playing().unwrap());
     }
 }

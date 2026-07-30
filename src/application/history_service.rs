@@ -14,8 +14,6 @@ pub struct TranscriptionHistoryEntry {
     pub text: String,
     /// 転写バックエンド
     pub provider: TranscriptionProvider,
-    /// 転写モデル
-    pub model: Option<String>,
 }
 
 /// daemon 起動中だけ保持する転写履歴
@@ -43,7 +41,6 @@ impl TranscriptionHistoryService {
         &mut self,
         finalized: &FinalizedTranscription,
         provider: TranscriptionProvider,
-        model: Option<&str>,
     ) {
         if self.limit == 0 || finalized.text.trim().is_empty() {
             return;
@@ -53,7 +50,6 @@ impl TranscriptionHistoryService {
             recorded_at: chrono::Utc::now().to_rfc3339(),
             text: finalized.text.clone(),
             provider,
-            model: model.map(ToString::to_string),
         });
 
         while self.entries.len() > self.limit {
@@ -80,7 +76,6 @@ mod tests {
     fn finalized(text: &str) -> FinalizedTranscription {
         FinalizedTranscription {
             text: text.to_string(),
-            low_confidence_selection: None,
         }
     }
 
@@ -89,19 +84,14 @@ mod tests {
     fn finalized_entries_are_listed_newest_first() {
         let mut history = TranscriptionHistoryService::with_limit(10);
 
-        history.record_finalized(&finalized("first"), TranscriptionProvider::OpenAi4o, None);
-        history.record_finalized(
-            &finalized("second"),
-            TranscriptionProvider::MlxQwen3Asr,
-            Some("Qwen/Qwen3-ASR-1.7B"),
-        );
+        history.record_finalized(&finalized("first"), TranscriptionProvider::GptTranscribe);
+        history.record_finalized(&finalized("second"), TranscriptionProvider::MlxQwen3Asr);
 
         let entries = history.list();
 
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].text, "second");
         assert_eq!(entries[0].provider, TranscriptionProvider::MlxQwen3Asr);
-        assert_eq!(entries[0].model.as_deref(), Some("Qwen/Qwen3-ASR-1.7B"));
         assert_eq!(entries[1].text, "first");
     }
 
@@ -110,9 +100,9 @@ mod tests {
     fn oldest_entries_are_pruned_when_limit_is_exceeded() {
         let mut history = TranscriptionHistoryService::with_limit(2);
 
-        history.record_finalized(&finalized("first"), TranscriptionProvider::OpenAi4o, None);
-        history.record_finalized(&finalized("second"), TranscriptionProvider::OpenAi4o, None);
-        history.record_finalized(&finalized("third"), TranscriptionProvider::OpenAi4o, None);
+        history.record_finalized(&finalized("first"), TranscriptionProvider::GptTranscribe);
+        history.record_finalized(&finalized("second"), TranscriptionProvider::GptTranscribe);
+        history.record_finalized(&finalized("third"), TranscriptionProvider::GptTranscribe);
 
         let texts = history
             .list()
@@ -128,8 +118,8 @@ mod tests {
     fn blank_finalized_entries_are_not_recorded() {
         let mut history = TranscriptionHistoryService::with_limit(10);
 
-        history.record_finalized(&finalized("first"), TranscriptionProvider::OpenAi4o, None);
-        history.record_finalized(&finalized(" \n\t"), TranscriptionProvider::OpenAi4o, None);
+        history.record_finalized(&finalized("first"), TranscriptionProvider::GptTranscribe);
+        history.record_finalized(&finalized(" \n\t"), TranscriptionProvider::GptTranscribe);
 
         let texts = history
             .list()

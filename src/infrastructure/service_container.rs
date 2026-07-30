@@ -365,12 +365,9 @@ mod tests {
             transcription: TranscriptionConfig {
                 provider: TranscriptionProvider::MlxQwen3Asr,
                 api_key: None,
-                model: "gpt-4o-mini-transcribe".to_string(),
-                realtime_whisper_model: "gpt-realtime-whisper".to_string(),
                 mlx_qwen3_asr_model: "Qwen/Qwen3-ASR-1.7B".to_string(),
                 streaming_enabled: false,
                 log_path: None,
-                low_confidence_selection_enabled: false,
                 mlx_qwen3_asr_command: "mlx-qwen3-asr".to_string(),
             },
             proxy: ProxyConfig {

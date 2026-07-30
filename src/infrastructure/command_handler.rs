@@ -31,7 +31,7 @@ use crate::infrastructure::{
         sound::{play_start_sound, play_stop_sound, resume_apple_music},
     },
     media_control_service::MediaControlService,
-    transcription_worker::{maybe_select_low_confidence, process_streaming_text_input},
+    transcription_worker::process_streaming_text_input,
 };
 use crate::ipc::{IpcCmd, IpcResp};
 use crate::utils::config::{EnvConfig, TranscriptionProvider};
@@ -46,20 +46,19 @@ pub struct TranscriptionMessage {
     pub resume_music: bool,
     pub session_id: u64,
     pub provider: TranscriptionProvider,
-    pub model: Option<String>,
 }
 
 struct PreparedRealtimeSession {
     session: RealtimeWhisperSessionHandle,
     event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
-    input_task: tokio::task::JoinHandle<Option<(FinalizedTranscription, bool)>>,
+    input_task: tokio::task::JoinHandle<Option<FinalizedTranscription>>,
 }
 
 struct ActiveRealtimeSession {
     session_id: u64,
     session: RealtimeWhisperSessionHandle,
     event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
-    input_task: tokio::task::JoinHandle<Option<(FinalizedTranscription, bool)>>,
+    input_task: tokio::task::JoinHandle<Option<FinalizedTranscription>>,
 }
 
 struct RealtimeStopOutcome {
@@ -122,7 +121,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
     /// 設定が Realtime Whisper の場合、待機済みセッションをバックグラウンドで1本用意する。
     pub fn warm_realtime_whisper_session_if_enabled(&self) {
-        if EnvConfig::get().transcription.provider != TranscriptionProvider::OpenAiRealtimeWhisper {
+        if EnvConfig::get().transcription.provider != TranscriptionProvider::RealtimeWhisper {
             return;
         }
 
@@ -149,80 +148,64 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     pub async fn handle(&self, cmd: IpcCmd) -> Result<IpcResp> {
         match cmd {
             IpcCmd::Start {
-                prompt,
                 save_audio_path,
                 max_duration_secs,
                 transcription_provider,
-                transcription_model,
             } => {
                 self.handle_start(
-                    prompt,
                     save_audio_path,
                     max_duration_secs,
                     None,
                     transcription_provider,
-                    transcription_model,
                 )
                 .await
             }
             IpcCmd::StartWithInputFile {
-                prompt,
                 save_audio_path,
                 max_duration_secs,
                 input_file_path,
                 transcription_provider,
-                transcription_model,
             } => {
                 self.handle_start(
-                    prompt,
                     save_audio_path,
                     max_duration_secs,
                     Some(input_file_path),
                     transcription_provider,
-                    transcription_model,
                 )
                 .await
             }
             IpcCmd::Stop => self.handle_stop().await,
             IpcCmd::Toggle {
-                prompt,
                 save_audio_path,
                 max_duration_secs,
                 transcription_provider,
-                transcription_model,
             } => {
                 if self.recording.borrow().is_recording() {
                     self.handle_stop().await
                 } else {
                     self.handle_start(
-                        prompt,
                         save_audio_path,
                         max_duration_secs,
                         None,
                         transcription_provider,
-                        transcription_model,
                     )
                     .await
                 }
             }
             IpcCmd::ToggleWithInputFile {
-                prompt,
                 save_audio_path,
                 max_duration_secs,
                 input_file_path,
                 transcription_provider,
-                transcription_model,
             } => {
                 if self.recording.borrow().is_recording() {
                     self.handle_stop().await
                 } else {
                     self.handle_start(
-                        prompt,
                         save_audio_path,
                         max_duration_secs,
                         Some(input_file_path),
                         transcription_provider,
-                        transcription_model,
                     )
                     .await
                 }
@@ -237,12 +220,10 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     /// 録音開始処理
     async fn handle_start(
         &self,
-        prompt: Option<String>,
         save_audio_path: Option<std::path::PathBuf>,
         max_duration_secs: Option<u64>,
         input_file_path: Option<std::path::PathBuf>,
         transcription_provider: Option<TranscriptionProvider>,
-        transcription_model: Option<String>,
     ) -> Result<IpcResp> {
         if matches!(max_duration_secs, Some(0)) {
             return Err(VoiceInputError::ConfigInitError(
@@ -252,7 +233,6 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
         let provider =
             transcription_provider.unwrap_or_else(|| EnvConfig::get().transcription.provider);
-        let model = resolve_transcription_model(provider, transcription_model)?;
 
         // キー押下直後の視覚フィードバックを優先するため、音や録音準備より先にHUDを出す
         recording_hud::set_state(HudState::Detecting);
@@ -260,7 +240,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         // 体感開始時間を縮めるため、開始音は録音開始前に鳴らす
         play_start_sound_if_enabled(self.recording_sounds_enabled);
 
-        let mut realtime_session = if provider == TranscriptionProvider::OpenAiRealtimeWhisper {
+        let mut realtime_session = if provider == TranscriptionProvider::RealtimeWhisper {
             match self.prepare_realtime_session_for_recording() {
                 Ok(session) => Some(session),
                 Err(error) => {
@@ -279,10 +259,8 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
         // 録音オプションを構築
         let options = RecordingOptions {
-            prompt,
             save_audio_path,
             transcription_provider: provider,
-            transcription_model: model,
             requested_audio_format: requested_audio_format(provider),
             audio_frame_tx,
             input_file_path,
@@ -457,7 +435,6 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 resume_music: outcome.context.music_was_playing,
                 session_id: outcome.context.session_id,
                 provider: outcome.context.transcription_provider,
-                model: outcome.context.transcription_model,
             })
             .map_err(|e| {
                 recording_hud::set_state(HudState::Hidden);
@@ -581,8 +558,8 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
         let transcription = &EnvConfig::get().transcription;
         match transcription.provider {
-            crate::utils::config::TranscriptionProvider::OpenAi4o
-            | crate::utils::config::TranscriptionProvider::OpenAiRealtimeWhisper => {
+            crate::utils::config::TranscriptionProvider::GptTranscribe
+            | crate::utils::config::TranscriptionProvider::RealtimeWhisper => {
                 match transcription.api_key.clone() {
                     Some(key) => {
                         lines.push(format!(
@@ -690,7 +667,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                                 {
                                     eprintln!("Realtime auto-stop failed: {}", error);
                                 } else if EnvConfig::get().transcription.provider
-                                    == TranscriptionProvider::OpenAiRealtimeWhisper
+                                    == TranscriptionProvider::RealtimeWhisper
                                 {
                                     ensure_ready_realtime_session(
                                         ready_realtime_session.clone(),
@@ -713,7 +690,6 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                                             resume_music: outcome.context.music_was_playing,
                                             session_id: outcome.context.session_id,
                                             provider: outcome.context.transcription_provider,
-                                            model: outcome.context.transcription_model,
                                         }) {
                                             eprintln!(
                                                 "Failed to send auto-stop transcription: {}",
@@ -790,10 +766,7 @@ fn fan_out_audio_frames(
 }
 
 fn build_prepared_realtime_session() -> Result<PreparedRealtimeSession> {
-    let config = RealtimeWhisperConfig::from_transcription_config(
-        &EnvConfig::get().transcription,
-        "ja".to_string(),
-    )?;
+    let config = RealtimeWhisperConfig::from_transcription_config(&EnvConfig::get().transcription)?;
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let input_task = spawn_local(async move { process_streaming_text_input(&mut event_rx).await });
     let session = spawn_realtime_whisper_session(config, event_tx.clone());
@@ -926,22 +899,12 @@ async fn stop_active_realtime_session<T: AudioBackend + 'static>(
     };
 
     let finalized = transcription.borrow().finalize_output(raw_output)?;
-    history.borrow_mut().record_finalized(
-        &finalized,
-        capture_outcome.context.transcription_provider,
-        capture_outcome.context.transcription_model.as_deref(),
-    );
+    history
+        .borrow_mut()
+        .record_finalized(&finalized, capture_outcome.context.transcription_provider);
     let _ = event_tx.send(TranscriptionEvent::Completed(finalized.clone()));
 
     match input_task.await {
-        Ok(Some((finalized_for_selection, input_succeeded))) if input_succeeded => {
-            maybe_select_low_confidence(
-                &finalized_for_selection,
-                capture_outcome.context.session_id,
-                recording.clone(),
-            )
-            .await;
-        }
         Ok(_) => {}
         Err(error) => {
             eprintln!("Realtime streaming input task failed: {}", error);
@@ -971,7 +934,7 @@ async fn stop_active_realtime_session<T: AudioBackend + 'static>(
 
 fn requested_audio_format(provider: TranscriptionProvider) -> Option<AudioDataFormat> {
     match provider {
-        TranscriptionProvider::OpenAi4o | TranscriptionProvider::OpenAiRealtimeWhisper => None,
+        TranscriptionProvider::GptTranscribe | TranscriptionProvider::RealtimeWhisper => None,
         TranscriptionProvider::MlxQwen3Asr => Some(AudioDataFormat::Wav),
     }
 }
@@ -985,25 +948,6 @@ fn play_start_sound_if_enabled(recording_sounds_enabled: bool) {
 fn play_stop_sound_if_enabled(recording_sounds_enabled: bool) {
     if recording_sounds_enabled {
         play_stop_sound();
-    }
-}
-
-fn resolve_transcription_model(
-    provider: TranscriptionProvider,
-    model: Option<String>,
-) -> Result<Option<String>> {
-    match (provider, model) {
-        (TranscriptionProvider::OpenAi4o, Some(model)) => {
-            provider.validate_model(&model).map_err(|error| {
-                VoiceInputError::ConfigInitError(format!("invalid transcription model: {error}"))
-            })?;
-            Ok(Some(model))
-        }
-        (TranscriptionProvider::OpenAi4o, None) => Ok(Some(provider.default_model().to_string())),
-        (_, Some(model)) => Err(VoiceInputError::ConfigInitError(format!(
-            "--transcription-model is only supported with --transcription-provider 4o: {model}"
-        ))),
-        (_, None) => Ok(None),
     }
 }
 
@@ -1441,18 +1385,15 @@ mod tests {
 
     fn start_cmd() -> IpcCmd {
         IpcCmd::Start {
-            prompt: None,
             save_audio_path: None,
             max_duration_secs: None,
             transcription_provider: None,
-            transcription_model: None,
         }
     }
 
     fn finalized(text: &str) -> FinalizedTranscription {
         FinalizedTranscription {
             text: text.to_string(),
-            low_confidence_selection: None,
         }
     }
 
@@ -1482,14 +1423,12 @@ mod tests {
 
         handler.history.borrow_mut().record_finalized(
             &finalized("old entry"),
-            TranscriptionProvider::OpenAi4o,
-            None,
+            TranscriptionProvider::GptTranscribe,
         );
-        handler.history.borrow_mut().record_finalized(
-            &finalized("new\nentry"),
-            TranscriptionProvider::MlxQwen3Asr,
-            Some("Qwen/Qwen3-ASR-1.7B"),
-        );
+        handler
+            .history
+            .borrow_mut()
+            .record_finalized(&finalized("new\nentry"), TranscriptionProvider::MlxQwen3Asr);
 
         let response = handler.handle(IpcCmd::History).await.unwrap();
 
@@ -1504,7 +1443,7 @@ mod tests {
         assert!(new_position < old_position);
     }
 
-    /// 履歴表示には時刻やprovider/modelなどのメタ情報を含めない
+    /// 履歴表示には時刻やproviderなどのメタ情報を含めない
     #[tokio::test(flavor = "current_thread")]
     async fn history_command_omits_all_metadata() {
         let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
@@ -1515,8 +1454,7 @@ mod tests {
 
         handler.history.borrow_mut().record_finalized(
             &finalized("音声入力をする。"),
-            TranscriptionProvider::OpenAiRealtimeWhisper,
-            Some("gpt-realtime-whisper"),
+            TranscriptionProvider::RealtimeWhisper,
         );
 
         let response = handler.handle(IpcCmd::History).await.unwrap();
@@ -1550,7 +1488,7 @@ mod tests {
                 let message = rx.recv().await.expect("transcription should be queued");
                 assert_eq!(message.session_id, 1);
                 assert!(!message.resume_music);
-                assert_eq!(message.model, Some("gpt-4o-transcribe".to_string()));
+                assert_eq!(message.provider, TranscriptionProvider::GptTranscribe);
             })
             .await;
     }
@@ -1572,78 +1510,14 @@ mod tests {
 
                 let response = handler
                     .handle(IpcCmd::Start {
-                        prompt: None,
                         save_audio_path: None,
                         max_duration_secs: Some(120),
                         transcription_provider: None,
-                        transcription_model: None,
                     })
                     .await
                     .unwrap();
 
                 assert_eq!(response.msg, "recording started (auto-stop in 120s)");
-            })
-            .await;
-    }
-
-    /// 4o mini指定の録音は転写キューへモデルを渡す
-    #[tokio::test(flavor = "current_thread")]
-    async fn four_o_mini_model_is_queued_for_transcription() {
-        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
-        let local = tokio::task::LocalSet::new();
-        local
-            .run_until(async {
-                let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
-                let media_control = MediaControlService::with_controller(Box::new(
-                    DelayedMediaController::new(false, Duration::from_millis(0)),
-                ));
-                let (handler, _recording, _media_control, mut rx) =
-                    build_handler(backend, media_control);
-
-                handler
-                    .handle(IpcCmd::Start {
-                        prompt: None,
-                        save_audio_path: None,
-                        max_duration_secs: None,
-                        transcription_provider: Some(TranscriptionProvider::OpenAi4o),
-                        transcription_model: Some("gpt-4o-mini-transcribe".to_string()),
-                    })
-                    .await
-                    .unwrap();
-                handler.handle(IpcCmd::Stop).await.unwrap();
-
-                let message = rx.recv().await.expect("transcription should be queued");
-                assert_eq!(message.provider, TranscriptionProvider::OpenAi4o);
-                assert_eq!(message.model, Some("gpt-4o-mini-transcribe".to_string()));
-            })
-            .await;
-    }
-
-    /// 4o以外のプロバイダでは転写モデル指定を拒否する
-    #[tokio::test(flavor = "current_thread")]
-    async fn non_4o_provider_rejects_transcription_model() {
-        let _sound_guard = SOUND_TEST_LOCK.lock().unwrap();
-        let local = tokio::task::LocalSet::new();
-        local
-            .run_until(async {
-                let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
-                let media_control = MediaControlService::with_controller(Box::new(
-                    DelayedMediaController::new(false, Duration::from_millis(0)),
-                ));
-                let (handler, _recording, _media_control, _rx) =
-                    build_handler(backend, media_control);
-
-                let result = handler
-                    .handle(IpcCmd::Start {
-                        prompt: None,
-                        save_audio_path: None,
-                        max_duration_secs: None,
-                        transcription_provider: Some(TranscriptionProvider::MlxQwen3Asr),
-                        transcription_model: Some("gpt-4o-mini-transcribe".to_string()),
-                    })
-                    .await;
-
-                assert!(result.is_err());
             })
             .await;
     }
@@ -1665,11 +1539,9 @@ mod tests {
 
                 handler
                     .handle(IpcCmd::Start {
-                        prompt: None,
                         save_audio_path: None,
                         max_duration_secs: None,
                         transcription_provider: Some(TranscriptionProvider::MlxQwen3Asr),
-                        transcription_model: None,
                     })
                     .await
                     .unwrap();
@@ -1677,7 +1549,6 @@ mod tests {
 
                 let message = rx.recv().await.expect("transcription should be queued");
                 assert_eq!(message.provider, TranscriptionProvider::MlxQwen3Asr);
-                assert_eq!(message.model, None);
                 assert_eq!(
                     *requested_format.lock().unwrap(),
                     Some(AudioDataFormat::Wav)
@@ -1705,11 +1576,9 @@ mod tests {
 
                 handler
                     .handle(IpcCmd::Start {
-                        prompt: None,
                         save_audio_path: Some(save_path.clone()),
                         max_duration_secs: None,
                         transcription_provider: None,
-                        transcription_model: None,
                     })
                     .await
                     .unwrap();
@@ -1890,11 +1759,9 @@ mod tests {
 
                 handler
                     .handle(IpcCmd::Start {
-                        prompt: None,
                         save_audio_path: None,
                         max_duration_secs: Some(1),
                         transcription_provider: None,
-                        transcription_model: None,
                     })
                     .await
                     .unwrap();
@@ -1975,8 +1842,7 @@ mod tests {
                 handler.handle(IpcCmd::Stop).await.unwrap();
                 tokio::time::sleep(Duration::from_millis(120)).await;
 
-                let (_, music_was_playing) = recording.borrow().get_context_info().unwrap();
-                assert!(!music_was_playing);
+                assert!(!recording.borrow().music_was_playing().unwrap());
                 assert!(playing_ref.load(Ordering::SeqCst));
                 assert!(!media_control.borrow().is_paused_by_recording().unwrap());
             })
@@ -2006,8 +1872,7 @@ mod tests {
                 handler.handle(start_cmd()).await.unwrap();
                 tokio::time::sleep(Duration::from_millis(120)).await;
 
-                let (_, music_was_playing) = recording.borrow().get_context_info().unwrap();
-                assert!(!music_was_playing);
+                assert!(!recording.borrow().music_was_playing().unwrap());
                 assert!(playing_ref.load(Ordering::SeqCst));
                 assert!(!media_control.borrow().is_paused_by_recording().unwrap());
             })
@@ -2037,9 +1902,8 @@ mod tests {
                 handler.handle(start_cmd()).await.unwrap();
                 tokio::time::sleep(Duration::from_millis(160)).await;
 
-                let (_, music_was_playing) = recording.borrow().get_context_info().unwrap();
                 assert!(recording.borrow().is_recording());
-                assert!(music_was_playing);
+                assert!(recording.borrow().music_was_playing().unwrap());
                 assert!(!playing_ref.load(Ordering::SeqCst));
                 assert!(media_control.borrow().is_paused_by_recording().unwrap());
             })
@@ -2062,10 +1926,9 @@ mod tests {
                 let response = handler.handle(start_cmd()).await.unwrap();
                 tokio::time::sleep(Duration::from_millis(10)).await;
 
-                let (_, music_was_playing) = recording.borrow().get_context_info().unwrap();
                 assert!(response.ok);
                 assert!(recording.borrow().is_recording());
-                assert!(!music_was_playing);
+                assert!(!recording.borrow().music_was_playing().unwrap());
                 assert!(!media_control.borrow().is_paused_by_recording().unwrap());
             })
             .await;

@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
-use std::ops::Range;
 
 /// 現在の辞書ファイル形式バージョン。
 pub const CURRENT_DICTIONARY_VERSION: u32 = 2;
@@ -15,20 +14,6 @@ pub struct WordEntry {
     pub surface: String,     // 転写文中の語
     pub replacement: String, // 置換後
     pub hit: u32,            // 使用回数（学習用）
-}
-
-/// 辞書適用時の文字位置対応
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReplacementSpanMapping {
-    pub raw_char_range: Range<usize>,
-    pub processed_char_range: Range<usize>,
-}
-
-/// 辞書適用結果
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReplacementOutput {
-    pub text: String,
-    pub span_mappings: Vec<ReplacementSpanMapping>,
 }
 
 /// 辞書ファイル全体。
@@ -153,14 +138,6 @@ impl DictionaryDocument {
 /// 置換が行われた回数だけ `hit` をインクリメントします。
 /// TODO 事前構造化（surface_chars のキャッシュ） や、必要なら Aho-Corasick の導入検討で、辞書サイズ増加時の劣化を防ぐ
 pub fn apply_replacements(text: &str, entries: &mut [WordEntry]) -> String {
-    apply_replacements_with_mappings(text, entries).text
-}
-
-/// 与えられた文字列に辞書を適用し、文字位置対応も返します。
-pub fn apply_replacements_with_mappings(
-    text: &str,
-    entries: &mut [WordEntry],
-) -> ReplacementOutput {
     for e in entries.iter_mut() {
         let count = text.matches(&e.surface).count();
         e.hit += count as u32;
@@ -168,8 +145,6 @@ pub fn apply_replacements_with_mappings(
 
     let mut out = String::new();
     let mut i = 0;
-    let mut processed_index = 0;
-    let mut span_mappings = Vec::new();
     let chars: Vec<char> = text.chars().collect();
     while i < chars.len() {
         let mut replaced = false;
@@ -179,31 +154,17 @@ pub fn apply_replacements_with_mappings(
                 && chars[i..i + surface_chars.len()] == surface_chars[..]
             {
                 out.push_str(&e.replacement);
-                let replacement_len = e.replacement.chars().count();
-                span_mappings.push(ReplacementSpanMapping {
-                    raw_char_range: i..i + surface_chars.len(),
-                    processed_char_range: processed_index..processed_index + replacement_len,
-                });
                 i += surface_chars.len();
-                processed_index += replacement_len;
                 replaced = true;
                 break;
             }
         }
         if !replaced {
             out.push(chars[i]);
-            span_mappings.push(ReplacementSpanMapping {
-                raw_char_range: i..i + 1,
-                processed_char_range: processed_index..processed_index + 1,
-            });
             i += 1;
-            processed_index += 1;
         }
     }
-    ReplacementOutput {
-        text: out,
-        span_mappings,
-    }
+    out
 }
 
 /// 辞書エントリを追加または置換する。
@@ -250,49 +211,6 @@ mod tests {
         assert_eq!(out, "bar baz bar");
         assert_eq!(entries[0].hit, 2); // foo replaced twice
         assert_eq!(entries[1].hit, 2); // bar appeared once, plus previous 1
-    }
-
-    /// 辞書適用時に元文字列と変換後文字列の位置対応を保持できる
-    #[test]
-    fn replacement_output_keeps_span_mappings() {
-        let mut entries = vec![WordEntry {
-            surface: "テスト".into(),
-            replacement: "test".into(),
-            hit: 0,
-        }];
-
-        let out = apply_replacements_with_mappings("これはテストです", &mut entries);
-
-        assert_eq!(out.text, "これはtestです");
-        assert_eq!(
-            out.span_mappings,
-            vec![
-                ReplacementSpanMapping {
-                    raw_char_range: 0..1,
-                    processed_char_range: 0..1,
-                },
-                ReplacementSpanMapping {
-                    raw_char_range: 1..2,
-                    processed_char_range: 1..2,
-                },
-                ReplacementSpanMapping {
-                    raw_char_range: 2..3,
-                    processed_char_range: 2..3,
-                },
-                ReplacementSpanMapping {
-                    raw_char_range: 3..6,
-                    processed_char_range: 3..7,
-                },
-                ReplacementSpanMapping {
-                    raw_char_range: 6..7,
-                    processed_char_range: 7..8,
-                },
-                ReplacementSpanMapping {
-                    raw_char_range: 7..8,
-                    processed_char_range: 8..9,
-                },
-            ]
-        );
     }
 
     /// 全てのエントリが置換対象になる

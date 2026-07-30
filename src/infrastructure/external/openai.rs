@@ -3,12 +3,14 @@
 //! multipart/form-data で転写エンドポイントに送信します。
 use crate::application::AudioData;
 use crate::application::TranscriptionEvent;
-use crate::domain::transcription::{TranscriptionOutput, TranscriptionToken};
+use crate::domain::transcription::TranscriptionOutput;
 use crate::utils::config::{EnvConfig, TranscriptionConfig};
 use crate::utils::profiling;
 use reqwest::{Client, Proxy, multipart};
 use serde::Deserialize;
 use tokio::sync::mpsc;
+
+const GPT_TRANSCRIBE_MODEL: &str = "gpt-transcribe";
 
 #[derive(Debug, thiserror::Error)]
 pub enum OpenAiError {
@@ -45,8 +47,6 @@ pub enum OpenAiError {
 #[derive(Debug, Deserialize)]
 struct TranscriptionResponse {
     pub text: String,
-    #[serde(default)]
-    pub logprobs: Vec<TokenLogprobResponse>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,8 +57,6 @@ struct StreamingDeltaResponse {
 #[derive(Debug, Deserialize)]
 struct StreamingCompletedResponse {
     pub text: String,
-    #[serde(default)]
-    pub logprobs: Vec<TokenLogprobResponse>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,13 +65,6 @@ struct StreamingEventEnvelope {
     pub event_type: Option<String>,
     pub delta: Option<String>,
     pub text: Option<String>,
-    pub logprobs: Option<Vec<TokenLogprobResponse>>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct TokenLogprobResponse {
-    pub token: String,
-    pub logprob: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -82,17 +73,9 @@ enum StreamingTranscriptionEvent {
     Completed(TranscriptionOutput),
 }
 
-/// Dictionary suggestion (surface -> replacement)
-#[derive(Debug, Deserialize)]
-pub struct WordSuggestion {
-    pub surface: String,
-    pub replacement: String,
-}
-
 /// OpenAI API client
 pub struct OpenAiClient {
     api_key: String,
-    model: String,
     client: reqwest::Client,
 }
 
@@ -106,15 +89,10 @@ impl OpenAiClient {
     /// Create a new OpenAI client from transcription config
     pub fn from_config(config: &TranscriptionConfig) -> Result<Self, OpenAiError> {
         let api_key = config.api_key.clone().ok_or(OpenAiError::MissingApiKey)?;
-        let model = config.model.clone();
 
         let client = build_http_client().map_err(OpenAiError::HttpClientBuild)?;
 
-        Ok(Self {
-            api_key,
-            model,
-            client,
-        })
+        Ok(Self { api_key, client })
     }
 
     /// AudioDataから直接転写を実行
@@ -122,16 +100,6 @@ impl OpenAiClient {
         &self,
         audio_data: AudioData,
     ) -> Result<TranscriptionOutput, OpenAiError> {
-        self.transcribe_audio_with_model(audio_data, None).await
-    }
-
-    /// AudioDataから指定モデルで転写を実行
-    pub async fn transcribe_audio_with_model(
-        &self,
-        audio_data: AudioData,
-        model: Option<&str>,
-    ) -> Result<TranscriptionOutput, OpenAiError> {
-        let model = model.unwrap_or(&self.model);
         if profiling::enabled() {
             profiling::log_point(
                 "openai.request",
@@ -139,7 +107,7 @@ impl OpenAiClient {
                     "bytes={} mime={} model={}",
                     audio_data.bytes.len(),
                     audio_data.mime_type,
-                    model
+                    GPT_TRANSCRIBE_MODEL
                 ),
             );
         }
@@ -150,7 +118,7 @@ impl OpenAiClient {
             .map_err(OpenAiError::Multipart)?;
 
         // 既存の転写処理を実行
-        self.transcribe_with_part(part, None, model).await
+        self.transcribe_with_part(part).await
     }
 
     /// AudioDataから直接ストリーミング転写を実行
@@ -159,18 +127,6 @@ impl OpenAiClient {
         audio_data: AudioData,
         event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
     ) -> Result<TranscriptionOutput, OpenAiError> {
-        self.transcribe_audio_streaming_with_model(audio_data, None, event_tx)
-            .await
-    }
-
-    /// AudioDataから指定モデルでストリーミング転写を実行
-    pub async fn transcribe_audio_streaming_with_model(
-        &self,
-        audio_data: AudioData,
-        model: Option<&str>,
-        event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
-    ) -> Result<TranscriptionOutput, OpenAiError> {
-        let model = model.unwrap_or(&self.model);
         if profiling::enabled() {
             profiling::log_point(
                 "openai.streaming_request",
@@ -178,7 +134,7 @@ impl OpenAiClient {
                     "bytes={} mime={} model={}",
                     audio_data.bytes.len(),
                     audio_data.mime_type,
-                    model
+                    GPT_TRANSCRIBE_MODEL
                 ),
             );
         }
@@ -188,34 +144,23 @@ impl OpenAiClient {
             .mime_str(audio_data.mime_type)
             .map_err(OpenAiError::Multipart)?;
 
-        self.transcribe_streaming_with_part(part, None, model, event_tx)
-            .await
+        self.transcribe_streaming_with_part(part, event_tx).await
     }
 
     /// 共通の転写処理
     async fn transcribe_with_part(
         &self,
         file_part: multipart::Part,
-        prompt: Option<&str>,
-        model: &str,
     ) -> Result<TranscriptionOutput, OpenAiError> {
         let overall_timer = profiling::Timer::start("openai.transcribe_total");
         let url = "https://api.openai.com/v1/audio/transcriptions";
 
         // multipart/form-data
-        let mut form = multipart::Form::new()
+        let form = multipart::Form::new()
             .part("file", file_part)
-            .text("model", model.to_string())
-            .text("language", "ja")
-            .text("include[]", "logprobs");
-
-        if let Some(prompt_text) = prompt {
-            let formatted_prompt = format!(
-                "The following text provides relevant context. Please consider this when creating the transcription: {:?}",
-                prompt_text
-            );
-            form = form.text("prompt", formatted_prompt);
-        }
+            .text("model", GPT_TRANSCRIBE_MODEL)
+            .text("languages[]", "ja")
+            .text("response_format", "json");
 
         // 送信
         let request = self
@@ -259,36 +204,23 @@ impl OpenAiClient {
         } else {
             overall_timer.log();
         }
-        Ok(TranscriptionOutput {
-            text: transcription.text,
-            tokens: map_logprobs(transcription.logprobs),
-        })
+        Ok(TranscriptionOutput::from_text(transcription.text))
     }
 
     async fn transcribe_streaming_with_part(
         &self,
         file_part: multipart::Part,
-        prompt: Option<&str>,
-        model: &str,
         event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
     ) -> Result<TranscriptionOutput, OpenAiError> {
         let overall_timer = profiling::Timer::start("openai.streaming_transcribe_total");
         let url = "https://api.openai.com/v1/audio/transcriptions";
 
-        let mut form = multipart::Form::new()
+        let form = multipart::Form::new()
             .part("file", file_part)
-            .text("model", model.to_string())
-            .text("language", "ja")
-            .text("stream", "true")
-            .text("include[]", "logprobs");
-
-        if let Some(prompt_text) = prompt {
-            let formatted_prompt = format!(
-                "The following text provides relevant context. Please consider this when creating the transcription: {:?}",
-                prompt_text
-            );
-            form = form.text("prompt", formatted_prompt);
-        }
+            .text("model", GPT_TRANSCRIBE_MODEL)
+            .text("languages[]", "ja")
+            .text("response_format", "json")
+            .text("stream", "true");
 
         let send_timer = profiling::Timer::start("openai.streaming_send");
         let mut response = self
@@ -438,31 +370,18 @@ fn parse_streaming_frame(frame: &[u8]) -> Result<Option<StreamingTranscriptionEv
         },
         "transcript.text.done" => match envelope.text {
             Some(text) => Ok(Some(StreamingTranscriptionEvent::Completed(
-                TranscriptionOutput {
-                    text,
-                    tokens: map_logprobs(envelope.logprobs.unwrap_or_default()),
-                },
+                TranscriptionOutput::from_text(text),
             ))),
             None => {
                 let payload: StreamingCompletedResponse =
                     serde_json::from_str(&data).map_err(OpenAiError::StreamingCompletion)?;
                 Ok(Some(StreamingTranscriptionEvent::Completed(
-                    TranscriptionOutput {
-                        text: payload.text,
-                        tokens: map_logprobs(payload.logprobs),
-                    },
+                    TranscriptionOutput::from_text(payload.text),
                 )))
             }
         },
         _ => Ok(None),
     }
-}
-
-fn map_logprobs(logprobs: Vec<TokenLogprobResponse>) -> Vec<TranscriptionToken> {
-    logprobs
-        .into_iter()
-        .map(|token| TranscriptionToken::new(token.token, token.logprob))
-        .collect()
 }
 
 fn find_frame_separator(buffer: &[u8]) -> Option<(usize, usize)> {
@@ -720,32 +639,6 @@ mod tests {
                     "こんにちは".to_string(),
                 )),
             ]
-        );
-    }
-
-    /// 完了イベントにlogprobsが含まれる場合はトークン情報へ変換できる
-    #[test]
-    fn streaming_completion_maps_logprobs_to_tokens() {
-        let body = concat!(
-            "data: {\"type\":\"transcript.text.done\",\"text\":\"こんにちは\",\"logprobs\":[",
-            "{\"token\":\"こん\",\"logprob\":-0.2},",
-            "{\"token\":\"にちは\",\"logprob\":-0.7}",
-            "]}\n\n"
-        );
-
-        let events = parse_streaming_events(body).expect("stream should parse");
-
-        assert_eq!(
-            events,
-            vec![StreamingTranscriptionEvent::Completed(
-                TranscriptionOutput {
-                    text: "こんにちは".to_string(),
-                    tokens: vec![
-                        TranscriptionToken::new("こん", -0.2),
-                        TranscriptionToken::new("にちは", -0.7),
-                    ],
-                }
-            )]
         );
     }
 }

@@ -157,11 +157,9 @@ fn spawn_push_to_talk_if_enabled(
                     let response = command_handler
                         .borrow()
                         .handle(IpcCmd::Start {
-                            prompt: None,
                             save_audio_path: None,
                             max_duration_secs: None,
                             transcription_provider: None,
-                            transcription_model: None,
                         })
                         .await;
 

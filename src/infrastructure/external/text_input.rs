@@ -140,23 +140,3 @@ pub async fn replace_suffix_continuous(
     )
     .await
 }
-
-/// 直近に入力したテキスト範囲を相対位置で選択する
-pub async fn select_recent_range(
-    trailing_char_count: usize,
-    char_count: usize,
-) -> Result<(), TextInputWorkerError> {
-    run_with_recovery(
-        "text_input.worker_select_recent_range",
-        format!(
-            "trailing_char_count={} char_count={}",
-            trailing_char_count, char_count
-        ),
-        |handle| async move {
-            handle
-                .select_recent_range(trailing_char_count, char_count)
-                .await
-        },
-    )
-    .await
-}

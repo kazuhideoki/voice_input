@@ -201,9 +201,7 @@ mod tests {
 
     fn client_options() -> TranscriptionClientOptions {
         TranscriptionClientOptions {
-            language: "ja".to_string(),
             provider: TranscriptionProvider::MlxQwen3Asr,
-            model: None,
         }
     }
 

@@ -1,110 +1,63 @@
 use voice_input::ipc::IpcCmd;
 
-/// プロンプトが省略された旧形式でもデシリアライズできる
+/// Startの任意フィールドを全て省略しても既定値で復元できる
 #[test]
-fn backward_compatibility_without_prompt() {
-    // prompt が省略された旧形式でも受け付ける
-    let old_json = r#"{"Start":{}}"#;
+fn start_defaults_omitted_optional_fields() {
+    let command: IpcCmd = serde_json::from_str(r#"{"Start":{}}"#).unwrap();
 
-    let result = serde_json::from_str::<IpcCmd>(old_json);
-    assert!(result.is_ok(), "Expected deserialization to succeed");
-}
-
-/// 保存パスが省略された旧形式でもデシリアライズできる
-#[test]
-fn backward_compatibility_without_audio_save_path() {
-    let old_json = r#"{"Start":{"prompt":"test"}}"#;
-
-    let cmd: IpcCmd = serde_json::from_str(old_json).unwrap();
-
-    match cmd {
+    assert_eq!(
+        command,
         IpcCmd::Start {
-            save_audio_path, ..
-        } => {
-            assert_eq!(save_audio_path, None);
+            save_audio_path: None,
+            max_duration_secs: None,
+            transcription_provider: None,
         }
-        _ => panic!("Expected Start command"),
-    }
+    );
 }
 
-/// 最大録音秒数が省略された旧形式でもデシリアライズできる
+/// Toggleの任意フィールドを全て省略しても既定値で復元できる
 #[test]
-fn backward_compatibility_without_max_duration_secs() {
-    let old_json = r#"{"Start":{"prompt":"test"}}"#;
+fn toggle_defaults_omitted_optional_fields() {
+    let command: IpcCmd = serde_json::from_str(r#"{"Toggle":{}}"#).unwrap();
 
-    let cmd: IpcCmd = serde_json::from_str(old_json).unwrap();
+    assert_eq!(
+        command,
+        IpcCmd::Toggle {
+            save_audio_path: None,
+            max_duration_secs: None,
+            transcription_provider: None,
+        }
+    );
+}
 
-    match cmd {
+/// 未知フィールドがあっても既知フィールドは復元できる
+#[test]
+fn unknown_fields_are_ignored() {
+    let json = r#"{"Start":{"future_field":"ignored","max_duration_secs":90}}"#;
+    let command: IpcCmd = serde_json::from_str(json).unwrap();
+
+    assert_eq!(
+        command,
         IpcCmd::Start {
-            max_duration_secs, ..
-        } => {
-            assert_eq!(max_duration_secs, None);
+            save_audio_path: None,
+            max_duration_secs: Some(90),
+            transcription_provider: None,
         }
-        _ => panic!("Expected Start command"),
-    }
+    );
 }
 
-/// 旧クライアント由来の余計なフィールドを無視して受け入れる
+/// 引数を持たないコマンドも従来のJSON表現から復元できる
 #[test]
-fn backward_compatibility_with_extra_fields() {
-    // 旧クライアントのフィールドが混在しても無視される
-    let json_with_extra = r#"{"Start":{"paste":true,"prompt":"test","direct_input":false}}"#;
-    let cmd: IpcCmd = serde_json::from_str(json_with_extra).unwrap();
-
-    match cmd {
-        IpcCmd::Start { prompt, .. } => {
-            assert_eq!(prompt, Some("test".to_string()));
-        }
-        _ => panic!("Expected Start command"),
-    }
-}
-
-/// Toggleコマンドが余計なフィールドを含んでも受け付ける
-#[test]
-fn toggle_accepts_extra_fields() {
-    // Test Toggle command compatibility with extra fields
-    let old_json = r#"{"Toggle":{"paste":false,"prompt":null,"direct_input":true}}"#;
-
-    let result = serde_json::from_str::<IpcCmd>(old_json);
-    assert!(result.is_ok(), "Expected deserialization to succeed");
-}
-
-/// 他のコマンドは従来通りデシリアライズできる
-#[test]
-fn other_commands_remain_compatible() {
-    // Test that other commands work as before
+fn unit_commands_deserialize_from_json() {
     let commands = vec![
-        (r#"{"Stop":null}"#, "Stop"),
-        (r#"{"Status":null}"#, "Status"),
-        (r#"{"History":null}"#, "History"),
-        (r#"{"Health":null}"#, "Health"),
-        (r#"{"ListDevices":null}"#, "ListDevices"),
+        (r#"{"Stop":null}"#, IpcCmd::Stop),
+        (r#"{"Status":null}"#, IpcCmd::Status),
+        (r#"{"History":null}"#, IpcCmd::History),
+        (r#"{"Health":null}"#, IpcCmd::Health),
+        (r#"{"ListDevices":null}"#, IpcCmd::ListDevices),
     ];
 
     for (json, expected) in commands {
-        let cmd: IpcCmd = serde_json::from_str(json).unwrap();
-        let variant_name = match cmd {
-            IpcCmd::Stop => "Stop",
-            IpcCmd::Status => "Status",
-            IpcCmd::History => "History",
-            IpcCmd::Health => "Health",
-            IpcCmd::ListDevices => "ListDevices",
-            _ => "Unknown",
-        };
-        assert_eq!(variant_name, expected);
+        assert_eq!(serde_json::from_str::<IpcCmd>(json).unwrap(), expected);
     }
-}
-
-/// 未知フィールドがあっても前方互換で無視される
-#[test]
-fn forward_compatibility_ignores_unknown_fields() {
-    // Test that extra fields in JSON are ignored (forward compatibility)
-    let json_with_extra = r#"{"Start":{"prompt":"test","future_field":"ignored"}}"#;
-
-    // serde by default ignores unknown fields, so this should work
-    let result = serde_json::from_str::<IpcCmd>(json_with_extra);
-    assert!(
-        result.is_ok(),
-        "Should ignore unknown fields for forward compatibility"
-    );
 }

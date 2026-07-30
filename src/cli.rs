@@ -18,9 +18,6 @@ pub struct Cli {
 pub enum Cmd {
     /// 録音開始
     Start {
-        /// Whisper へ追加のプロンプト
-        #[arg(long)]
-        prompt: Option<String>,
         /// 録音後の音声データを指定パスへ保存
         #[arg(long, value_name = "PATH")]
         save_audio: Option<PathBuf>,
@@ -30,19 +27,14 @@ pub enum Cmd {
         /// デバッグ用にマイク入力の代わりへ流すWAVファイル
         #[arg(long, value_name = "PATH")]
         input_file: Option<PathBuf>,
-        /// 転写バックエンド（4o/realtime-whisper/mlx-qwen3-asr）
+        /// 転写バックエンド（gpt-transcribe/realtime-whisper/mlx-qwen3-asr）
         #[arg(long, value_name = "PROVIDER", value_parser = parse_transcription_provider)]
         transcription_provider: Option<TranscriptionProvider>,
-        /// 4o 転写モデル（gpt-4o-transcribe/gpt-4o-mini-transcribe）
-        #[arg(long, value_name = "MODEL", value_parser = parse_transcription_model)]
-        transcription_model: Option<String>,
     },
     /// 録音停止
     Stop,
     /// 録音開始 / 停止トグル
     Toggle {
-        #[arg(long)]
-        prompt: Option<String>,
         /// 録音後の音声データを指定パスへ保存
         #[arg(long, value_name = "PATH")]
         save_audio: Option<PathBuf>,
@@ -52,12 +44,9 @@ pub enum Cmd {
         /// デバッグ用にマイク入力の代わりへ流すWAVファイル
         #[arg(long, value_name = "PATH")]
         input_file: Option<PathBuf>,
-        /// 転写バックエンド（4o/realtime-whisper/mlx-qwen3-asr）
+        /// 転写バックエンド（gpt-transcribe/realtime-whisper/mlx-qwen3-asr）
         #[arg(long, value_name = "PROVIDER", value_parser = parse_transcription_provider)]
         transcription_provider: Option<TranscriptionProvider>,
-        /// 4o 転写モデル（gpt-4o-transcribe/gpt-4o-mini-transcribe）
-        #[arg(long, value_name = "MODEL", value_parser = parse_transcription_model)]
-        transcription_model: Option<String>,
     },
     /// デーモン状態取得
     Status,
@@ -114,13 +103,6 @@ pub enum ConfigField {
 
 fn parse_transcription_provider(value: &str) -> Result<TranscriptionProvider, String> {
     TranscriptionProvider::parse(value).map_err(|error| error.to_string())
-}
-
-fn parse_transcription_model(value: &str) -> Result<String, String> {
-    TranscriptionProvider::OpenAi4o
-        .validate_model(value)
-        .map(|()| value.to_string())
-        .map_err(|error| error.to_string())
 }
 
 fn parse_max_duration_secs_arg(value: &str) -> Result<u64, String> {

@@ -38,20 +38,14 @@ pub enum IpcCmd {
     /// 録音開始
     Start {
         #[serde(default)]
-        prompt: Option<String>,
-        #[serde(default)]
         save_audio_path: Option<PathBuf>,
         #[serde(default)]
         max_duration_secs: Option<u64>,
         #[serde(default)]
         transcription_provider: Option<TranscriptionProvider>,
-        #[serde(default)]
-        transcription_model: Option<String>,
     },
     /// ファイル入力で録音開始
     StartWithInputFile {
-        #[serde(default)]
-        prompt: Option<String>,
         #[serde(default)]
         save_audio_path: Option<PathBuf>,
         #[serde(default)]
@@ -59,28 +53,20 @@ pub enum IpcCmd {
         input_file_path: PathBuf,
         #[serde(default)]
         transcription_provider: Option<TranscriptionProvider>,
-        #[serde(default)]
-        transcription_model: Option<String>,
     },
     /// 録音停止
     Stop,
     /// 録音トグル
     Toggle {
         #[serde(default)]
-        prompt: Option<String>,
-        #[serde(default)]
         save_audio_path: Option<PathBuf>,
         #[serde(default)]
         max_duration_secs: Option<u64>,
         #[serde(default)]
         transcription_provider: Option<TranscriptionProvider>,
-        #[serde(default)]
-        transcription_model: Option<String>,
     },
     /// ファイル入力で録音開始 / 停止トグル
     ToggleWithInputFile {
-        #[serde(default)]
-        prompt: Option<String>,
         #[serde(default)]
         save_audio_path: Option<PathBuf>,
         #[serde(default)]
@@ -88,8 +74,6 @@ pub enum IpcCmd {
         input_file_path: PathBuf,
         #[serde(default)]
         transcription_provider: Option<TranscriptionProvider>,
-        #[serde(default)]
-        transcription_model: Option<String>,
     },
     /// ステータス取得
     Status,
@@ -360,27 +344,19 @@ mod tests {
         assert_eq!(audio_data.bytes, vec![5, 6, 7, 8]);
     }
 
-    /// IpcCmd/IpcRespがJSONで互換性を保つ
+    /// IpcCmd/IpcRespがJSONで往復できる
     #[test]
     fn ipc_cmd_and_resp_roundtrip() {
-        // Test that existing IPC commands still work
         let cmd = IpcCmd::Start {
-            prompt: Some("test prompt".to_string()),
             save_audio_path: None,
             max_duration_secs: None,
             transcription_provider: None,
-            transcription_model: None,
         };
 
         let json = serde_json::to_string(&cmd).unwrap();
         let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
 
-        match deserialized {
-            IpcCmd::Start { prompt, .. } => {
-                assert_eq!(prompt, Some("test prompt".to_string()));
-            }
-            _ => panic!("Expected Start command"),
-        }
+        assert_eq!(deserialized, cmd);
 
         // Test IpcResp compatibility
         let resp = IpcResp {
@@ -395,40 +371,29 @@ mod tests {
         assert_eq!(deserialized.msg, "Success");
     }
 
-    /// 既存IPCコマンドが後方互換で動作する
+    /// 対応するIPCコマンドをJSONへ変換できる
     #[test]
-    fn ipc_commands_remain_backward_compatible() {
-        // 既存のIPCコマンドが引き続き動作することを確認
+    fn supported_ipc_commands_serialize() {
         let cmd = IpcCmd::Start {
-            prompt: None,
             save_audio_path: None,
             max_duration_secs: None,
             transcription_provider: None,
-            transcription_model: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("Start"));
 
-        // 他の既存コマンドも確認
         let cmd = IpcCmd::Stop;
         let json = serde_json::to_string(&cmd).unwrap();
         let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
         assert!(matches!(deserialized, IpcCmd::Stop));
 
         let cmd = IpcCmd::Toggle {
-            prompt: Some("test".to_string()),
             save_audio_path: None,
             max_duration_secs: None,
             transcription_provider: None,
-            transcription_model: None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let deserialized: IpcCmd = serde_json::from_str(&json).unwrap();
-        match deserialized {
-            IpcCmd::Toggle { prompt, .. } => {
-                assert_eq!(prompt, Some("test".to_string()));
-            }
-            _ => panic!("Expected Toggle command"),
-        }
+        assert_eq!(deserialized, cmd);
     }
 }
