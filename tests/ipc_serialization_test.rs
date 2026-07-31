@@ -27,7 +27,7 @@ fn ipc_commands_roundtrip_via_json() {
             save_audio_path: None,
             max_duration_secs: None,
             input_file_path: PathBuf::from("/tmp/sample.wav"),
-            transcription_provider: Some(TranscriptionProvider::RealtimeWhisper),
+            transcription_provider: Some(TranscriptionProvider::GptLiveTranscribe),
         },
         IpcCmd::Stop,
         IpcCmd::Status,
@@ -106,17 +106,25 @@ fn start_command_preserves_gpt_transcribe_provider() {
     assert_eq!(serde_json::from_str::<IpcCmd>(&json).unwrap(), command);
 }
 
-/// Realtime Whisperプロバイダ指定をJSON文字列で保持する
+/// GPT Live Transcribeプロバイダ指定をJSON文字列で保持する
 #[test]
-fn start_command_preserves_realtime_whisper_provider() {
+fn start_command_preserves_gpt_live_transcribe_provider() {
     let command = IpcCmd::Start {
         save_audio_path: None,
         max_duration_secs: None,
-        transcription_provider: Some(TranscriptionProvider::RealtimeWhisper),
+        transcription_provider: Some(TranscriptionProvider::GptLiveTranscribe),
     };
 
     let json = serde_json::to_string(&command).unwrap();
 
-    assert!(json.contains(r#""transcription_provider":"realtime-whisper""#));
+    assert!(json.contains(r#""transcription_provider":"gpt-live-transcribe""#));
     assert_eq!(serde_json::from_str::<IpcCmd>(&json).unwrap(), command);
+}
+
+/// 廃止したRealtime Whisperプロバイダを含むIPCは拒否する
+#[test]
+fn ipc_rejects_removed_realtime_whisper_provider() {
+    let json = r#"{"Start":{"save_audio_path":null,"max_duration_secs":null,"transcription_provider":"realtime-whisper"}}"#;
+
+    assert!(serde_json::from_str::<IpcCmd>(json).is_err());
 }

@@ -1,4 +1,4 @@
-//! OpenAI Realtime transcription adapter for `gpt-realtime-whisper`.
+//! OpenAI Realtime transcription adapter for `gpt-live-transcribe`.
 
 use base64::Engine;
 use futures::{Sink, SinkExt, Stream, StreamExt};
@@ -25,8 +25,9 @@ use crate::utils::profiling;
 
 const OPENAI_REALTIME_TRANSCRIPTION_URL: &str =
     "wss://api.openai.com/v1/realtime?intent=transcription";
-const REALTIME_WHISPER_MODEL: &str = "gpt-realtime-whisper";
+const GPT_LIVE_TRANSCRIBE_MODEL: &str = "gpt-live-transcribe";
 const TRANSCRIPTION_LANGUAGE: &str = "ja";
+const TRANSCRIPTION_DELAY: &str = "low";
 const REALTIME_SAMPLE_RATE: u32 = 24_000;
 const APPEND_CHUNK_MS: usize = 100;
 const APPEND_CHUNK_BYTES: usize = REALTIME_SAMPLE_RATE as usize * 2 * APPEND_CHUNK_MS / 1000;
@@ -38,12 +39,12 @@ const READY_TIMEOUT: Duration = Duration::from_secs(25);
 const OPENAI_SAFETY_IDENTIFIER: HeaderName = HeaderName::from_static("openai-safety-identifier");
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RealtimeWhisperConfig {
+pub struct GptLiveTranscribeConfig {
     api_key: String,
 }
 
-impl RealtimeWhisperConfig {
-    /// 転写設定から Realtime Whisper 設定を作成する。
+impl GptLiveTranscribeConfig {
+    /// 転写設定から GPT Live Transcribe 設定を作成する。
     pub fn from_transcription_config(config: &TranscriptionConfig) -> Result<Self> {
         let api_key = config.api_key.clone().ok_or_else(|| {
             VoiceInputError::from(TranscriptionClientError::Initialization {
@@ -55,8 +56,8 @@ impl RealtimeWhisperConfig {
     }
 }
 
-/// 実行中の Realtime Whisper セッション。
-pub struct RealtimeWhisperSessionHandle {
+/// 実行中の GPT Live Transcribe セッション。
+pub struct GptLiveTranscribeSessionHandle {
     frame_tx: mpsc::UnboundedSender<AudioFrame>,
     stop_tx: Option<oneshot::Sender<()>>,
     ready_rx: Option<oneshot::Receiver<Result<()>>>,
@@ -64,7 +65,7 @@ pub struct RealtimeWhisperSessionHandle {
     task: JoinHandle<()>,
 }
 
-impl RealtimeWhisperSessionHandle {
+impl GptLiveTranscribeSessionHandle {
     /// セッションへ録音中 PCM フレームを送るための sender。
     pub fn frame_tx(&self) -> mpsc::UnboundedSender<AudioFrame> {
         self.frame_tx.clone()
@@ -79,13 +80,13 @@ impl RealtimeWhisperSessionHandle {
         match tokio::time::timeout(READY_TIMEOUT, &mut ready_rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(error)) => Err(request_error(&format!(
-                "realtime-whisper ready signal was cancelled: {}",
+                "gpt-live-transcribe ready signal was cancelled: {}",
                 error
             ))),
             Err(_) => {
                 self.task.abort();
                 Err(request_error(
-                    "realtime-whisper session was not ready within 25s",
+                    "gpt-live-transcribe session was not ready within 25s",
                 ))
             }
         }
@@ -105,12 +106,15 @@ impl RealtimeWhisperSessionHandle {
         match tokio::time::timeout(FINISH_TIMEOUT, &mut self.result_rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(error)) => Err(VoiceInputError::from(TranscriptionClientError::Request {
-                message: format!("realtime-whisper session ended without result: {}", error),
+                message: format!(
+                    "gpt-live-transcribe session ended without result: {}",
+                    error
+                ),
             })),
             Err(_) => {
                 self.task.abort();
                 Err(request_error(
-                    "realtime-whisper session did not finish within 45s after stop",
+                    "gpt-live-transcribe session did not finish within 45s after stop",
                 ))
             }
         }
@@ -122,17 +126,17 @@ impl RealtimeWhisperSessionHandle {
     }
 }
 
-impl Drop for RealtimeWhisperSessionHandle {
+impl Drop for GptLiveTranscribeSessionHandle {
     fn drop(&mut self) {
         self.task.abort();
     }
 }
 
-/// Realtime Whisper セッションをバックグラウンドで開始する。
-pub fn spawn_realtime_whisper_session(
-    config: RealtimeWhisperConfig,
+/// GPT Live Transcribe セッションをバックグラウンドで開始する。
+pub fn spawn_gpt_live_transcribe_session(
+    config: GptLiveTranscribeConfig,
     event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
-) -> RealtimeWhisperSessionHandle {
+) -> GptLiveTranscribeSessionHandle {
     let (frame_tx, frame_rx) = mpsc::unbounded_channel();
     let (stop_tx, stop_rx) = oneshot::channel();
     let (ready_tx, ready_rx) = oneshot::channel();
@@ -140,11 +144,11 @@ pub fn spawn_realtime_whisper_session(
 
     let task = tokio::task::spawn_local(async move {
         let result =
-            run_realtime_whisper_session(config, frame_rx, stop_rx, event_tx, ready_tx).await;
+            run_gpt_live_transcribe_session(config, frame_rx, stop_rx, event_tx, ready_tx).await;
         let _ = result_tx.send(result);
     });
 
-    RealtimeWhisperSessionHandle {
+    GptLiveTranscribeSessionHandle {
         frame_tx,
         stop_tx: Some(stop_tx),
         ready_rx: Some(ready_rx),
@@ -153,14 +157,14 @@ pub fn spawn_realtime_whisper_session(
     }
 }
 
-async fn run_realtime_whisper_session(
-    config: RealtimeWhisperConfig,
+async fn run_gpt_live_transcribe_session(
+    config: GptLiveTranscribeConfig,
     mut frame_rx: mpsc::UnboundedReceiver<AudioFrame>,
     mut stop_rx: oneshot::Receiver<()>,
     event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
     ready_tx: oneshot::Sender<Result<()>>,
 ) -> Result<TranscriptionOutput> {
-    let overall_timer = profiling::Timer::start("realtime_whisper.session");
+    let overall_timer = profiling::Timer::start("gpt_live_transcribe.session");
     let mut ready_tx = Some(ready_tx);
     let request = match build_realtime_request(&config.api_key) {
         Ok(request) => request,
@@ -170,7 +174,7 @@ async fn run_realtime_whisper_session(
         }
     };
 
-    profiling::log_point("realtime_whisper.websocket.connecting", "");
+    profiling::log_point("gpt_live_transcribe.websocket.connecting", "");
     let (stream, _) = match tokio::time::timeout(CONNECT_TIMEOUT, connect_async(request)).await {
         Ok(Ok(value)) => value,
         Ok(Err(error)) => {
@@ -186,18 +190,18 @@ async fn run_realtime_whisper_session(
             return Err(error);
         }
     };
-    profiling::log_point("realtime_whisper.websocket.connected", "");
+    profiling::log_point("gpt_live_transcribe.websocket.connected", "");
     let (mut write, mut read) = stream.split();
 
     if let Err(error) = send_json(&mut write, build_session_update_payload()).await {
         notify_ready(&mut ready_tx, Err(request_error(&error.to_string())));
         return Err(error);
     }
-    profiling::log_point("realtime_whisper.session_update.sent", "");
+    profiling::log_point("gpt_live_transcribe.session_update.sent", "");
 
     match tokio::time::timeout(SESSION_UPDATE_TIMEOUT, wait_for_session_updated(&mut read)).await {
         Ok(Ok(())) => {
-            profiling::log_point("realtime_whisper.session_update.ack", "");
+            profiling::log_point("gpt_live_transcribe.session_update.ack", "");
             notify_ready(&mut ready_tx, Ok(()));
         }
         Ok(Err(error)) => {
@@ -245,7 +249,7 @@ async fn run_realtime_whisper_session(
                 }
                 flush_pending_audio(&mut write, &mut pending_audio, true).await?;
                 send_json(&mut write, json!({"type": "input_audio_buffer.commit"})).await?;
-                profiling::log_point("realtime_whisper.audio.commit", "");
+                profiling::log_point("gpt_live_transcribe.audio.commit", "");
                 committed = true;
                 completion_timeout.as_mut().reset(Instant::now() + COMPLETION_TIMEOUT);
                 completion_timeout_enabled = true;
@@ -298,8 +302,9 @@ fn build_session_update_payload() -> serde_json::Value {
                         "rate": REALTIME_SAMPLE_RATE,
                     },
                     "transcription": {
-                        "model": REALTIME_WHISPER_MODEL,
-                        "language": TRANSCRIPTION_LANGUAGE,
+                        "model": GPT_LIVE_TRANSCRIBE_MODEL,
+                        "languages": [TRANSCRIPTION_LANGUAGE],
+                        "delay": TRANSCRIPTION_DELAY,
                     },
                     "turn_detection": null,
                 }
@@ -567,18 +572,27 @@ mod tests {
         assert_eq!(event.text_delta().as_deref(), Some("こん"));
     }
 
-    /// Realtime API の session.update はモデルと言語を固定する
+    /// Realtime API の session.update はモデル、言語、遅延設定を固定する
     #[test]
     fn session_update_uses_fixed_model_and_language() {
         let payload = build_session_update_payload();
 
         assert_eq!(
             payload["session"]["audio"]["input"]["transcription"]["model"],
-            json!("gpt-realtime-whisper")
+            json!("gpt-live-transcribe")
         );
         assert_eq!(
-            payload["session"]["audio"]["input"]["transcription"]["language"],
-            json!("ja")
+            payload["session"]["audio"]["input"]["transcription"]["languages"],
+            json!(["ja"])
+        );
+        assert_eq!(
+            payload["session"]["audio"]["input"]["transcription"]["delay"],
+            json!("low")
+        );
+        assert!(
+            payload["session"]["audio"]["input"]["transcription"]
+                .get("language")
+                .is_none()
         );
         assert!(payload["session"].get("include").is_none());
     }

@@ -72,7 +72,7 @@ pub(crate) fn lock_test_env() -> std::sync::MutexGuard<'static, ()> {
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ConfigError {
     #[error(
-        "transcription provider '{value}' is unsupported. Supported providers: gpt-transcribe, realtime-whisper, mlx-qwen3-asr"
+        "transcription provider '{value}' is unsupported. Supported providers: gpt-transcribe, gpt-live-transcribe, mlx-qwen3-asr"
     )]
     UnsupportedTranscriptionProvider { value: String },
     #[error("VOICE_INPUT_MAX_SECS must be a positive integer: {value}")]
@@ -88,8 +88,8 @@ pub enum ConfigError {
 pub enum TranscriptionProvider {
     #[serde(rename = "gpt-transcribe")]
     GptTranscribe,
-    #[serde(rename = "realtime-whisper")]
-    RealtimeWhisper,
+    #[serde(rename = "gpt-live-transcribe")]
+    GptLiveTranscribe,
     #[serde(rename = "mlx-qwen3-asr")]
     MlxQwen3Asr,
 }
@@ -101,7 +101,7 @@ impl TranscriptionProvider {
     pub fn parse(value: &str) -> Result<Self, ConfigError> {
         match value {
             "gpt-transcribe" => Ok(Self::GptTranscribe),
-            "realtime-whisper" => Ok(Self::RealtimeWhisper),
+            "gpt-live-transcribe" => Ok(Self::GptLiveTranscribe),
             "mlx-qwen3-asr" => Ok(Self::MlxQwen3Asr),
             unsupported => Err(ConfigError::UnsupportedTranscriptionProvider {
                 value: unsupported.to_string(),
@@ -113,14 +113,14 @@ impl TranscriptionProvider {
     pub fn as_str(&self) -> &str {
         match self {
             Self::GptTranscribe => "gpt-transcribe",
-            Self::RealtimeWhisper => "realtime-whisper",
+            Self::GptLiveTranscribe => "gpt-live-transcribe",
             Self::MlxQwen3Asr => "mlx-qwen3-asr",
         }
     }
 
     /// OpenAI API キーを利用する provider かどうかを返す
     pub fn uses_openai_api(&self) -> bool {
-        matches!(self, Self::GptTranscribe | Self::RealtimeWhisper)
+        matches!(self, Self::GptTranscribe | Self::GptLiveTranscribe)
     }
 }
 
@@ -564,8 +564,8 @@ mod tests {
             TranscriptionProvider::GptTranscribe
         );
         assert_eq!(
-            TranscriptionProvider::parse("realtime-whisper").unwrap(),
-            TranscriptionProvider::RealtimeWhisper
+            TranscriptionProvider::parse("gpt-live-transcribe").unwrap(),
+            TranscriptionProvider::GptLiveTranscribe
         );
         assert_eq!(
             TranscriptionProvider::parse("mlx-qwen3-asr").unwrap(),
@@ -581,6 +581,18 @@ mod tests {
             error,
             ConfigError::UnsupportedTranscriptionProvider {
                 value: "4o".to_string(),
+            }
+        );
+    }
+
+    /// 廃止したRealtime Whisperプロバイダ名は受け付けない
+    #[test]
+    fn removed_realtime_whisper_provider_is_rejected() {
+        let error = TranscriptionProvider::parse("realtime-whisper").unwrap_err();
+        assert_eq!(
+            error,
+            ConfigError::UnsupportedTranscriptionProvider {
+                value: "realtime-whisper".to_string(),
             }
         );
     }
@@ -752,14 +764,14 @@ mod tests {
     fn default_transcription_provider_is_loaded_from_environment() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var(DEFAULT_TRANSCRIPTION_PROVIDER_ENV, "realtime-whisper");
+            std::env::set_var(DEFAULT_TRANSCRIPTION_PROVIDER_ENV, "gpt-live-transcribe");
         }
 
         let config = EnvConfig::from_env().unwrap();
 
         assert_eq!(
             config.transcription.provider,
-            TranscriptionProvider::RealtimeWhisper
+            TranscriptionProvider::GptLiveTranscribe
         );
 
         unsafe {

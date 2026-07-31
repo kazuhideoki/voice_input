@@ -11,7 +11,7 @@ Rust 製の **音声録音・文字起こし CLI / デーモン** です。
 | ---------------------------------- | ------------------------------------------------------ |
 | **高速録音トグル**                 | 1 コマンドで録音開始 / 停止を切替                      |
 | **Push-to-talk**                   | ホットキーを押している間だけ録音                       |
-| **複数転写バックエンド**           | GPT Transcribe / Realtime Whisper / `mlx-qwen3-asr`     |
+| **複数転写バックエンド**           | GPT Transcribe / GPT Live Transcribe / `mlx-qwen3-asr`  |
 | **Pre-roll**                       | 録音開始直前の音声を短く先頭へ付与                     |
 | **直接テキスト入力（デフォルト）** | カーソル位置へ直接入力                                 |
 | **Apple Music 自動ポーズ/再開**    | 録音中だけ再生を止め、終了後に戻す                     |
@@ -45,8 +45,8 @@ VOICE_INPUT_PUSH_TO_TALK_HOTKEY=opt+8
 
 `.env` はデフォルトでカレントディレクトリから読み込まれ、`VOICE_INPUT_ENV_PATH` が設定されている場合はそのパスが優先されます。
 環境変数は `src/utils/config.rs` の `EnvConfig` で起動時に一度だけ読み込まれます。
-転写バックエンドは `gpt-transcribe`、`realtime-whisper`、`mlx-qwen3-asr` から選べます。既定値は `VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER`、コマンドごとの上書きは `--transcription-provider` です。
-OpenAI 系のモデルは provider ごとに固定されます。`gpt-transcribe` は録音後の音声を GPT Transcribe へ送り、`realtime-whisper` は `gpt-realtime-whisper` で録音中に逐次入力します。`mlx-qwen3-asr` はローカルコマンドを使います。
+転写バックエンドは `gpt-transcribe`、`gpt-live-transcribe`、`mlx-qwen3-asr` から選べます。既定値は `VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER`、コマンドごとの上書きは `--transcription-provider` です。
+OpenAI 系のモデルは provider ごとに固定されます。`gpt-transcribe` は録音後の音声を GPT Transcribe へ送り、`gpt-live-transcribe` は GPT Live Transcribe で録音中に逐次入力します。`mlx-qwen3-asr` はローカルコマンドを使います。
 `VOICE_INPUT_PRE_ROLL_MS` は録音開始直前の音声を先頭へ付与する長さです。既定値は 500ms、0 で無効です。
 `VOICE_INPUT_RECORDING_SOUNDS=false` を設定すると、録音開始・停止時の効果音を無効化できます。未指定時は有効です。
 `VOICE_INPUT_PUSH_TO_TALK=true` の場合、`VOICE_INPUT_PUSH_TO_TALK_HOTKEY` を押している間だけ録音します。既定は `opt+8` です。
@@ -199,7 +199,7 @@ voice_input toggle --max-secs 90
 
 ```sh
 voice_input start --transcription-provider gpt-transcribe
-voice_input toggle --transcription-provider realtime-whisper
+voice_input toggle --transcription-provider gpt-live-transcribe
 voice_input start --transcription-provider mlx-qwen3-asr
 ```
 

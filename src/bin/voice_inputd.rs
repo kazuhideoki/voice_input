@@ -89,7 +89,7 @@ async fn async_main() -> Result<()> {
     spawn_runtime_recovery_monitor(recording_service.clone(), command_handler.clone());
     command_handler
         .borrow()
-        .warm_realtime_whisper_session_if_enabled();
+        .warm_gpt_live_transcribe_session_if_enabled();
     let _push_to_talk_monitor = match spawn_push_to_talk_if_enabled(
         command_handler.clone(),
         recording_service.clone(),
@@ -226,7 +226,7 @@ fn spawn_runtime_recovery_monitor(
                         recovered = true;
                         command_handler
                             .borrow()
-                            .reset_ready_realtime_whisper_session();
+                            .reset_ready_gpt_live_transcribe_session();
                         println!("Recovered runtime resources after wake.");
                         break;
                     }

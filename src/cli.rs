@@ -27,7 +27,7 @@ pub enum Cmd {
         /// デバッグ用にマイク入力の代わりへ流すWAVファイル
         #[arg(long, value_name = "PATH")]
         input_file: Option<PathBuf>,
-        /// 転写バックエンド（gpt-transcribe/realtime-whisper/mlx-qwen3-asr）
+        /// 転写バックエンド（gpt-transcribe/gpt-live-transcribe/mlx-qwen3-asr）
         #[arg(long, value_name = "PROVIDER", value_parser = parse_transcription_provider)]
         transcription_provider: Option<TranscriptionProvider>,
     },
@@ -44,7 +44,7 @@ pub enum Cmd {
         /// デバッグ用にマイク入力の代わりへ流すWAVファイル
         #[arg(long, value_name = "PATH")]
         input_file: Option<PathBuf>,
-        /// 転写バックエンド（gpt-transcribe/realtime-whisper/mlx-qwen3-asr）
+        /// 転写バックエンド（gpt-transcribe/gpt-live-transcribe/mlx-qwen3-asr）
         #[arg(long, value_name = "PROVIDER", value_parser = parse_transcription_provider)]
         transcription_provider: Option<TranscriptionProvider>,
     },

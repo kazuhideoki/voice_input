@@ -1,7 +1,7 @@
+pub mod gpt_live_transcribe_adapter;
 pub mod mlx_qwen3_asr_adapter;
 pub mod openai;
 pub mod openai_adapter;
-pub mod realtime_whisper_adapter;
 pub mod recording_hud;
 pub mod routing_transcription_adapter;
 pub mod sound;

@@ -55,9 +55,9 @@ impl TranscriptionClient for RoutingTranscriptionAdapter {
     ) -> Result<TranscriptionOutput> {
         match options.provider {
             TranscriptionProvider::GptTranscribe => self.openai()?.transcribe(audio, options).await,
-            TranscriptionProvider::RealtimeWhisper => {
+            TranscriptionProvider::GptLiveTranscribe => {
                 Err(VoiceInputError::from(TranscriptionClientError::Request {
-                    message: "realtime-whisper requires live audio frame streaming".to_string(),
+                    message: "gpt-live-transcribe requires live audio frame streaming".to_string(),
                 }))
             }
             TranscriptionProvider::MlxQwen3Asr => {
@@ -78,9 +78,9 @@ impl TranscriptionClient for RoutingTranscriptionAdapter {
                     .transcribe_streaming(audio, options, event_tx)
                     .await
             }
-            TranscriptionProvider::RealtimeWhisper => {
+            TranscriptionProvider::GptLiveTranscribe => {
                 Err(VoiceInputError::from(TranscriptionClientError::Request {
-                    message: "realtime-whisper requires live audio frame streaming".to_string(),
+                    message: "gpt-live-transcribe requires live audio frame streaming".to_string(),
                 }))
             }
             TranscriptionProvider::MlxQwen3Asr => {

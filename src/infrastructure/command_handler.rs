@@ -24,8 +24,9 @@ use crate::error::{Result, VoiceInputError};
 use crate::infrastructure::{
     audio::{AudioBackend, CpalAudioBackend},
     external::{
-        realtime_whisper_adapter::{
-            RealtimeWhisperConfig, RealtimeWhisperSessionHandle, spawn_realtime_whisper_session,
+        gpt_live_transcribe_adapter::{
+            GptLiveTranscribeConfig, GptLiveTranscribeSessionHandle,
+            spawn_gpt_live_transcribe_session,
         },
         recording_hud::{self, HudState},
         sound::{play_start_sound, play_stop_sound, resume_apple_music},
@@ -49,14 +50,14 @@ pub struct TranscriptionMessage {
 }
 
 struct PreparedRealtimeSession {
-    session: RealtimeWhisperSessionHandle,
+    session: GptLiveTranscribeSessionHandle,
     event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
     input_task: tokio::task::JoinHandle<Option<FinalizedTranscription>>,
 }
 
 struct ActiveRealtimeSession {
     session_id: u64,
-    session: RealtimeWhisperSessionHandle,
+    session: GptLiveTranscribeSessionHandle,
     event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
     input_task: tokio::task::JoinHandle<Option<FinalizedTranscription>>,
 }
@@ -119,9 +120,9 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         }
     }
 
-    /// 設定が Realtime Whisper の場合、待機済みセッションをバックグラウンドで1本用意する。
-    pub fn warm_realtime_whisper_session_if_enabled(&self) {
-        if EnvConfig::get().transcription.provider != TranscriptionProvider::RealtimeWhisper {
+    /// 設定が GPT Live Transcribe の場合、待機済みセッションをバックグラウンドで1本用意する。
+    pub fn warm_gpt_live_transcribe_session_if_enabled(&self) {
+        if EnvConfig::get().transcription.provider != TranscriptionProvider::GptLiveTranscribe {
             return;
         }
 
@@ -130,7 +131,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     }
 
     /// sleep/wake などで stale になり得る待機済みセッションを破棄する。
-    pub fn reset_ready_realtime_whisper_session(&self) {
+    pub fn reset_ready_gpt_live_transcribe_session(&self) {
         profiling::log_point("realtime_ready.reset", "");
         if let Some(prepared) = self.ready_realtime_session.borrow_mut().take() {
             prepared.session.abort();
@@ -141,7 +142,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             task.abort();
         }
 
-        self.warm_realtime_whisper_session_if_enabled();
+        self.warm_gpt_live_transcribe_session_if_enabled();
     }
 
     /// IPCコマンドを処理
@@ -240,7 +241,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         // 体感開始時間を縮めるため、開始音は録音開始前に鳴らす
         play_start_sound_if_enabled(self.recording_sounds_enabled);
 
-        let mut realtime_session = if provider == TranscriptionProvider::RealtimeWhisper {
+        let mut realtime_session = if provider == TranscriptionProvider::GptLiveTranscribe {
             match self.prepare_realtime_session_for_recording() {
                 Ok(session) => Some(session),
                 Err(error) => {
@@ -276,7 +277,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 if let Some(active) = realtime_session.take() {
                     active.session.abort();
                     active.input_task.abort();
-                    self.warm_realtime_whisper_session_if_enabled();
+                    self.warm_gpt_live_transcribe_session_if_enabled();
                 }
                 return Err(error);
             }
@@ -308,7 +309,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     fn prepare_realtime_session_for_recording(&self) -> Result<ActiveRealtimeSession> {
         if self.realtime_session.borrow().is_some() {
             return Err(VoiceInputError::SystemError(
-                "realtime-whisper session is already active".to_string(),
+                "gpt-live-transcribe session is already active".to_string(),
             ));
         }
 
@@ -486,22 +487,22 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 return Err(error);
             }
         };
-        self.warm_realtime_whisper_session_if_enabled();
+        self.warm_gpt_live_transcribe_session_if_enabled();
         hide_hud_if_no_newer_session(session_id, self.recording.clone());
 
         let msg = match outcome.save_result {
             Some((_requested_path, Ok(saved_path))) => {
                 format!(
-                    "recording stopped; realtime-whisper completed; audio saved to {}",
+                    "recording stopped; gpt-live-transcribe completed; audio saved to {}",
                     saved_path.display()
                 )
             }
             Some((path, Err(error))) => format!(
-                "recording stopped; realtime-whisper completed; audio save failed for {}: {}",
+                "recording stopped; gpt-live-transcribe completed; audio save failed for {}: {}",
                 path.display(),
                 error
             ),
-            None => "recording stopped; realtime-whisper completed".to_string(),
+            None => "recording stopped; gpt-live-transcribe completed".to_string(),
         };
 
         Ok(IpcResp { ok: true, msg })
@@ -559,7 +560,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         let transcription = &EnvConfig::get().transcription;
         match transcription.provider {
             crate::utils::config::TranscriptionProvider::GptTranscribe
-            | crate::utils::config::TranscriptionProvider::RealtimeWhisper => {
+            | crate::utils::config::TranscriptionProvider::GptLiveTranscribe => {
                 match transcription.api_key.clone() {
                     Some(key) => {
                         lines.push(format!(
@@ -667,7 +668,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                                 {
                                     eprintln!("Realtime auto-stop failed: {}", error);
                                 } else if EnvConfig::get().transcription.provider
-                                    == TranscriptionProvider::RealtimeWhisper
+                                    == TranscriptionProvider::GptLiveTranscribe
                                 {
                                     ensure_ready_realtime_session(
                                         ready_realtime_session.clone(),
@@ -766,10 +767,11 @@ fn fan_out_audio_frames(
 }
 
 fn build_prepared_realtime_session() -> Result<PreparedRealtimeSession> {
-    let config = RealtimeWhisperConfig::from_transcription_config(&EnvConfig::get().transcription)?;
+    let config =
+        GptLiveTranscribeConfig::from_transcription_config(&EnvConfig::get().transcription)?;
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let input_task = spawn_local(async move { process_streaming_text_input(&mut event_rx).await });
-    let session = spawn_realtime_whisper_session(config, event_tx.clone());
+    let session = spawn_gpt_live_transcribe_session(config, event_tx.clone());
 
     Ok(PreparedRealtimeSession {
         session,
@@ -934,7 +936,7 @@ async fn stop_active_realtime_session<T: AudioBackend + 'static>(
 
 fn requested_audio_format(provider: TranscriptionProvider) -> Option<AudioDataFormat> {
     match provider {
-        TranscriptionProvider::GptTranscribe | TranscriptionProvider::RealtimeWhisper => None,
+        TranscriptionProvider::GptTranscribe | TranscriptionProvider::GptLiveTranscribe => None,
         TranscriptionProvider::MlxQwen3Asr => Some(AudioDataFormat::Wav),
     }
 }
@@ -1454,7 +1456,7 @@ mod tests {
 
         handler.history.borrow_mut().record_finalized(
             &finalized("音声入力をする。"),
-            TranscriptionProvider::RealtimeWhisper,
+            TranscriptionProvider::GptLiveTranscribe,
         );
 
         let response = handler.handle(IpcCmd::History).await.unwrap();
@@ -1465,7 +1467,7 @@ mod tests {
         assert!(!response.msg.contains("2026-"));
         assert!(!response.msg.contains("provider="));
         assert!(!response.msg.contains("model="));
-        assert!(!response.msg.contains("realtime-whisper"));
+        assert!(!response.msg.contains("gpt-live-transcribe"));
     }
 
     /// 停止時に転写キューへsession_id付きで送信される

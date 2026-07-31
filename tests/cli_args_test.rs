@@ -153,13 +153,21 @@ fn start_command_accepts_mlx_transcription_provider() {
     assert!(!stderr.contains("error: invalid value"));
 }
 
-/// startコマンドでRealtime Whisper転写バックエンドを指定できる
+/// startコマンドでGPT Live Transcribe転写バックエンドを指定できる
 #[test]
-fn start_command_accepts_realtime_whisper_transcription_provider() {
-    let output = run_cmd(&["start", "--transcription-provider", "realtime-whisper"]);
+fn start_command_accepts_gpt_live_transcribe_provider() {
+    let output = run_cmd(&["start", "--transcription-provider", "gpt-live-transcribe"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("error: unexpected argument"));
     assert!(!stderr.contains("error: invalid value"));
+}
+
+/// startコマンドは廃止したRealtime Whisper転写バックエンドを拒否する
+#[test]
+fn start_command_rejects_removed_realtime_whisper_provider() {
+    let output = run_cmd(&["start", "--transcription-provider", "realtime-whisper"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid value"));
 }
 
 /// toggleコマンドでGPT Transcribe転写バックエンドを指定できる
