@@ -17,9 +17,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
     let max_secs_override = cli.cmd.as_ref().and_then(command_max_secs);
+    let persisted_config = AppConfig::load();
 
-    // 環境変数設定を初期化。--max-secs は VOICE_INPUT_DEFAULT_MAX_SECS より優先する。
-    EnvConfig::init_with_recording_max_duration_secs(max_secs_override)?;
+    // 永続設定とコマンド指定を環境既定値より優先して、起動中不変の設定を構築する。
+    EnvConfig::init_with_user_setting_overrides(
+        &persisted_config.user_setting_overrides(),
+        max_secs_override,
+    )?;
+    AppConfig::init_runtime(persisted_config);
 
     /* ── 追加: デバイス一覧フラグ ── */
     if cli.list_devices {

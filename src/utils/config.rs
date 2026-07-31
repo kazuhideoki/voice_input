@@ -269,26 +269,54 @@ pub struct EnvConfig {
     pub profiling: ProfilingConfig,
 }
 
+/// `config.json` またはコマンド指定により環境既定値を置き換えるユーザー設定。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UserSettingOverrides {
+    pub transcription_provider: Option<TranscriptionProvider>,
+    pub max_secs: Option<u64>,
+    pub pre_roll_ms: Option<u64>,
+    pub input_device_priorities: Option<Vec<String>>,
+    pub recording_sounds_enabled: Option<bool>,
+    pub recording_hud_enabled: Option<bool>,
+    pub push_to_talk_enabled: Option<bool>,
+    pub push_to_talk_hotkey: Option<String>,
+    pub transcribe_streaming: Option<bool>,
+}
+
 impl EnvConfig {
     /// 環境変数から設定を構築し、妥当性を検証する
     pub(crate) fn from_env() -> Result<Self, ConfigError> {
-        Self::from_env_with_recording_max_duration_secs(None)
+        Self::from_env_with_overrides(&UserSettingOverrides::default(), None)
     }
 
-    /// 環境変数から設定を構築し、録音最大秒数だけ明示値で上書きする
-    pub(crate) fn from_env_with_recording_max_duration_secs(
+    fn from_env_with_overrides(
+        overrides: &UserSettingOverrides,
         max_duration_secs_override: Option<u64>,
     ) -> Result<Self, ConfigError> {
-        let provider = match non_empty_env(DEFAULT_TRANSCRIPTION_PROVIDER_ENV) {
-            Some(value) => TranscriptionProvider::parse(&value)?,
-            None => TranscriptionProvider::DEFAULT,
+        let provider = match overrides.transcription_provider {
+            Some(provider) => provider,
+            None => match non_empty_env(DEFAULT_TRANSCRIPTION_PROVIDER_ENV) {
+                Some(value) => TranscriptionProvider::parse(&value)?,
+                None => TranscriptionProvider::DEFAULT,
+            },
         };
         let mlx_qwen3_asr_model = DEFAULT_MLX_QWEN3_ASR_MODEL.to_string();
-        let streaming_enabled = parse_bool_env(TRANSCRIBE_STREAMING_ENV)?;
+        let streaming_enabled = match overrides.transcribe_streaming {
+            Some(enabled) => enabled,
+            None => parse_bool_env(TRANSCRIBE_STREAMING_ENV)?,
+        };
         let mlx_qwen3_asr_command = "mlx-qwen3-asr".to_string();
-        let audio_pre_roll_ms = match std::env::var(AUDIO_PRE_ROLL_MS_ENV) {
-            Ok(value) => parse_audio_pre_roll_ms(&value)?,
-            Err(_) => DEFAULT_AUDIO_PRE_ROLL_MS,
+        let audio_pre_roll_ms = match overrides.pre_roll_ms {
+            Some(millis) if millis <= MAX_AUDIO_PRE_ROLL_MS => millis,
+            Some(millis) => {
+                return Err(ConfigError::InvalidAudioPreRollMs {
+                    value: millis.to_string(),
+                });
+            }
+            None => match std::env::var(AUDIO_PRE_ROLL_MS_ENV) {
+                Ok(value) => parse_audio_pre_roll_ms(&value)?,
+                Err(_) => DEFAULT_AUDIO_PRE_ROLL_MS,
+            },
         };
         let max_duration_secs = match max_duration_secs_override {
             Some(value) if value > 0 => value,
@@ -297,9 +325,17 @@ impl EnvConfig {
                     value: value.to_string(),
                 });
             }
-            None => match std::env::var(MAX_RECORDING_DURATION_SECS_ENV) {
-                Ok(value) => parse_max_duration_secs(&value)?,
-                Err(_) => DEFAULT_MAX_RECORDING_DURATION_SECS,
+            None => match overrides.max_secs {
+                Some(value) if value > 0 => value,
+                Some(value) => {
+                    return Err(ConfigError::InvalidMaxDurationSecs {
+                        value: value.to_string(),
+                    });
+                }
+                None => match std::env::var(MAX_RECORDING_DURATION_SECS_ENV) {
+                    Ok(value) => parse_max_duration_secs(&value)?,
+                    Err(_) => DEFAULT_MAX_RECORDING_DURATION_SECS,
+                },
             },
         };
 
@@ -324,29 +360,37 @@ impl EnvConfig {
                 http: non_empty_env_with_lowercase_fallback("HTTP_PROXY"),
             },
             audio: AudioConfig {
-                input_device_priorities: csv_env(INPUT_DEVICE_PRIORITIES_ENV),
+                input_device_priorities: overrides
+                    .input_device_priorities
+                    .clone()
+                    .unwrap_or_else(|| csv_env(INPUT_DEVICE_PRIORITIES_ENV)),
                 preferred_format: PreferredAudioFormat::Flac,
                 pre_roll_ms: audio_pre_roll_ms,
-                recording_sounds_enabled: parse_bool_env_with_default(
-                    RECORDING_SOUNDS_ENABLED_ENV,
-                    true,
-                )?,
+                recording_sounds_enabled: match overrides.recording_sounds_enabled {
+                    Some(enabled) => enabled,
+                    None => parse_bool_env_with_default(RECORDING_SOUNDS_ENABLED_ENV, true)?,
+                },
             },
             recording: RecordingConfig { max_duration_secs },
             ui: UiConfig {
-                recording_hud_enabled: parse_bool_env_with_default(
-                    RECORDING_HUD_ENABLED_ENV,
-                    true,
-                )?,
+                recording_hud_enabled: match overrides.recording_hud_enabled {
+                    Some(enabled) => enabled,
+                    None => parse_bool_env_with_default(RECORDING_HUD_ENABLED_ENV, true)?,
+                },
                 recording_hud_helper_path: non_empty_env(RECORDING_HUD_HELPER_PATH_ENV)
                     .map(PathBuf::from),
                 recording_hud_log_path: non_empty_env(RECORDING_HUD_LOG_PATH_ENV)
                     .map(PathBuf::from),
             },
             push_to_talk: PushToTalkConfig {
-                enabled: parse_bool_env(PUSH_TO_TALK_ENABLED_ENV)?,
-                hotkey: non_empty_env(PUSH_TO_TALK_HOTKEY_ENV)
-                    .unwrap_or_else(|| DEFAULT_PUSH_TO_TALK_HOTKEY.to_string()),
+                enabled: match overrides.push_to_talk_enabled {
+                    Some(enabled) => enabled,
+                    None => parse_bool_env(PUSH_TO_TALK_ENABLED_ENV)?,
+                },
+                hotkey: overrides.push_to_talk_hotkey.clone().unwrap_or_else(|| {
+                    non_empty_env(PUSH_TO_TALK_HOTKEY_ENV)
+                        .unwrap_or_else(|| DEFAULT_PUSH_TO_TALK_HOTKEY.to_string())
+                }),
             },
             profiling: ProfilingConfig {
                 enabled: parse_bool_env("VOICE_INPUT_PROFILE")?,
@@ -363,7 +407,7 @@ impl EnvConfig {
     pub fn try_from_env_with_recording_max_duration_secs(
         max_duration_secs_override: Option<u64>,
     ) -> Result<Self, ConfigError> {
-        Self::from_env_with_recording_max_duration_secs(max_duration_secs_override)
+        Self::from_env_with_overrides(&UserSettingOverrides::default(), max_duration_secs_override)
     }
 
     /// 転写の推奨同時実行数を返す
@@ -383,12 +427,22 @@ impl EnvConfig {
     pub fn init_with_recording_max_duration_secs(
         max_duration_secs_override: Option<u64>,
     ) -> Result<(), ConfigError> {
+        Self::init_with_user_setting_overrides(
+            &UserSettingOverrides::default(),
+            max_duration_secs_override,
+        )
+    }
+
+    /// 永続設定を環境既定値より優先して設定を初期化する。
+    pub fn init_with_user_setting_overrides(
+        overrides: &UserSettingOverrides,
+        max_duration_secs_override: Option<u64>,
+    ) -> Result<(), ConfigError> {
         if ENV_CONFIG.get().is_some() {
             return Ok(());
         }
 
-        let config =
-            EnvConfig::from_env_with_recording_max_duration_secs(max_duration_secs_override)?;
+        let config = EnvConfig::from_env_with_overrides(overrides, max_duration_secs_override)?;
 
         // 並列実行時の競合を考慮：既に他のスレッドが初期化していても成功とする
         let _ = ENV_CONFIG.set(Arc::new(config));
@@ -434,6 +488,11 @@ impl EnvConfig {
     fn load_for_test_init() -> Result<Self, ConfigError> {
         Self::from_env()
     }
+}
+
+/// 初期化前に `config.json` の配置を決めるXDGデータディレクトリを返す。
+pub fn xdg_data_home_from_env() -> Option<PathBuf> {
+    non_empty_env("XDG_DATA_HOME").map(PathBuf::from)
 }
 
 fn non_empty_env(name: &str) -> Option<String> {
@@ -512,7 +571,8 @@ mod tests {
         MAX_AUDIO_PRE_ROLL_MS, PathConfig, PreferredAudioFormat, ProfilingConfig, ProxyConfig,
         PushToTalkConfig, RECORDING_HUD_ENABLED_ENV, RECORDING_HUD_HELPER_PATH_ENV,
         RECORDING_HUD_LOG_PATH_ENV, RECORDING_SOUNDS_ENABLED_ENV, RecordingConfig,
-        TranscriptionConfig, TranscriptionProvider, UiConfig, lock_test_env,
+        TRANSCRIBE_STREAMING_ENV, TranscriptionConfig, TranscriptionProvider, UiConfig,
+        UserSettingOverrides, lock_test_env,
     };
     use std::path::PathBuf;
 
@@ -549,6 +609,31 @@ mod tests {
             },
             profiling: ProfilingConfig { enabled: false },
         }
+    }
+
+    /// 永続設定がある項目は不正な下位環境既定値を解析せず上書き値を採用する
+    #[test]
+    fn user_setting_overrides_skip_shadowed_environment_validation() {
+        let _lock = lock_test_env();
+        unsafe {
+            std::env::set_var("VOICE_INPUT_DEFAULT_MAX_SECS", "invalid");
+            std::env::set_var(TRANSCRIBE_STREAMING_ENV, "invalid");
+        }
+        let overrides = UserSettingOverrides {
+            max_secs: Some(90),
+            transcribe_streaming: Some(true),
+            ..UserSettingOverrides::default()
+        };
+
+        let result = EnvConfig::from_env_with_overrides(&overrides, None);
+
+        unsafe {
+            std::env::remove_var("VOICE_INPUT_DEFAULT_MAX_SECS");
+            std::env::remove_var(TRANSCRIBE_STREAMING_ENV);
+        }
+        let config = result.unwrap();
+        assert_eq!(config.recording.max_duration_secs, 90);
+        assert!(config.transcription.streaming_enabled);
     }
 
     fn openai_transcription_config() -> TranscriptionConfig {

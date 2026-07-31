@@ -42,6 +42,7 @@ pub async fn handle_transcription(
         resume_music,
         session_id: _,
         provider,
+        pending: _pending,
     } = message;
 
     // エラーが発生しても確実に音楽を再開するためにdeferパターンで実装

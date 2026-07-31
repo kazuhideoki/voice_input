@@ -51,8 +51,10 @@ use voice_input::{
 async fn main() -> std::result::Result<(), Box<dyn Error>> {
     load_env();
 
-    // 環境変数設定を初期化
-    EnvConfig::init().map_err(|e| VoiceInputError::ConfigInitError(e.to_string()))?;
+    let persisted_config = AppConfig::load();
+    EnvConfig::init_with_user_setting_overrides(&persisted_config.user_setting_overrides(), None)
+        .map_err(|e| VoiceInputError::ConfigInitError(e.to_string()))?;
+    AppConfig::init_runtime(persisted_config);
 
     // `spawn_local` はこのスレッドだけで動かしたい非同期ジョブを登録する。LocalSet はその実行エンジン
     let local = LocalSet::new();
@@ -305,9 +307,9 @@ async fn handle_client(
 
         if reload_config {
             drop(writer);
-            if command_handler.borrow().is_recording() {
+            if command_handler.borrow().has_active_work() {
                 spawn_local(async move {
-                    while command_handler.borrow().is_recording() {
+                    while command_handler.borrow().has_active_work() {
                         tokio::time::sleep(Duration::from_millis(100)).await;
                     }
                     process::exit(75);

@@ -258,7 +258,7 @@ voice_input config set push-to-talk-hotkey opt+8
 voice_input config set transcribe-streaming false
 ```
 
-`unset` 後は対応する `.env` の `VOICE_INPUT_DEFAULT_*` へ戻ります。永続設定の変更後、LaunchAgentで動作しているデーモンは自動再起動して全設定を一貫して反映します。録音中の場合は録音終了まで再起動を待ちます。デーモンを手動起動している場合は、設定変更後に起動し直してください。
+`unset` 後は対応する `.env` の `VOICE_INPUT_DEFAULT_*` へ戻ります。永続設定の変更後、LaunchAgentで動作しているデーモンは自動再起動して全設定を一貫して反映します。録音または転写処理中の場合は、すべて完了するまで再起動を待ちます。デーモンを手動起動している場合は、設定変更後に起動し直してください。
 
 デバッグ用に WAV を入力したり、録音後の音声を保存できます。
 

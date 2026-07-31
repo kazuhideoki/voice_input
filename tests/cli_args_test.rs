@@ -308,3 +308,26 @@ fn runtime_configuration_persists_and_unsets_supported_fields() {
         assert!(output.status.success());
     }
 }
+
+/// 永続設定で上書きした項目は不正な環境既定値に影響されない
+#[test]
+fn persisted_configuration_shadows_invalid_environment_default() {
+    let runtime_dir = TempDir::new().unwrap();
+    let config_dir = runtime_dir.path().join("voice_input");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(config_dir.join("config.json"), r#"{"max_secs":90}"#).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_voice_input"))
+        .args(["config", "get", "max-secs"])
+        .env("XDG_DATA_HOME", runtime_dir.path())
+        .env(
+            "VOICE_INPUT_SOCKET_PATH",
+            runtime_dir.path().join("missing.sock"),
+        )
+        .env("VOICE_INPUT_DEFAULT_MAX_SECS", "invalid")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "90");
+}

@@ -7,7 +7,7 @@
 
 #![allow(clippy::await_holding_refcell_ref)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use tokio::sync::mpsc;
@@ -42,12 +42,31 @@ use crate::utils::profiling;
 const REALTIME_READY_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 /// 転写メッセージ
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TranscriptionMessage {
     pub result: RecordedAudio,
     pub resume_music: bool,
     pub session_id: u64,
     pub provider: TranscriptionProvider,
+    pub(crate) pending: PendingTranscriptionGuard,
+}
+
+#[derive(Debug)]
+pub(crate) struct PendingTranscriptionGuard {
+    count: Rc<Cell<usize>>,
+}
+
+impl PendingTranscriptionGuard {
+    fn new(count: Rc<Cell<usize>>) -> Self {
+        count.set(count.get().saturating_add(1));
+        Self { count }
+    }
+}
+
+impl Drop for PendingTranscriptionGuard {
+    fn drop(&mut self) {
+        self.count.set(self.count.get().saturating_sub(1));
+    }
 }
 
 struct PreparedRealtimeSession {
@@ -79,12 +98,13 @@ pub struct CommandHandler<T: AudioBackend> {
     ready_realtime_session: Rc<RefCell<Option<PreparedRealtimeSession>>>,
     ready_realtime_task: Rc<RefCell<Option<tokio::task::JoinHandle<()>>>>,
     recording_sounds_enabled: bool,
+    pending_transcriptions: Rc<Cell<usize>>,
 }
 
 impl<T: AudioBackend + 'static> CommandHandler<T> {
-    /// 録音中かどうかを返す。
-    pub fn is_recording(&self) -> bool {
-        self.recording.borrow().is_recording()
+    /// 録音または転写処理が残っているかを返す。
+    pub fn has_active_work(&self) -> bool {
+        self.recording.borrow().is_recording() || self.pending_transcriptions.get() > 0
     }
 
     /// 新しいCommandHandlerを作成
@@ -123,6 +143,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             ready_realtime_session: Rc::new(RefCell::new(None)),
             ready_realtime_task: Rc::new(RefCell::new(None)),
             recording_sounds_enabled,
+            pending_transcriptions: Rc::new(Cell::new(0)),
         }
     }
 
@@ -450,6 +471,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 resume_music: outcome.context.music_was_playing,
                 session_id: outcome.context.session_id,
                 provider: outcome.context.transcription_provider,
+                pending: PendingTranscriptionGuard::new(self.pending_transcriptions.clone()),
             })
             .map_err(|e| {
                 recording_hud::set_state(HudState::Hidden);
@@ -651,6 +673,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         let ready_realtime_session = self.ready_realtime_session.clone();
         let ready_realtime_task = self.ready_realtime_task.clone();
         let tx = self.transcription_tx.clone();
+        let pending_transcriptions = self.pending_transcriptions.clone();
         let recording_sounds_enabled = self.recording_sounds_enabled;
 
         spawn_local(async move {
@@ -701,6 +724,9 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                                             resume_music: outcome.context.music_was_playing,
                                             session_id: outcome.context.session_id,
                                             provider: outcome.context.transcription_provider,
+                                            pending: PendingTranscriptionGuard::new(
+                                                pending_transcriptions.clone(),
+                                            ),
                                         }) {
                                             eprintln!(
                                                 "Failed to send auto-stop transcription: {}",
@@ -1050,6 +1076,17 @@ mod tests {
     use tempfile::TempDir;
 
     static SOUND_TEST_LOCK: StdMutex<()> = StdMutex::new(());
+
+    /// 転写保留ガードが存在する間だけ処理中件数を保持する
+    #[test]
+    fn pending_transcription_guard_tracks_lifetime() {
+        let count = Rc::new(Cell::new(0));
+        let guard = PendingTranscriptionGuard::new(count.clone());
+
+        assert_eq!(count.get(), 1);
+        drop(guard);
+        assert_eq!(count.get(), 0);
+    }
 
     struct NoopDictRepository;
 
@@ -1496,11 +1533,14 @@ mod tests {
 
                 handler.handle(start_cmd()).await.unwrap();
                 handler.handle(IpcCmd::Stop).await.unwrap();
+                assert!(handler.has_active_work());
 
                 let message = rx.recv().await.expect("transcription should be queued");
                 assert_eq!(message.session_id, 1);
                 assert!(!message.resume_music);
                 assert_eq!(message.provider, TranscriptionProvider::GptTranscribe);
+                drop(message);
+                assert!(!handler.has_active_work());
             })
             .await;
     }

@@ -1,5 +1,8 @@
-use crate::utils::config::{EnvConfig, TranscriptionProvider};
+use crate::utils::config::{
+    EnvConfig, TranscriptionProvider, UserSettingOverrides, xdg_data_home_from_env,
+};
 use directories::ProjectDirs;
+use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -7,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     /// 辞書ファイルの保存先。
     pub dict_path: Option<String>,
@@ -31,9 +34,10 @@ pub struct AppConfig {
     pub transcribe_streaming: Option<bool>,
 }
 
+static RUNTIME_CONFIG: OnceCell<AppConfig> = OnceCell::new();
+
 fn data_dir() -> PathBuf {
-    let config = EnvConfig::get();
-    if let Some(xdg_data_home) = &config.paths.xdg_data_home {
+    if let Some(xdg_data_home) = xdg_data_home_from_env() {
         let dir = xdg_data_home.join("voice_input");
         fs::create_dir_all(&dir).expect("create data dir");
         return dir;
@@ -100,7 +104,27 @@ impl AppConfig {
         }
         #[cfg(not(test))]
         {
-            AppConfig::load()
+            RUNTIME_CONFIG.get_or_init(AppConfig::load).clone()
+        }
+    }
+
+    /// デーモン起動中に利用する不変の設定スナップショットを初期化する。
+    pub fn init_runtime(config: Self) {
+        let _ = RUNTIME_CONFIG.set(config);
+    }
+
+    /// 環境既定値より優先する項目を環境設定の初期化用に返す。
+    pub fn user_setting_overrides(&self) -> UserSettingOverrides {
+        UserSettingOverrides {
+            transcription_provider: self.transcription_provider,
+            max_secs: self.max_secs,
+            pre_roll_ms: self.pre_roll_ms,
+            input_device_priorities: self.input_device_priorities.clone(),
+            recording_sounds_enabled: self.recording_sounds_enabled,
+            recording_hud_enabled: self.recording_hud_enabled,
+            push_to_talk_enabled: self.push_to_talk_enabled,
+            push_to_talk_hotkey: self.push_to_talk_hotkey.clone(),
+            transcribe_streaming: self.transcribe_streaming,
         }
     }
 
