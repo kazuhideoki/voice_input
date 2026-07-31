@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::{self, copy},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -17,6 +17,18 @@ pub struct AppConfig {
     pub max_secs: Option<u64>,
     /// `.env` より優先するpre-roll長。
     pub pre_roll_ms: Option<u64>,
+    /// `.env` より優先する入力デバイスの優先順位。
+    pub input_device_priorities: Option<Vec<String>>,
+    /// `.env` より優先する録音開始・停止サウンド設定。
+    pub recording_sounds_enabled: Option<bool>,
+    /// `.env` より優先する録音状態HUD設定。
+    pub recording_hud_enabled: Option<bool>,
+    /// `.env` より優先するpush-to-talk設定。
+    pub push_to_talk_enabled: Option<bool>,
+    /// `.env` より優先するpush-to-talkホットキー。
+    pub push_to_talk_hotkey: Option<String>,
+    /// `.env` より優先するGPT Transcribeストリーミング直接入力設定。
+    pub transcribe_streaming: Option<bool>,
 }
 
 fn data_dir() -> PathBuf {
@@ -56,8 +68,22 @@ fn copy_file_contents(source: &PathBuf, destination: &PathBuf) -> io::Result<()>
 impl AppConfig {
     pub fn load() -> Self {
         let path = config_path();
-        if let Ok(f) = fs::File::open(&path) {
-            if let Ok(cfg) = serde_json::from_reader(f) {
+        Self::load_from_path(&path)
+    }
+
+    fn load_from_path(path: &Path) -> Self {
+        if let Ok(f) = fs::File::open(path) {
+            if let Ok(cfg) = serde_json::from_reader::<_, AppConfig>(f) {
+                if fs::symlink_metadata(path)
+                    .is_ok_and(|metadata| metadata.file_type().is_symlink())
+                {
+                    if let Err(error) = cfg.save_to_path(path) {
+                        eprintln!(
+                            "failed to materialize local config {}: {error}",
+                            path.display()
+                        );
+                    }
+                }
                 return cfg;
             }
         }
@@ -80,6 +106,10 @@ impl AppConfig {
 
     pub fn save(&self) -> io::Result<()> {
         let path = config_path();
+        self.save_to_path(&path)
+    }
+
+    fn save_to_path(&self, path: &Path) -> io::Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -131,6 +161,38 @@ impl AppConfig {
             .unwrap_or_else(|| EnvConfig::get().audio.pre_roll_ms)
     }
 
+    pub fn effective_input_device_priorities(&self) -> Vec<String> {
+        self.input_device_priorities
+            .clone()
+            .unwrap_or_else(|| EnvConfig::get().audio.input_device_priorities.clone())
+    }
+
+    pub fn effective_recording_sounds_enabled(&self) -> bool {
+        self.recording_sounds_enabled
+            .unwrap_or_else(|| EnvConfig::get().audio.recording_sounds_enabled)
+    }
+
+    pub fn effective_recording_hud_enabled(&self) -> bool {
+        self.recording_hud_enabled
+            .unwrap_or_else(|| EnvConfig::get().ui.recording_hud_enabled)
+    }
+
+    pub fn effective_push_to_talk_enabled(&self) -> bool {
+        self.push_to_talk_enabled
+            .unwrap_or_else(|| EnvConfig::get().push_to_talk.enabled)
+    }
+
+    pub fn effective_push_to_talk_hotkey(&self) -> String {
+        self.push_to_talk_hotkey
+            .clone()
+            .unwrap_or_else(|| EnvConfig::get().push_to_talk.hotkey.clone())
+    }
+
+    pub fn effective_transcribe_streaming(&self) -> bool {
+        self.transcribe_streaming
+            .unwrap_or_else(|| EnvConfig::get().transcription.streaming_enabled)
+    }
+
     pub fn set_dict_path(&mut self, new_path: PathBuf) -> io::Result<()> {
         self.set_dict_path_with(new_path, |config| config.save())
     }
@@ -156,6 +218,36 @@ impl AppConfig {
         self.save()
     }
 
+    pub fn set_input_device_priorities(&mut self, priorities: Vec<String>) -> io::Result<()> {
+        self.input_device_priorities = Some(priorities);
+        self.save()
+    }
+
+    pub fn set_recording_sounds_enabled(&mut self, enabled: bool) -> io::Result<()> {
+        self.recording_sounds_enabled = Some(enabled);
+        self.save()
+    }
+
+    pub fn set_recording_hud_enabled(&mut self, enabled: bool) -> io::Result<()> {
+        self.recording_hud_enabled = Some(enabled);
+        self.save()
+    }
+
+    pub fn set_push_to_talk_enabled(&mut self, enabled: bool) -> io::Result<()> {
+        self.push_to_talk_enabled = Some(enabled);
+        self.save()
+    }
+
+    pub fn set_push_to_talk_hotkey(&mut self, hotkey: String) -> io::Result<()> {
+        self.push_to_talk_hotkey = Some(hotkey);
+        self.save()
+    }
+
+    pub fn set_transcribe_streaming(&mut self, enabled: bool) -> io::Result<()> {
+        self.transcribe_streaming = Some(enabled);
+        self.save()
+    }
+
     /// 転写バックエンドの永続設定を削除する。
     pub fn unset_transcription_provider(&mut self) -> io::Result<()> {
         self.transcription_provider = None;
@@ -171,6 +263,36 @@ impl AppConfig {
     /// pre-roll長の永続設定を削除する。
     pub fn unset_pre_roll_ms(&mut self) -> io::Result<()> {
         self.pre_roll_ms = None;
+        self.save()
+    }
+
+    pub fn unset_input_device_priorities(&mut self) -> io::Result<()> {
+        self.input_device_priorities = None;
+        self.save()
+    }
+
+    pub fn unset_recording_sounds_enabled(&mut self) -> io::Result<()> {
+        self.recording_sounds_enabled = None;
+        self.save()
+    }
+
+    pub fn unset_recording_hud_enabled(&mut self) -> io::Result<()> {
+        self.recording_hud_enabled = None;
+        self.save()
+    }
+
+    pub fn unset_push_to_talk_enabled(&mut self) -> io::Result<()> {
+        self.push_to_talk_enabled = None;
+        self.save()
+    }
+
+    pub fn unset_push_to_talk_hotkey(&mut self) -> io::Result<()> {
+        self.push_to_talk_hotkey = None;
+        self.save()
+    }
+
+    pub fn unset_transcribe_streaming(&mut self) -> io::Result<()> {
+        self.transcribe_streaming = None;
         self.save()
     }
 
@@ -256,6 +378,32 @@ mod tests {
         );
     }
 
+    /// dotfiles由来の設定リンクは内容を引き継いだ端末固有ファイルへ切り替わる
+    #[test]
+    fn loading_config_materializes_symbolic_link_as_local_file() {
+        let tmp = TempDir::new().expect("create tempdir");
+        let shared_path = tmp.path().join("dotfiles/config.json");
+        fs::create_dir_all(shared_path.parent().expect("parent")).expect("create parent");
+        fs::write(&shared_path, r#"{"max_secs":90}"#).expect("write shared config");
+        let local_path = tmp.path().join("local/config.json");
+        fs::create_dir_all(local_path.parent().expect("parent")).expect("create local parent");
+        symlink(&shared_path, &local_path).expect("create config symlink");
+
+        let config = AppConfig::load_from_path(&local_path);
+
+        assert_eq!(config.max_secs, Some(90));
+        assert!(
+            !fs::symlink_metadata(&local_path)
+                .expect("stat local config")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read_to_string(&shared_path).unwrap(),
+            r#"{"max_secs":90}"#
+        );
+    }
+
     /// 旧形式の設定ファイルは実行時設定が未指定として読み込める
     #[test]
     fn legacy_config_without_runtime_fields_is_deserialized() {
@@ -276,6 +424,12 @@ mod tests {
             transcription_provider: Some(TranscriptionProvider::GptLiveTranscribe),
             max_secs: Some(90),
             pre_roll_ms: Some(250),
+            input_device_priorities: Some(vec!["External Mic".to_string()]),
+            recording_sounds_enabled: Some(false),
+            recording_hud_enabled: Some(false),
+            push_to_talk_enabled: Some(true),
+            push_to_talk_hotkey: Some("cmd+space".to_string()),
+            transcribe_streaming: Some(true),
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -287,6 +441,15 @@ mod tests {
         );
         assert_eq!(restored.max_secs, Some(90));
         assert_eq!(restored.pre_roll_ms, Some(250));
+        assert_eq!(
+            restored.input_device_priorities,
+            Some(vec!["External Mic".to_string()])
+        );
+        assert_eq!(restored.recording_sounds_enabled, Some(false));
+        assert_eq!(restored.recording_hud_enabled, Some(false));
+        assert_eq!(restored.push_to_talk_enabled, Some(true));
+        assert_eq!(restored.push_to_talk_hotkey.as_deref(), Some("cmd+space"));
+        assert_eq!(restored.transcribe_streaming, Some(true));
     }
 
     /// コマンド単位の指定は永続設定より優先される
@@ -297,6 +460,7 @@ mod tests {
             transcription_provider: Some(TranscriptionProvider::GptLiveTranscribe),
             max_secs: Some(90),
             pre_roll_ms: Some(250),
+            ..AppConfig::default()
         };
 
         assert_eq!(

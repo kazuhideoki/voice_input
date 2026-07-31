@@ -13,6 +13,7 @@ use std::thread;
 use tokio::sync::mpsc as tokio_mpsc;
 
 use crate::application::AudioFrame;
+use crate::infrastructure::config::AppConfig;
 use crate::utils::config::EnvConfig;
 
 const VOICE_RMS_THRESHOLD: f64 = 900.0;
@@ -50,10 +51,6 @@ struct HudWorker {
 
 impl HudWorker {
     fn new(config: &EnvConfig) -> Self {
-        if !config.ui.recording_hud_enabled {
-            return Self { sender: None };
-        }
-
         let helper_path = config
             .ui
             .recording_hud_helper_path
@@ -121,6 +118,9 @@ pub fn start_voice_activity_monitor() -> tokio_mpsc::UnboundedSender<AudioFrame>
 }
 
 fn set_state_with_level(state: HudState, level: Option<f64>) {
+    if !AppConfig::load_runtime().effective_recording_hud_enabled() {
+        return;
+    }
     init_worker();
     let Some(worker) = HUD_WORKER.get() else {
         return;

@@ -158,7 +158,7 @@ enum AudioResampleError {
 pub enum CpalBackendError {
     #[error("recording is already in progress")]
     AlreadyRecording,
-    #[error("no input device available (check INPUT_DEVICE_PRIORITY)")]
+    #[error("no input device available (check VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES)")]
     NoInputDevice,
     #[error("unsupported sample format")]
     UnsupportedSampleFormat,
@@ -286,7 +286,7 @@ impl<T: Clone> InputSetupCache<T> {
 }
 
 fn input_device_priorities() -> Vec<String> {
-    EnvConfig::get().audio.input_device_priorities.clone()
+    AppConfig::load_runtime().effective_input_device_priorities()
 }
 
 fn select_input_device_with_priorities(
@@ -1753,15 +1753,15 @@ impl AudioBackend for CpalAudioBackend {
 // mod tests {
 //     use super::*;
 
-//     /// `INPUT_DEVICE_PRIORITY` が参照されているかをエラーメッセージで確認。
+//     /// `VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES` が参照されているかをエラーメッセージで確認。
 //     #[test]
 //     fn input_device_priority_env_is_respected_in_error() {
-//         unsafe { std::env::set_var("INPUT_DEVICE_PRIORITY", "ClearlyNonexistentDevice") };
+//         unsafe { std::env::set_var("VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES", "ClearlyNonexistentDevice") };
 //         let backend = CpalAudioBackend::default();
 //         let err = backend
 //             .start_recording()
 //             .expect_err("should fail without device");
-//         assert!(err.to_string().contains("INPUT_DEVICE_PRIORITY"));
+//         assert!(err.to_string().contains("VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES"));
 //     }
 // }
 
@@ -1770,7 +1770,7 @@ mod tests {
     use super::*;
     use cpal::{DeviceDescriptionBuilder, DeviceType, InterfaceType};
 
-    /// `INPUT_DEVICE_PRIORITY` に存在しないデバイスを設定し、バックエンドが
+    /// `VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES` に存在しないデバイスを設定し、バックエンドが
     /// (1) フォールバックを介して開始する **または** (2) 入力デバイスの欠落に
     /// 言及するエラーを返すことを確認します。これにより、優先順位/フォールバック
     /// コードが誤って削除されることを防ぎます。

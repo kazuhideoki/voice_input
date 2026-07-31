@@ -17,7 +17,7 @@ static ENV_CONFIG: OnceCell<Arc<EnvConfig>> = OnceCell::new();
 pub const DEFAULT_MAX_RECORDING_DURATION_SECS: u64 = 30;
 
 /// 最大録音時間を指定する環境変数名
-pub const MAX_RECORDING_DURATION_SECS_ENV: &str = "VOICE_INPUT_MAX_SECS";
+pub const MAX_RECORDING_DURATION_SECS_ENV: &str = "VOICE_INPUT_DEFAULT_MAX_SECS";
 
 /// 録音開始時に先頭へ付与するローカル pre-roll のデフォルト値（ミリ秒）
 pub const DEFAULT_AUDIO_PRE_ROLL_MS: u64 = 500;
@@ -26,13 +26,13 @@ pub const DEFAULT_AUDIO_PRE_ROLL_MS: u64 = 500;
 pub const MAX_AUDIO_PRE_ROLL_MS: u64 = 5_000;
 
 /// 録音開始時の pre-roll 長を指定する環境変数名
-pub const AUDIO_PRE_ROLL_MS_ENV: &str = "VOICE_INPUT_PRE_ROLL_MS";
+pub const AUDIO_PRE_ROLL_MS_ENV: &str = "VOICE_INPUT_DEFAULT_PRE_ROLL_MS";
 
 /// 録音開始・停止サウンドの有効化を指定する環境変数名
-pub const RECORDING_SOUNDS_ENABLED_ENV: &str = "VOICE_INPUT_RECORDING_SOUNDS";
+pub const RECORDING_SOUNDS_ENABLED_ENV: &str = "VOICE_INPUT_DEFAULT_RECORDING_SOUNDS_ENABLED";
 
 /// 録音状態HUDの有効化を指定する環境変数名
-pub const RECORDING_HUD_ENABLED_ENV: &str = "VOICE_INPUT_RECORDING_HUD";
+pub const RECORDING_HUD_ENABLED_ENV: &str = "VOICE_INPUT_DEFAULT_RECORDING_HUD_ENABLED";
 
 /// 録音状態HUDヘルパーのパスを指定する環境変数名
 pub const RECORDING_HUD_HELPER_PATH_ENV: &str = "VOICE_INPUT_RECORDING_HUD_HELPER_PATH";
@@ -41,10 +41,16 @@ pub const RECORDING_HUD_HELPER_PATH_ENV: &str = "VOICE_INPUT_RECORDING_HUD_HELPE
 pub const RECORDING_HUD_LOG_PATH_ENV: &str = "VOICE_INPUT_RECORDING_HUD_LOG_PATH";
 
 /// キー押下中だけ録音する push-to-talk を有効にする環境変数名
-pub const PUSH_TO_TALK_ENABLED_ENV: &str = "VOICE_INPUT_PUSH_TO_TALK";
+pub const PUSH_TO_TALK_ENABLED_ENV: &str = "VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED";
 
 /// push-to-talk のトリガーキーを指定する環境変数名
-pub const PUSH_TO_TALK_HOTKEY_ENV: &str = "VOICE_INPUT_PUSH_TO_TALK_HOTKEY";
+pub const PUSH_TO_TALK_HOTKEY_ENV: &str = "VOICE_INPUT_DEFAULT_PUSH_TO_TALK_HOTKEY";
+
+/// GPT Transcribe のストリーミング直接入力の既定値を指定する環境変数名
+pub const TRANSCRIBE_STREAMING_ENV: &str = "VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING";
+
+/// 優先入力デバイス一覧の既定値を指定する環境変数名
+pub const INPUT_DEVICE_PRIORITIES_ENV: &str = "VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES";
 
 /// push-to-talk のデフォルトホットキー
 pub const DEFAULT_PUSH_TO_TALK_HOTKEY: &str = "opt+8";
@@ -75,9 +81,9 @@ pub enum ConfigError {
         "transcription provider '{value}' is unsupported. Supported providers: gpt-transcribe, gpt-live-transcribe, mlx-qwen3-asr"
     )]
     UnsupportedTranscriptionProvider { value: String },
-    #[error("VOICE_INPUT_MAX_SECS must be a positive integer: {value}")]
+    #[error("VOICE_INPUT_DEFAULT_MAX_SECS must be a positive integer: {value}")]
     InvalidMaxDurationSecs { value: String },
-    #[error("VOICE_INPUT_PRE_ROLL_MS must be an integer between 0 and 5000: {value}")]
+    #[error("VOICE_INPUT_DEFAULT_PRE_ROLL_MS must be an integer between 0 and 5000: {value}")]
     InvalidAudioPreRollMs { value: String },
     #[error("{name} must be either 'true' or 'false': {value}")]
     InvalidBooleanEnv { name: &'static str, value: String },
@@ -278,7 +284,7 @@ impl EnvConfig {
             None => TranscriptionProvider::DEFAULT,
         };
         let mlx_qwen3_asr_model = DEFAULT_MLX_QWEN3_ASR_MODEL.to_string();
-        let streaming_enabled = parse_bool_env("OPENAI_TRANSCRIBE_STREAMING")?;
+        let streaming_enabled = parse_bool_env(TRANSCRIBE_STREAMING_ENV)?;
         let mlx_qwen3_asr_command = "mlx-qwen3-asr".to_string();
         let audio_pre_roll_ms = match std::env::var(AUDIO_PRE_ROLL_MS_ENV) {
             Ok(value) => parse_audio_pre_roll_ms(&value)?,
@@ -318,7 +324,7 @@ impl EnvConfig {
                 http: non_empty_env_with_lowercase_fallback("HTTP_PROXY"),
             },
             audio: AudioConfig {
-                input_device_priorities: csv_env("INPUT_DEVICE_PRIORITY"),
+                input_device_priorities: csv_env(INPUT_DEVICE_PRIORITIES_ENV),
                 preferred_format: PreferredAudioFormat::Flac,
                 pre_roll_ms: audio_pre_roll_ms,
                 recording_sounds_enabled: parse_bool_env_with_default(
@@ -668,8 +674,8 @@ mod tests {
     fn push_to_talk_defaults_to_disabled_opt_8() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::remove_var("VOICE_INPUT_PUSH_TO_TALK");
-            std::env::remove_var("VOICE_INPUT_PUSH_TO_TALK_HOTKEY");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_HOTKEY");
         }
 
         let config = EnvConfig::from_env().unwrap();
@@ -683,8 +689,8 @@ mod tests {
     fn push_to_talk_settings_are_loaded_from_environment() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("VOICE_INPUT_PUSH_TO_TALK", "true");
-            std::env::set_var("VOICE_INPUT_PUSH_TO_TALK_HOTKEY", "cmd+space");
+            std::env::set_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED", "true");
+            std::env::set_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_HOTKEY", "cmd+space");
         }
 
         let config = EnvConfig::from_env().unwrap();
@@ -693,8 +699,8 @@ mod tests {
         assert_eq!(config.push_to_talk.hotkey, "cmd+space");
 
         unsafe {
-            std::env::remove_var("VOICE_INPUT_PUSH_TO_TALK");
-            std::env::remove_var("VOICE_INPUT_PUSH_TO_TALK_HOTKEY");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_HOTKEY");
         }
     }
 
@@ -703,7 +709,7 @@ mod tests {
     fn try_from_env_rejects_invalid_push_to_talk_flag() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("VOICE_INPUT_PUSH_TO_TALK", "enabled");
+            std::env::set_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED", "enabled");
         }
 
         let result = EnvConfig::try_from_env();
@@ -711,13 +717,13 @@ mod tests {
         assert_eq!(
             result.unwrap_err(),
             ConfigError::InvalidBooleanEnv {
-                name: "VOICE_INPUT_PUSH_TO_TALK",
+                name: "VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED",
                 value: "enabled".to_string(),
             }
         );
 
         unsafe {
-            std::env::remove_var("VOICE_INPUT_PUSH_TO_TALK");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED");
         }
     }
 
@@ -726,7 +732,7 @@ mod tests {
     fn max_duration_secs_is_loaded_from_environment() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("VOICE_INPUT_MAX_SECS", "45");
+            std::env::set_var("VOICE_INPUT_DEFAULT_MAX_SECS", "45");
         }
 
         let config = EnvConfig::from_env().unwrap();
@@ -734,7 +740,7 @@ mod tests {
         assert_eq!(config.recording.max_duration_secs, 45);
 
         unsafe {
-            std::env::remove_var("VOICE_INPUT_MAX_SECS");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_MAX_SECS");
         }
     }
 
@@ -824,7 +830,7 @@ mod tests {
     fn audio_pre_roll_defaults_to_500ms() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::remove_var("VOICE_INPUT_PRE_ROLL_MS");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS");
         }
 
         let config = EnvConfig::from_env().unwrap();
@@ -837,7 +843,7 @@ mod tests {
     fn audio_pre_roll_ms_is_loaded_from_environment() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("VOICE_INPUT_PRE_ROLL_MS", "250");
+            std::env::set_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS", "250");
         }
 
         let config = EnvConfig::from_env().unwrap();
@@ -845,7 +851,7 @@ mod tests {
         assert_eq!(config.audio.pre_roll_ms, 250);
 
         unsafe {
-            std::env::remove_var("VOICE_INPUT_PRE_ROLL_MS");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS");
         }
     }
 
@@ -854,7 +860,7 @@ mod tests {
     fn audio_pre_roll_ms_accepts_zero() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("VOICE_INPUT_PRE_ROLL_MS", "0");
+            std::env::set_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS", "0");
         }
 
         let config = EnvConfig::from_env().unwrap();
@@ -862,7 +868,7 @@ mod tests {
         assert_eq!(config.audio.pre_roll_ms, 0);
 
         unsafe {
-            std::env::remove_var("VOICE_INPUT_PRE_ROLL_MS");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS");
         }
     }
 
@@ -871,7 +877,10 @@ mod tests {
     fn audio_pre_roll_ms_accepts_maximum() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("VOICE_INPUT_PRE_ROLL_MS", MAX_AUDIO_PRE_ROLL_MS.to_string());
+            std::env::set_var(
+                "VOICE_INPUT_DEFAULT_PRE_ROLL_MS",
+                MAX_AUDIO_PRE_ROLL_MS.to_string(),
+            );
         }
 
         let config = EnvConfig::from_env().unwrap();
@@ -879,7 +888,7 @@ mod tests {
         assert_eq!(config.audio.pre_roll_ms, MAX_AUDIO_PRE_ROLL_MS);
 
         unsafe {
-            std::env::remove_var("VOICE_INPUT_PRE_ROLL_MS");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS");
         }
     }
 
@@ -1018,7 +1027,7 @@ mod tests {
     fn try_from_env_rejects_invalid_max_duration_secs() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("VOICE_INPUT_MAX_SECS", "abc");
+            std::env::set_var("VOICE_INPUT_DEFAULT_MAX_SECS", "abc");
         }
 
         let result = EnvConfig::try_from_env();
@@ -1031,7 +1040,7 @@ mod tests {
         );
 
         unsafe {
-            std::env::remove_var("VOICE_INPUT_MAX_SECS");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_MAX_SECS");
         }
     }
 
@@ -1040,7 +1049,7 @@ mod tests {
     fn try_from_env_rejects_invalid_audio_pre_roll_ms() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("VOICE_INPUT_PRE_ROLL_MS", "abc");
+            std::env::set_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS", "abc");
         }
 
         let result = EnvConfig::try_from_env();
@@ -1053,7 +1062,7 @@ mod tests {
         );
 
         unsafe {
-            std::env::remove_var("VOICE_INPUT_PRE_ROLL_MS");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS");
         }
     }
 
@@ -1063,7 +1072,7 @@ mod tests {
         let _lock = lock_test_env();
         let value = (MAX_AUDIO_PRE_ROLL_MS + 1).to_string();
         unsafe {
-            std::env::set_var("VOICE_INPUT_PRE_ROLL_MS", &value);
+            std::env::set_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS", &value);
         }
 
         let result = EnvConfig::try_from_env();
@@ -1071,7 +1080,7 @@ mod tests {
         assert_eq!(result, Err(ConfigError::InvalidAudioPreRollMs { value }));
 
         unsafe {
-            std::env::remove_var("VOICE_INPUT_PRE_ROLL_MS");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS");
         }
     }
 
@@ -1080,7 +1089,7 @@ mod tests {
     fn try_from_env_rejects_zero_max_duration_secs() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("VOICE_INPUT_MAX_SECS", "0");
+            std::env::set_var("VOICE_INPUT_DEFAULT_MAX_SECS", "0");
         }
 
         let result = EnvConfig::try_from_env();
@@ -1093,7 +1102,7 @@ mod tests {
         );
 
         unsafe {
-            std::env::remove_var("VOICE_INPUT_MAX_SECS");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_MAX_SECS");
         }
     }
 
@@ -1102,7 +1111,7 @@ mod tests {
     fn try_from_env_rejects_negative_max_duration_secs() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("VOICE_INPUT_MAX_SECS", "-1");
+            std::env::set_var("VOICE_INPUT_DEFAULT_MAX_SECS", "-1");
         }
 
         let result = EnvConfig::try_from_env();
@@ -1115,7 +1124,7 @@ mod tests {
         );
 
         unsafe {
-            std::env::remove_var("VOICE_INPUT_MAX_SECS");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_MAX_SECS");
         }
     }
 
@@ -1124,7 +1133,7 @@ mod tests {
     fn explicit_max_duration_secs_overrides_invalid_environment() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("VOICE_INPUT_MAX_SECS", "abc");
+            std::env::set_var("VOICE_INPUT_DEFAULT_MAX_SECS", "abc");
         }
 
         let config = EnvConfig::try_from_env_with_recording_max_duration_secs(Some(120))
@@ -1133,7 +1142,7 @@ mod tests {
         assert_eq!(config.recording.max_duration_secs, 120);
 
         unsafe {
-            std::env::remove_var("VOICE_INPUT_MAX_SECS");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_MAX_SECS");
         }
     }
 
@@ -1155,7 +1164,7 @@ mod tests {
     fn try_from_env_rejects_invalid_streaming_flag() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("OPENAI_TRANSCRIBE_STREAMING", "TRUE");
+            std::env::set_var("VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING", "TRUE");
         }
 
         let result = EnvConfig::try_from_env();
@@ -1163,13 +1172,13 @@ mod tests {
         assert_eq!(
             result,
             Err(ConfigError::InvalidBooleanEnv {
-                name: "OPENAI_TRANSCRIBE_STREAMING",
+                name: "VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING",
                 value: "TRUE".to_string(),
             })
         );
 
         unsafe {
-            std::env::remove_var("OPENAI_TRANSCRIBE_STREAMING");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING");
         }
     }
 
@@ -1178,7 +1187,7 @@ mod tests {
     fn try_from_env_accepts_explicit_false_streaming_flag() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("OPENAI_TRANSCRIBE_STREAMING", "false");
+            std::env::set_var("VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING", "false");
         }
 
         let result = EnvConfig::try_from_env().expect("streaming=false should be valid");
@@ -1186,7 +1195,7 @@ mod tests {
         assert!(!result.transcription.streaming_enabled);
 
         unsafe {
-            std::env::remove_var("OPENAI_TRANSCRIBE_STREAMING");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING");
         }
     }
 
@@ -1195,7 +1204,7 @@ mod tests {
     fn test_init_loader_rejects_invalid_env_when_uninitialized() {
         let _lock = lock_test_env();
         unsafe {
-            std::env::set_var("OPENAI_TRANSCRIBE_STREAMING", "TRUE");
+            std::env::set_var("VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING", "TRUE");
         }
 
         let result = EnvConfig::load_for_test_init();
@@ -1203,13 +1212,13 @@ mod tests {
         assert_eq!(
             result,
             Err(ConfigError::InvalidBooleanEnv {
-                name: "OPENAI_TRANSCRIBE_STREAMING",
+                name: "VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING",
                 value: "TRUE".to_string(),
             })
         );
 
         unsafe {
-            std::env::remove_var("OPENAI_TRANSCRIBE_STREAMING");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING");
         }
     }
 
@@ -1268,7 +1277,7 @@ mod tests {
         let _lock = lock_test_env();
         unsafe {
             std::env::set_var(
-                "INPUT_DEVICE_PRIORITY",
+                "VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES",
                 "Built-in Microphone, Yeti X ,  ,External Mic",
             );
         }
@@ -1285,7 +1294,7 @@ mod tests {
         );
 
         unsafe {
-            std::env::remove_var("INPUT_DEVICE_PRIORITY");
+            std::env::remove_var("VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES");
         }
     }
 

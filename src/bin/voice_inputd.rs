@@ -29,6 +29,7 @@ use voice_input::{
     infrastructure::{
         audio::CpalAudioBackend,
         command_handler::CommandHandler,
+        config::AppConfig,
         external::recording_hud,
         external::text_input,
         push_to_talk::{self, PushToTalkEvent, PushToTalkMonitor},
@@ -38,7 +39,7 @@ use voice_input::{
     },
     ipc::{IpcCmd, IpcResp, socket_path},
     load_env,
-    utils::config::EnvConfig,
+    utils::config::{EnvConfig, PushToTalkConfig},
 };
 
 // ────────────────────────────────────────────────────────
@@ -79,21 +80,33 @@ async fn async_main() -> Result<()> {
         .expect("Transcription receiver should be available");
 
     // 転写ワーカーの起動
-    let max_concurrent_transcriptions = EnvConfig::get().recommended_transcription_parallelism();
+    let max_concurrent_transcriptions =
+        if AppConfig::load_runtime().effective_transcribe_streaming() {
+            1
+        } else {
+            2
+        };
     let semaphore = std::sync::Arc::new(Semaphore::new(max_concurrent_transcriptions));
     let transcription_service = container.transcription_service.clone();
     let history_service = container.history_service.clone();
 
     text_input::init_worker().map_err(|e| VoiceInputError::SystemError(e.to_string()))?;
-    recording_hud::init_worker();
+    if AppConfig::load_runtime().effective_recording_hud_enabled() {
+        recording_hud::init_worker();
+    }
     spawn_runtime_recovery_monitor(recording_service.clone(), command_handler.clone());
     command_handler
         .borrow()
         .warm_gpt_live_transcribe_session_if_enabled();
+    let runtime_config = AppConfig::load_runtime();
+    let push_to_talk_config = PushToTalkConfig {
+        enabled: runtime_config.effective_push_to_talk_enabled(),
+        hotkey: runtime_config.effective_push_to_talk_hotkey(),
+    };
     let _push_to_talk_monitor = match spawn_push_to_talk_if_enabled(
         command_handler.clone(),
         recording_service.clone(),
-        &EnvConfig::get().push_to_talk,
+        &push_to_talk_config,
     ) {
         Ok(monitor) => monitor,
         Err(error) => {
@@ -102,7 +115,7 @@ async fn async_main() -> Result<()> {
                 "voice-inputd is stopping without restart to avoid a LaunchAgent restart loop."
             );
             eprintln!(
-                "Grant Accessibility/Input Monitoring permission to VoiceInput.app, or set VOICE_INPUT_PUSH_TO_TALK=false, then restart the daemon."
+                "Grant Accessibility/Input Monitoring permission to VoiceInput.app, or run `voice_input config set push-to-talk-enabled false`, then restart the daemon."
             );
             let _ = fs::remove_file(&path);
             process::exit(0);
@@ -271,6 +284,7 @@ async fn handle_client(
     if let Some(Ok(line)) = reader.next().await {
         let cmd: IpcCmd = serde_json::from_str(&line)
             .map_err(|e| VoiceInputError::IpcSerializationError(e.to_string()))?;
+        let reload_config = matches!(cmd, IpcCmd::ReloadConfig);
 
         let resp = command_handler
             .borrow()
@@ -288,6 +302,20 @@ async fn handle_client(
             )
             .await
             .map_err(|e| VoiceInputError::IpcConnectionFailed(e.to_string()))?;
+
+        if reload_config {
+            drop(writer);
+            if command_handler.borrow().is_recording() {
+                spawn_local(async move {
+                    while command_handler.borrow().is_recording() {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    process::exit(75);
+                });
+            } else {
+                process::exit(75);
+            }
+        }
     }
     Ok(())
 }

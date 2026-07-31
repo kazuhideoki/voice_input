@@ -17,6 +17,7 @@ use crate::error::Result;
 use crate::infrastructure::{
     audio::{AudioBackend, CpalAudioBackend},
     command_handler::{CommandHandler, TranscriptionMessage},
+    config::AppConfig as RuntimeConfig,
     dict::JsonFileDictRepo,
     external::{
         routing_transcription_adapter::RoutingTranscriptionAdapter,
@@ -40,14 +41,18 @@ pub struct AppConfig {
 impl AppConfig {
     /// 初期化済みの環境変数設定からアプリケーション設定を構築する
     pub fn from_initialized_env() -> Result<Self> {
-        let env_config = EnvConfig::get();
+        let runtime_config = RuntimeConfig::load_runtime();
 
         Ok(Self {
             recording: RecordingConfig {
-                max_duration_secs: env_config.recording.max_duration_secs,
+                max_duration_secs: runtime_config.effective_max_secs(),
             },
-            max_concurrent_transcriptions: env_config.recommended_transcription_parallelism(),
-            recording_sounds_enabled: env_config.audio.recording_sounds_enabled,
+            max_concurrent_transcriptions: if runtime_config.effective_transcribe_streaming() {
+                1
+            } else {
+                2
+            },
+            recording_sounds_enabled: runtime_config.effective_recording_sounds_enabled(),
         })
     }
 }

@@ -117,6 +117,11 @@ fn parse_hotkey(value: &str) -> Result<Hotkey, String> {
     })
 }
 
+/// push-to-talkホットキーが対応形式か検証する。
+pub fn validate_hotkey(value: &str) -> Result<(), String> {
+    parse_hotkey(value).map(|_| ())
+}
+
 fn parse_key_code(value: &str) -> Result<u16, String> {
     if let Some(raw_keycode) = value.strip_prefix("keycode:") {
         return raw_keycode

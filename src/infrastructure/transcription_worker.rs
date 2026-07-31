@@ -20,12 +20,13 @@ use crate::application::{
 use crate::domain::transcription::FinalizedTranscription;
 use crate::error::Result;
 use crate::infrastructure::command_handler::TranscriptionMessage;
+use crate::infrastructure::config::AppConfig;
 use crate::infrastructure::external::{
     recording_hud::{self, HudState},
     sound::resume_apple_music,
     text_input,
 };
-use crate::utils::config::{EnvConfig, TranscriptionProvider};
+use crate::utils::config::TranscriptionProvider;
 use crate::utils::profiling;
 use async_trait::async_trait;
 
@@ -57,7 +58,7 @@ pub async fn handle_transcription(
     let options = TranscriptionOptions { provider };
 
     let finalized = if provider == TranscriptionProvider::GptTranscribe
-        && EnvConfig::get().transcription.streaming_enabled
+        && AppConfig::load_runtime().effective_transcribe_streaming()
     {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
         let input_task = tokio::task::spawn_local(async move {

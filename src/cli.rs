@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use crate::infrastructure::push_to_talk::validate_hotkey;
 use crate::utils::config::{
     TranscriptionProvider, parse_audio_pre_roll_ms, parse_max_duration_secs,
 };
@@ -99,7 +100,7 @@ pub enum ConfigCmd {
         #[arg(value_enum)]
         field: RuntimeConfigField,
     },
-    /// 永続設定を削除して `.env` の値へ戻す
+    /// 永続設定を削除して `.env` の `VOICE_INPUT_DEFAULT_*` へ戻す
     Unset {
         #[arg(value_enum)]
         field: RuntimeConfigField,
@@ -131,6 +132,42 @@ pub enum ConfigField {
         #[arg(value_parser = parse_audio_pre_roll_ms_arg)]
         millis: u64,
     },
+    /// 入力デバイスの優先順位を指定
+    #[command(name = "input-device-priorities")]
+    InputDevicePriorities {
+        #[arg(required = true, num_args = 1..)]
+        priorities: Vec<String>,
+    },
+    /// 録音開始・停止サウンドの有効・無効を指定
+    #[command(name = "recording-sounds-enabled")]
+    RecordingSoundsEnabled {
+        #[arg(action = clap::ArgAction::Set)]
+        enabled: bool,
+    },
+    /// 録音状態HUDの有効・無効を指定
+    #[command(name = "recording-hud-enabled")]
+    RecordingHudEnabled {
+        #[arg(action = clap::ArgAction::Set)]
+        enabled: bool,
+    },
+    /// push-to-talkの有効・無効を指定
+    #[command(name = "push-to-talk-enabled")]
+    PushToTalkEnabled {
+        #[arg(action = clap::ArgAction::Set)]
+        enabled: bool,
+    },
+    /// push-to-talkのホットキーを指定
+    #[command(name = "push-to-talk-hotkey")]
+    PushToTalkHotkey {
+        #[arg(value_parser = parse_push_to_talk_hotkey_arg)]
+        hotkey: String,
+    },
+    /// GPT Transcribeのストリーミング直接入力を指定
+    #[command(name = "transcribe-streaming")]
+    TranscribeStreaming {
+        #[arg(action = clap::ArgAction::Set)]
+        enabled: bool,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -138,6 +175,12 @@ pub enum RuntimeConfigField {
     TranscriptionProvider,
     MaxSecs,
     PreRollMs,
+    InputDevicePriorities,
+    RecordingSoundsEnabled,
+    RecordingHudEnabled,
+    PushToTalkEnabled,
+    PushToTalkHotkey,
+    TranscribeStreaming,
 }
 
 fn parse_transcription_provider(value: &str) -> Result<TranscriptionProvider, String> {
@@ -150,6 +193,11 @@ fn parse_max_duration_secs_arg(value: &str) -> Result<u64, String> {
 
 fn parse_audio_pre_roll_ms_arg(value: &str) -> Result<u64, String> {
     parse_audio_pre_roll_ms(value).map_err(|error| error.to_string())
+}
+
+fn parse_push_to_talk_hotkey_arg(value: &str) -> Result<String, String> {
+    validate_hotkey(value)?;
+    Ok(value.to_string())
 }
 
 #[cfg(test)]
@@ -193,6 +241,20 @@ mod tests {
     #[test]
     fn rejects_excessive_persistent_pre_roll() {
         let result = Cli::try_parse_from(["voice_input", "config", "set", "pre-roll-ms", "5001"]);
+
+        assert!(result.is_err());
+    }
+
+    /// push-to-talkの永続設定は不正なホットキーを拒否する
+    #[test]
+    fn rejects_invalid_persistent_push_to_talk_hotkey() {
+        let result = Cli::try_parse_from([
+            "voice_input",
+            "config",
+            "set",
+            "push-to-talk-hotkey",
+            "opt+unknown-key",
+        ]);
 
         assert!(result.is_err());
     }

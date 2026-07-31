@@ -118,11 +118,11 @@ fn start_command_rejects_negative_max_secs() {
 fn start_command_max_secs_overrides_invalid_env() {
     let output = run_cmd_with_env(
         &["start", "--max-secs", "120"],
-        "VOICE_INPUT_MAX_SECS",
+        "VOICE_INPUT_DEFAULT_MAX_SECS",
         "abc",
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stderr.contains("VOICE_INPUT_MAX_SECS must be a positive integer"));
+    assert!(!stderr.contains("VOICE_INPUT_DEFAULT_MAX_SECS must be a positive integer"));
 }
 
 /// startコマンドで入力ファイルパスを指定できる
@@ -228,7 +228,7 @@ fn start_command_rejects_openai_transcription_provider_alias() {
     assert!(stderr.contains("invalid value"));
 }
 
-/// 3つの実行時設定を永続化し個別に解除できる
+/// ユーザーが変更可能な実行時設定を永続化し個別に解除できる
 #[test]
 fn runtime_configuration_persists_and_unsets_supported_fields() {
     let runtime_dir = TempDir::new().unwrap();
@@ -242,6 +242,18 @@ fn runtime_configuration_persists_and_unsets_supported_fields() {
         ],
         vec!["config", "set", "max-secs", "90"],
         vec!["config", "set", "pre-roll-ms", "250"],
+        vec![
+            "config",
+            "set",
+            "input-device-priorities",
+            "External Mic",
+            "MacBook Microphone",
+        ],
+        vec!["config", "set", "recording-sounds-enabled", "false"],
+        vec!["config", "set", "recording-hud-enabled", "false"],
+        vec!["config", "set", "push-to-talk-enabled", "true"],
+        vec!["config", "set", "push-to-talk-hotkey", "cmd+space"],
+        vec!["config", "set", "transcribe-streaming", "true"],
     ] {
         let output = run_built_cmd_with_runtime_dir(&args, &runtime_dir);
         assert!(output.status.success());
@@ -253,6 +265,13 @@ fn runtime_configuration_persists_and_unsets_supported_fields() {
     assert_eq!(config["transcription_provider"], "gpt-live-transcribe");
     assert_eq!(config["max_secs"], 90);
     assert_eq!(config["pre_roll_ms"], 250);
+    assert_eq!(config["input_device_priorities"][0], "External Mic");
+    assert_eq!(config["input_device_priorities"][1], "MacBook Microphone");
+    assert_eq!(config["recording_sounds_enabled"], false);
+    assert_eq!(config["recording_hud_enabled"], false);
+    assert_eq!(config["push_to_talk_enabled"], true);
+    assert_eq!(config["push_to_talk_hotkey"], "cmd+space");
+    assert_eq!(config["transcribe_streaming"], true);
 
     let output =
         run_built_cmd_with_runtime_dir(&["config", "get", "transcription-provider"], &runtime_dir);
@@ -267,8 +286,24 @@ fn runtime_configuration_persists_and_unsets_supported_fields() {
     assert!(stdout.contains("transcription-provider=gpt-live-transcribe"));
     assert!(stdout.contains("max-secs=90"));
     assert!(stdout.contains("pre-roll-ms=250"));
+    assert!(stdout.contains("input-device-priorities=External Mic,MacBook Microphone"));
+    assert!(stdout.contains("recording-sounds-enabled=false"));
+    assert!(stdout.contains("recording-hud-enabled=false"));
+    assert!(stdout.contains("push-to-talk-enabled=true"));
+    assert!(stdout.contains("push-to-talk-hotkey=cmd+space"));
+    assert!(stdout.contains("transcribe-streaming=true"));
 
-    for field in ["transcription-provider", "max-secs", "pre-roll-ms"] {
+    for field in [
+        "transcription-provider",
+        "max-secs",
+        "pre-roll-ms",
+        "input-device-priorities",
+        "recording-sounds-enabled",
+        "recording-hud-enabled",
+        "push-to-talk-enabled",
+        "push-to-talk-hotkey",
+        "transcribe-streaming",
+    ] {
         let output = run_built_cmd_with_runtime_dir(&["config", "unset", field], &runtime_dir);
         assert!(output.status.success());
     }

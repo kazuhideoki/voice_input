@@ -82,6 +82,11 @@ pub struct CommandHandler<T: AudioBackend> {
 }
 
 impl<T: AudioBackend + 'static> CommandHandler<T> {
+    /// 録音中かどうかを返す。
+    pub fn is_recording(&self) -> bool {
+        self.recording.borrow().is_recording()
+    }
+
     /// 新しいCommandHandlerを作成
     pub fn new(
         recording: Rc<RefCell<RecordingService<T>>>,
@@ -218,13 +223,11 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             IpcCmd::History => self.handle_history(),
             IpcCmd::ListDevices => self.handle_list_devices(),
             IpcCmd::Health => self.handle_health().await,
-            IpcCmd::ReloadConfig => {
-                self.reset_ready_gpt_live_transcribe_session();
-                Ok(IpcResp {
-                    ok: true,
-                    msg: "runtime configuration reloaded".to_string(),
-                })
-            }
+            IpcCmd::ReloadConfig => Ok(IpcResp {
+                ok: true,
+                msg: "runtime configuration saved; daemon restarting after active recording"
+                    .to_string(),
+            }),
         }
     }
 
