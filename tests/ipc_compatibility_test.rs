@@ -55,6 +55,7 @@ fn unit_commands_deserialize_from_json() {
         (r#"{"History":null}"#, IpcCmd::History),
         (r#"{"Health":null}"#, IpcCmd::Health),
         (r#"{"ListDevices":null}"#, IpcCmd::ListDevices),
+        (r#"{"ReloadConfig":null}"#, IpcCmd::ReloadConfig),
     ];
 
     for (json, expected) in commands {

@@ -1,4 +1,4 @@
-use crate::utils::config::EnvConfig;
+use crate::utils::config::{EnvConfig, TranscriptionProvider};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -9,7 +9,14 @@ use std::{
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct AppConfig {
+    /// 辞書ファイルの保存先。
     pub dict_path: Option<String>,
+    /// `.env` より優先する既定の転写バックエンド。
+    pub transcription_provider: Option<TranscriptionProvider>,
+    /// `.env` より優先する最大録音秒数。
+    pub max_secs: Option<u64>,
+    /// `.env` より優先するpre-roll長。
+    pub pre_roll_ms: Option<u64>,
 }
 
 fn data_dir() -> PathBuf {
@@ -57,6 +64,20 @@ impl AppConfig {
         AppConfig::default()
     }
 
+    /// デーモンの実行時設定を読み込む。
+    ///
+    /// 単体テストでは利用者の実設定に依存しないよう未指定設定を返す。
+    pub fn load_runtime() -> Self {
+        #[cfg(test)]
+        {
+            AppConfig::default()
+        }
+        #[cfg(not(test))]
+        {
+            AppConfig::load()
+        }
+    }
+
     pub fn save(&self) -> io::Result<()> {
         let path = config_path();
         if let Some(parent) = path.parent() {
@@ -79,8 +100,78 @@ impl AppConfig {
         }
     }
 
+    /// コマンド単位の指定がない録音で使う転写バックエンドを返す。
+    pub fn effective_transcription_provider(&self) -> TranscriptionProvider {
+        self.transcription_provider
+            .unwrap_or_else(|| EnvConfig::get().transcription.provider)
+    }
+
+    /// コマンド単位の指定を最優先して転写バックエンドを返す。
+    pub fn resolve_transcription_provider(
+        &self,
+        command_override: Option<TranscriptionProvider>,
+    ) -> TranscriptionProvider {
+        command_override.unwrap_or_else(|| self.effective_transcription_provider())
+    }
+
+    /// 実行時設定を優先した最大録音秒数を返す。
+    pub fn effective_max_secs(&self) -> u64 {
+        self.max_secs
+            .unwrap_or_else(|| EnvConfig::get().recording.max_duration_secs)
+    }
+
+    /// コマンド単位の指定を最優先して最大録音秒数を返す。
+    pub fn resolve_max_secs(&self, command_override: Option<u64>) -> u64 {
+        command_override.unwrap_or_else(|| self.effective_max_secs())
+    }
+
+    /// 実行時設定を優先したpre-roll長を返す。
+    pub fn effective_pre_roll_ms(&self) -> u64 {
+        self.pre_roll_ms
+            .unwrap_or_else(|| EnvConfig::get().audio.pre_roll_ms)
+    }
+
     pub fn set_dict_path(&mut self, new_path: PathBuf) -> io::Result<()> {
         self.set_dict_path_with(new_path, |config| config.save())
+    }
+
+    /// 既定の転写バックエンドを永続化する。
+    pub fn set_transcription_provider(
+        &mut self,
+        provider: TranscriptionProvider,
+    ) -> io::Result<()> {
+        self.transcription_provider = Some(provider);
+        self.save()
+    }
+
+    /// 既定の最大録音秒数を永続化する。
+    pub fn set_max_secs(&mut self, secs: u64) -> io::Result<()> {
+        self.max_secs = Some(secs);
+        self.save()
+    }
+
+    /// 既定のpre-roll長を永続化する。
+    pub fn set_pre_roll_ms(&mut self, millis: u64) -> io::Result<()> {
+        self.pre_roll_ms = Some(millis);
+        self.save()
+    }
+
+    /// 転写バックエンドの永続設定を削除する。
+    pub fn unset_transcription_provider(&mut self) -> io::Result<()> {
+        self.transcription_provider = None;
+        self.save()
+    }
+
+    /// 最大録音秒数の永続設定を削除する。
+    pub fn unset_max_secs(&mut self) -> io::Result<()> {
+        self.max_secs = None;
+        self.save()
+    }
+
+    /// pre-roll長の永続設定を削除する。
+    pub fn unset_pre_roll_ms(&mut self) -> io::Result<()> {
+        self.pre_roll_ms = None;
+        self.save()
     }
 
     fn set_dict_path_with<F>(&mut self, new_path: PathBuf, save: F) -> io::Result<()>
@@ -111,6 +202,7 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::AppConfig;
+    use crate::utils::config::TranscriptionProvider;
     use std::fs;
     use std::os::unix::fs::symlink;
     use tempfile::TempDir;
@@ -130,6 +222,7 @@ mod tests {
         let new_path = tmp.path().join("migrated/dictionary.json");
         let mut config = AppConfig {
             dict_path: Some(link_path.to_string_lossy().to_string()),
+            ..AppConfig::default()
         };
 
         config
@@ -161,5 +254,56 @@ mod tests {
             config.dict_path.as_deref(),
             Some(new_path.to_string_lossy().as_ref())
         );
+    }
+
+    /// 旧形式の設定ファイルは実行時設定が未指定として読み込める
+    #[test]
+    fn legacy_config_without_runtime_fields_is_deserialized() {
+        let config: AppConfig =
+            serde_json::from_str(r#"{"dict_path":"/tmp/dictionary.json"}"#).unwrap();
+
+        assert_eq!(config.dict_path.as_deref(), Some("/tmp/dictionary.json"));
+        assert_eq!(config.transcription_provider, None);
+        assert_eq!(config.max_secs, None);
+        assert_eq!(config.pre_roll_ms, None);
+    }
+
+    /// 実行時設定は設定ファイルへ保存可能な形式で往復できる
+    #[test]
+    fn runtime_fields_roundtrip_via_json() {
+        let config = AppConfig {
+            dict_path: None,
+            transcription_provider: Some(TranscriptionProvider::GptLiveTranscribe),
+            max_secs: Some(90),
+            pre_roll_ms: Some(250),
+        };
+
+        let json = serde_json::to_string(&config).unwrap();
+        let restored: AppConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            restored.transcription_provider,
+            Some(TranscriptionProvider::GptLiveTranscribe)
+        );
+        assert_eq!(restored.max_secs, Some(90));
+        assert_eq!(restored.pre_roll_ms, Some(250));
+    }
+
+    /// コマンド単位の指定は永続設定より優先される
+    #[test]
+    fn command_overrides_take_priority_over_runtime_config() {
+        let config = AppConfig {
+            dict_path: None,
+            transcription_provider: Some(TranscriptionProvider::GptLiveTranscribe),
+            max_secs: Some(90),
+            pre_roll_ms: Some(250),
+        };
+
+        assert_eq!(
+            config.resolve_transcription_provider(Some(TranscriptionProvider::MlxQwen3Asr)),
+            TranscriptionProvider::MlxQwen3Asr
+        );
+        assert_eq!(config.resolve_max_secs(Some(120)), 120);
+        assert_eq!(config.effective_pre_roll_ms(), 250);
     }
 }

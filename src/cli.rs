@@ -1,7 +1,9 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use crate::utils::config::{TranscriptionProvider, parse_max_duration_secs};
+use crate::utils::config::{
+    TranscriptionProvider, parse_audio_pre_roll_ms, parse_max_duration_secs,
+};
 
 #[derive(Parser)]
 #[command(author, version, about = "Voice Input client (daemon control + dict)")]
@@ -87,11 +89,23 @@ pub enum DictCmd {
 
 #[derive(Subcommand)]
 pub enum ConfigCmd {
-    /// `dict-path` 設定
+    /// 設定値を永続化
     Set {
         #[command(subcommand)]
         field: ConfigField,
     },
+    /// 現在有効な設定値を表示
+    Get {
+        #[arg(value_enum)]
+        field: RuntimeConfigField,
+    },
+    /// 永続設定を削除して `.env` の値へ戻す
+    Unset {
+        #[arg(value_enum)]
+        field: RuntimeConfigField,
+    },
+    /// 現在有効な設定値を一覧表示
+    Show,
 }
 
 #[derive(Subcommand)]
@@ -99,6 +113,31 @@ pub enum ConfigField {
     /// 辞書ファイルの保存先を指定
     #[command(name = "dict-path")]
     DictPath { path: String },
+    /// 既定の転写バックエンドを指定
+    #[command(name = "transcription-provider")]
+    TranscriptionProvider {
+        #[arg(value_parser = parse_transcription_provider)]
+        provider: TranscriptionProvider,
+    },
+    /// 既定の最大録音時間を指定
+    #[command(name = "max-secs")]
+    MaxSecs {
+        #[arg(value_parser = parse_max_duration_secs_arg)]
+        secs: u64,
+    },
+    /// 録音開始時のpre-roll長を指定
+    #[command(name = "pre-roll-ms")]
+    PreRollMs {
+        #[arg(value_parser = parse_audio_pre_roll_ms_arg)]
+        millis: u64,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum RuntimeConfigField {
+    TranscriptionProvider,
+    MaxSecs,
+    PreRollMs,
 }
 
 fn parse_transcription_provider(value: &str) -> Result<TranscriptionProvider, String> {
@@ -107,4 +146,83 @@ fn parse_transcription_provider(value: &str) -> Result<TranscriptionProvider, St
 
 fn parse_max_duration_secs_arg(value: &str) -> Result<u64, String> {
     parse_max_duration_secs(value).map_err(|error| error.to_string())
+}
+
+fn parse_audio_pre_roll_ms_arg(value: &str) -> Result<u64, String> {
+    parse_audio_pre_roll_ms(value).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Cmd, ConfigCmd, ConfigField, RuntimeConfigField, TranscriptionProvider};
+    use clap::Parser;
+
+    /// providerの永続設定コマンドを解釈できる
+    #[test]
+    fn parses_persistent_transcription_provider() {
+        let cli = Cli::try_parse_from([
+            "voice_input",
+            "config",
+            "set",
+            "transcription-provider",
+            "gpt-live-transcribe",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.cmd,
+            Some(Cmd::Config {
+                action: ConfigCmd::Set {
+                    field: ConfigField::TranscriptionProvider {
+                        provider: TranscriptionProvider::GptLiveTranscribe
+                    }
+                }
+            })
+        ));
+    }
+
+    /// 最大録音時間の永続設定は0を拒否する
+    #[test]
+    fn rejects_zero_persistent_max_secs() {
+        let result = Cli::try_parse_from(["voice_input", "config", "set", "max-secs", "0"]);
+
+        assert!(result.is_err());
+    }
+
+    /// pre-rollの永続設定は上限超過を拒否する
+    #[test]
+    fn rejects_excessive_persistent_pre_roll() {
+        let result = Cli::try_parse_from(["voice_input", "config", "set", "pre-roll-ms", "5001"]);
+
+        assert!(result.is_err());
+    }
+
+    /// 実行時設定の解除対象を解釈できる
+    #[test]
+    fn parses_runtime_config_unset() {
+        let cli = Cli::try_parse_from(["voice_input", "config", "unset", "transcription-provider"])
+            .unwrap();
+
+        assert!(matches!(
+            cli.cmd,
+            Some(Cmd::Config {
+                action: ConfigCmd::Unset {
+                    field: RuntimeConfigField::TranscriptionProvider
+                }
+            })
+        ));
+    }
+
+    /// 実行時設定の一覧表示コマンドを解釈できる
+    #[test]
+    fn parses_runtime_config_show() {
+        let cli = Cli::try_parse_from(["voice_input", "config", "show"]).unwrap();
+
+        assert!(matches!(
+            cli.cmd,
+            Some(Cmd::Config {
+                action: ConfigCmd::Show
+            })
+        ));
+    }
 }

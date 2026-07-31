@@ -5,7 +5,7 @@ use clap::Parser;
 use std::path::PathBuf;
 use voice_input::{
     application::DictionaryService,
-    cli::{Cli, Cmd, ConfigCmd, ConfigField, DictCmd},
+    cli::{Cli, Cmd, ConfigCmd, ConfigField, DictCmd, RuntimeConfigField},
     infrastructure::{config::AppConfig, dict::JsonFileDictRepo},
     ipc::{IpcCmd, send_cmd},
     load_env,
@@ -133,17 +133,93 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Cmd::Config { action } => match action {
-            ConfigCmd::Set { field } => match field {
-                ConfigField::DictPath { path } => {
-                    let mut cfg = AppConfig::load();
-                    cfg.set_dict_path(std::path::PathBuf::from(&path))?;
-                    println!("✅ dict-path set to {path}");
-                }
-            },
-        },
+        Cmd::Config { action } => handle_config_command(action)?,
     }
     Ok(())
+}
+
+fn handle_config_command(action: ConfigCmd) -> Result<(), Box<dyn std::error::Error>> {
+    let mut config = AppConfig::load();
+    match action {
+        ConfigCmd::Set { field } => match field {
+            ConfigField::DictPath { path } => {
+                config.set_dict_path(std::path::PathBuf::from(&path))?;
+                println!("✅ dict-path set to {path}");
+            }
+            ConfigField::TranscriptionProvider { provider } => {
+                config.set_transcription_provider(provider)?;
+                println!("✅ transcription-provider set to {}", provider.as_str());
+                notify_daemon_config_changed();
+            }
+            ConfigField::MaxSecs { secs } => {
+                config.set_max_secs(secs)?;
+                println!("✅ max-secs set to {secs}");
+                notify_daemon_config_changed();
+            }
+            ConfigField::PreRollMs { millis } => {
+                config.set_pre_roll_ms(millis)?;
+                println!("✅ pre-roll-ms set to {millis}");
+                notify_daemon_config_changed();
+            }
+        },
+        ConfigCmd::Get { field } => print_runtime_config(field, &config),
+        ConfigCmd::Show => print_all_config(&config),
+        ConfigCmd::Unset { field } => {
+            match field {
+                RuntimeConfigField::TranscriptionProvider => {
+                    config.unset_transcription_provider()?;
+                }
+                RuntimeConfigField::MaxSecs => config.unset_max_secs()?,
+                RuntimeConfigField::PreRollMs => config.unset_pre_roll_ms()?,
+            }
+            println!("✅ {} unset", runtime_config_field_name(field));
+            notify_daemon_config_changed();
+        }
+    }
+    Ok(())
+}
+
+fn print_all_config(config: &AppConfig) {
+    println!("dict-path={}", config.dict_path().display());
+    println!(
+        "transcription-provider={}",
+        config.effective_transcription_provider().as_str()
+    );
+    println!("max-secs={}", config.effective_max_secs());
+    println!("pre-roll-ms={}", config.effective_pre_roll_ms());
+}
+
+fn print_runtime_config(field: RuntimeConfigField, config: &AppConfig) {
+    match field {
+        RuntimeConfigField::TranscriptionProvider => {
+            println!("{}", config.effective_transcription_provider().as_str())
+        }
+        RuntimeConfigField::MaxSecs => println!("{}", config.effective_max_secs()),
+        RuntimeConfigField::PreRollMs => println!("{}", config.effective_pre_roll_ms()),
+    }
+}
+
+fn runtime_config_field_name(field: RuntimeConfigField) -> &'static str {
+    match field {
+        RuntimeConfigField::TranscriptionProvider => "transcription-provider",
+        RuntimeConfigField::MaxSecs => "max-secs",
+        RuntimeConfigField::PreRollMs => "pre-roll-ms",
+    }
+}
+
+fn notify_daemon_config_changed() {
+    match send_cmd(&IpcCmd::ReloadConfig) {
+        Ok(response) if !response.ok => {
+            eprintln!(
+                "⚠️  Setting was saved, but the daemon could not apply it: {}",
+                response.msg
+            );
+        }
+        Err(error) => {
+            eprintln!("ℹ️  Setting was saved and will apply when the daemon starts: {error}");
+        }
+        Ok(_) => {}
+    }
 }
 
 fn command_max_secs(cmd: &Cmd) -> Option<u64> {

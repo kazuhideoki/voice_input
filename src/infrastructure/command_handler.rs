@@ -23,6 +23,7 @@ use crate::domain::transcription::FinalizedTranscription;
 use crate::error::{Result, VoiceInputError};
 use crate::infrastructure::{
     audio::{AudioBackend, CpalAudioBackend},
+    config::AppConfig,
     external::{
         gpt_live_transcribe_adapter::{
             GptLiveTranscribeConfig, GptLiveTranscribeSessionHandle,
@@ -122,7 +123,9 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
     /// 設定が GPT Live Transcribe の場合、待機済みセッションをバックグラウンドで1本用意する。
     pub fn warm_gpt_live_transcribe_session_if_enabled(&self) {
-        if EnvConfig::get().transcription.provider != TranscriptionProvider::GptLiveTranscribe {
+        if AppConfig::load_runtime().effective_transcription_provider()
+            != TranscriptionProvider::GptLiveTranscribe
+        {
             return;
         }
 
@@ -215,6 +218,13 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             IpcCmd::History => self.handle_history(),
             IpcCmd::ListDevices => self.handle_list_devices(),
             IpcCmd::Health => self.handle_health().await,
+            IpcCmd::ReloadConfig => {
+                self.reset_ready_gpt_live_transcribe_session();
+                Ok(IpcResp {
+                    ok: true,
+                    msg: "runtime configuration reloaded".to_string(),
+                })
+            }
         }
     }
 
@@ -232,8 +242,9 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             ));
         }
 
-        let provider =
-            transcription_provider.unwrap_or_else(|| EnvConfig::get().transcription.provider);
+        let runtime_config = AppConfig::load_runtime();
+        let provider = runtime_config.resolve_transcription_provider(transcription_provider);
+        let max_duration_secs = Some(runtime_config.resolve_max_secs(max_duration_secs));
 
         // キー押下直後の視覚フィードバックを優先するため、音や録音準備より先にHUDを出す
         recording_hud::set_state(HudState::Detecting);
@@ -557,16 +568,15 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             lines.push("Input device: OK".to_string());
         }
 
-        let transcription = &EnvConfig::get().transcription;
-        match transcription.provider {
+        let env_config = EnvConfig::get();
+        let transcription = &env_config.transcription;
+        let provider = AppConfig::load_runtime().effective_transcription_provider();
+        match provider {
             crate::utils::config::TranscriptionProvider::GptTranscribe
             | crate::utils::config::TranscriptionProvider::GptLiveTranscribe => {
                 match transcription.api_key.clone() {
                     Some(key) => {
-                        lines.push(format!(
-                            "transcription provider: {}",
-                            transcription.provider.as_str()
-                        ));
+                        lines.push(format!("transcription provider: {}", provider.as_str()));
                         lines.push("TRANSCRIPTION_API_KEY: present".to_string());
                         let client = reqwest::Client::new();
                         match client
@@ -589,10 +599,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                         }
                     }
                     None => {
-                        lines.push(format!(
-                            "transcription provider: {}",
-                            transcription.provider.as_str()
-                        ));
+                        lines.push(format!("transcription provider: {}", provider.as_str()));
                         lines.push("TRANSCRIPTION_API_KEY: missing".to_string());
                         ok = false;
                     }
@@ -667,7 +674,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                                 .await
                                 {
                                     eprintln!("Realtime auto-stop failed: {}", error);
-                                } else if EnvConfig::get().transcription.provider
+                                } else if AppConfig::load_runtime().effective_transcription_provider()
                                     == TranscriptionProvider::GptLiveTranscribe
                                 {
                                     ensure_ready_realtime_session(

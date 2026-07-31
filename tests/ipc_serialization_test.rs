@@ -34,6 +34,7 @@ fn ipc_commands_roundtrip_via_json() {
         IpcCmd::History,
         IpcCmd::Health,
         IpcCmd::ListDevices,
+        IpcCmd::ReloadConfig,
     ];
 
     for command in commands {

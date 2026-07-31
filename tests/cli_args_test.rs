@@ -1,4 +1,5 @@
 use std::process::Command;
+use tempfile::TempDir;
 
 fn run_cmd(args: &[&str]) -> std::process::Output {
     let mut command = Command::new("cargo");
@@ -15,6 +16,22 @@ fn run_cmd_with_env(args: &[&str], key: &str, value: &str) -> std::process::Outp
         .args(args)
         .env(key, value);
     command.output().expect("Failed to run command")
+}
+
+fn run_built_cmd_with_runtime_dir(args: &[&str], runtime_dir: &TempDir) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_voice_input"))
+        .args(args)
+        .env("XDG_DATA_HOME", runtime_dir.path())
+        .env(
+            "VOICE_INPUT_SOCKET_PATH",
+            runtime_dir.path().join("missing.sock"),
+        )
+        .env(
+            "VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER",
+            "gpt-transcribe",
+        )
+        .output()
+        .expect("Failed to run built command")
 }
 
 /// 廃止されたcopy-and-pasteフラグは拒否される
@@ -209,4 +226,50 @@ fn start_command_rejects_openai_transcription_provider_alias() {
     let output = run_cmd(&["start", "--transcription-provider", "openai"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("invalid value"));
+}
+
+/// 3つの実行時設定を永続化し個別に解除できる
+#[test]
+fn runtime_configuration_persists_and_unsets_supported_fields() {
+    let runtime_dir = TempDir::new().unwrap();
+
+    for args in [
+        vec![
+            "config",
+            "set",
+            "transcription-provider",
+            "gpt-live-transcribe",
+        ],
+        vec!["config", "set", "max-secs", "90"],
+        vec!["config", "set", "pre-roll-ms", "250"],
+    ] {
+        let output = run_built_cmd_with_runtime_dir(&args, &runtime_dir);
+        assert!(output.status.success());
+    }
+
+    let config_path = runtime_dir.path().join("voice_input/config.json");
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(config_path).unwrap()).unwrap();
+    assert_eq!(config["transcription_provider"], "gpt-live-transcribe");
+    assert_eq!(config["max_secs"], 90);
+    assert_eq!(config["pre_roll_ms"], 250);
+
+    let output =
+        run_built_cmd_with_runtime_dir(&["config", "get", "transcription-provider"], &runtime_dir);
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "gpt-live-transcribe"
+    );
+
+    let output = run_built_cmd_with_runtime_dir(&["config", "show"], &runtime_dir);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("dict-path="));
+    assert!(stdout.contains("transcription-provider=gpt-live-transcribe"));
+    assert!(stdout.contains("max-secs=90"));
+    assert!(stdout.contains("pre-roll-ms=250"));
+
+    for field in ["transcription-provider", "max-secs", "pre-roll-ms"] {
+        let output = run_built_cmd_with_runtime_dir(&["config", "unset", field], &runtime_dir);
+        assert!(output.status.success());
+    }
 }

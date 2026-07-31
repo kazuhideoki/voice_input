@@ -1,6 +1,7 @@
 use super::encoder::{self, AudioFormat};
 use super::{AudioBackend, AudioBackendError};
 use crate::application::{AudioData, AudioDataFormat, AudioFrame, AudioInputSource, CapturedAudio};
+use crate::infrastructure::config::AppConfig;
 use crate::utils::config::{DEFAULT_MAX_RECORDING_DURATION_SECS, EnvConfig};
 use crate::utils::profiling;
 use audioadapter_buffers::SizeError;
@@ -385,7 +386,7 @@ fn has_minimum_capture(samples_len: usize, sample_rate: u32, channels: u16) -> b
 }
 
 fn pre_roll_sample_capacity(sample_rate: u32, channels: u16) -> usize {
-    let millis = EnvConfig::get().audio.pre_roll_ms;
+    let millis = AppConfig::load_runtime().effective_pre_roll_ms();
     if millis == 0 {
         return 0;
     }
@@ -1351,6 +1352,14 @@ impl CpalAudioBackend {
                 .map_err(|error| AudioBackendError::StreamOperation {
                     message: error.to_string(),
                 })?;
+        let stream_config: StreamConfig = input_setup.supported_config.clone().into();
+        self.pre_roll_buffer
+            .lock()
+            .unwrap()
+            .set_capacity(pre_roll_sample_capacity(
+                stream_config.sample_rate,
+                stream_config.channels,
+            ));
         let generation = self.start_capture_state(&input_setup, frame_tx.clone());
         if self.wait_for_input_samples(generation, INPUT_READINESS_TIMEOUT) {
             return Ok(());

@@ -80,6 +80,8 @@ pub enum IpcCmd {
     History,
     ListDevices,
     Health,
+    /// 永続設定の変更をデーモンへ通知
+    ReloadConfig,
 }
 
 /// デーモンからの汎用レスポンス。

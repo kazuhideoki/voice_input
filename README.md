@@ -46,6 +46,7 @@ VOICE_INPUT_PUSH_TO_TALK_HOTKEY=opt+8
 `.env` はデフォルトでカレントディレクトリから読み込まれ、`VOICE_INPUT_ENV_PATH` が設定されている場合はそのパスが優先されます。
 環境変数は `src/utils/config.rs` の `EnvConfig` で起動時に一度だけ読み込まれます。
 転写バックエンドは `gpt-transcribe`、`gpt-live-transcribe`、`mlx-qwen3-asr` から選べます。既定値は `VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER`、コマンドごとの上書きは `--transcription-provider` です。
+転写バックエンド、最大録音時間、pre-roll長はビルド後に `voice_input config` で永続変更できます。優先順位は、コマンドごとの指定、永続設定、`.env`、プログラム内の既定値の順です。
 OpenAI 系のモデルは provider ごとに固定されます。`gpt-transcribe` は録音後の音声を GPT Transcribe へ送り、`gpt-live-transcribe` は GPT Live Transcribe で録音中に逐次入力します。`mlx-qwen3-asr` はローカルコマンドを使います。
 `VOICE_INPUT_PRE_ROLL_MS` は録音開始直前の音声を先頭へ付与する長さです。既定値は 500ms、0 で無効です。
 `VOICE_INPUT_RECORDING_SOUNDS=false` を設定すると、録音開始・停止時の効果音を無効化できます。未指定時は有効です。
@@ -193,7 +194,13 @@ voice_input start --max-secs 120
 voice_input toggle --max-secs 90
 ```
 
-常に変更したい場合は CLI とデーモンの両方に `VOICE_INPUT_MAX_SECS` を設定してください。
+既定値を永続変更する場合:
+
+```sh
+voice_input config set max-secs 120
+voice_input config get max-secs
+voice_input config unset max-secs
+```
 
 転写バックエンドを一時的に変える場合:
 
@@ -202,6 +209,37 @@ voice_input start --transcription-provider gpt-transcribe
 voice_input toggle --transcription-provider gpt-live-transcribe
 voice_input start --transcription-provider mlx-qwen3-asr
 ```
+
+既定の転写バックエンドを永続変更する場合:
+
+```sh
+voice_input config set transcription-provider gpt-live-transcribe
+voice_input config get transcription-provider
+voice_input config unset transcription-provider
+```
+
+pre-roll長を永続変更する場合:
+
+```sh
+voice_input config set pre-roll-ms 250
+voice_input config get pre-roll-ms
+voice_input config unset pre-roll-ms
+```
+
+設定可能な全項目の現在値を表示する場合:
+
+```sh
+voice_input config show
+```
+
+```text
+dict-path=/path/to/dictionary.json
+transcription-provider=gpt-live-transcribe
+max-secs=120
+pre-roll-ms=250
+```
+
+`unset` 後は `.env` の値へ戻ります。永続設定の変更は保存後にデーモンへ通知され、進行中の録音には影響せず、次回録音から反映されます。デーモンが停止している場合も設定は保存され、次回起動時から反映されます。
 
 デバッグ用に WAV を入力したり、録音後の音声を保存できます。
 
