@@ -117,7 +117,7 @@ async fn async_main() -> Result<()> {
                 "voice-inputd is stopping without restart to avoid a LaunchAgent restart loop."
             );
             eprintln!(
-                "Grant Accessibility/Input Monitoring permission to VoiceInput.app, or run `voice_input config set push-to-talk-enabled false`, then restart the daemon."
+                "Grant Accessibility/Input Monitoring permission to VoiceInput.app, or run `voice_input config set push_to_talk_enabled false`, then restart the daemon."
             );
             let _ = fs::remove_file(&path);
             process::exit(0);

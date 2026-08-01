@@ -9,11 +9,10 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 
-use crate::application::{AudioData, DictRepository};
+use crate::application::{AudioData, DictRepository, TranscriptionProvider};
 use crate::domain::dict::apply_replacements;
 use crate::domain::transcription::{FinalizedTranscription, TranscriptionOutput};
 use crate::error::{Result, VoiceInputError};
-use crate::utils::config::TranscriptionProvider;
 use crate::utils::profiling;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -91,7 +90,7 @@ pub struct TranscriptionOptions {
 impl Default for TranscriptionOptions {
     fn default() -> Self {
         Self {
-            provider: TranscriptionProvider::DEFAULT,
+            provider: crate::application::config_defaults::TRANSCRIPTION_PROVIDER,
         }
     }
 }

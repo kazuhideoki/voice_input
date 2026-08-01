@@ -1,6 +1,5 @@
-use crate::utils::config::{
-    EnvConfig, TranscriptionProvider, UserSettingOverrides, xdg_data_home_from_env,
-};
+use crate::application::config_defaults;
+use crate::utils::config::{TranscriptionProvider, UserSettingOverrides, xdg_data_home_from_env};
 use directories::ProjectDirs;
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
@@ -14,23 +13,23 @@ use std::{
 pub struct AppConfig {
     /// 辞書ファイルの保存先。
     pub dict_path: Option<String>,
-    /// `.env` より優先する既定の転写バックエンド。
+    /// 既定の転写バックエンド。
     pub transcription_provider: Option<TranscriptionProvider>,
-    /// `.env` より優先する最大録音秒数。
+    /// 最大録音秒数。
     pub max_secs: Option<u64>,
-    /// `.env` より優先するpre-roll長。
+    /// pre-roll長。
     pub pre_roll_ms: Option<u64>,
-    /// `.env` より優先する入力デバイスの優先順位。
+    /// 入力デバイスの優先順位。
     pub input_device_priorities: Option<Vec<String>>,
-    /// `.env` より優先する録音開始・停止サウンド設定。
+    /// 録音開始・停止サウンド設定。
     pub recording_sounds_enabled: Option<bool>,
-    /// `.env` より優先する録音状態HUD設定。
+    /// 録音状態HUD設定。
     pub recording_hud_enabled: Option<bool>,
-    /// `.env` より優先するpush-to-talk設定。
+    /// push-to-talk設定。
     pub push_to_talk_enabled: Option<bool>,
-    /// `.env` より優先するpush-to-talkホットキー。
+    /// push-to-talkホットキー。
     pub push_to_talk_hotkey: Option<String>,
-    /// `.env` より優先するGPT Transcribeストリーミング直接入力設定。
+    /// GPT Transcribeストリーミング直接入力設定。
     pub transcribe_streaming: Option<bool>,
 }
 
@@ -103,7 +102,7 @@ impl AppConfig {
         let _ = RUNTIME_CONFIG.set(config);
     }
 
-    /// 環境既定値より優先する項目を環境設定の初期化用に返す。
+    /// ユーザー設定を環境設定の初期化用に返す。
     pub fn user_setting_overrides(&self) -> UserSettingOverrides {
         UserSettingOverrides {
             transcription_provider: self.transcription_provider,
@@ -154,7 +153,7 @@ impl AppConfig {
     /// コマンド単位の指定がない録音で使う転写バックエンドを返す。
     pub fn effective_transcription_provider(&self) -> TranscriptionProvider {
         self.transcription_provider
-            .unwrap_or_else(|| EnvConfig::get().transcription.provider)
+            .unwrap_or(config_defaults::TRANSCRIPTION_PROVIDER)
     }
 
     /// コマンド単位の指定を最優先して転写バックエンドを返す。
@@ -167,8 +166,7 @@ impl AppConfig {
 
     /// 実行時設定を優先した最大録音秒数を返す。
     pub fn effective_max_secs(&self) -> u64 {
-        self.max_secs
-            .unwrap_or_else(|| EnvConfig::get().recording.max_duration_secs)
+        self.max_secs.unwrap_or(config_defaults::MAX_SECS)
     }
 
     /// コマンド単位の指定を最優先して最大録音秒数を返す。
@@ -178,40 +176,42 @@ impl AppConfig {
 
     /// 実行時設定を優先したpre-roll長を返す。
     pub fn effective_pre_roll_ms(&self) -> u64 {
-        self.pre_roll_ms
-            .unwrap_or_else(|| EnvConfig::get().audio.pre_roll_ms)
+        self.pre_roll_ms.unwrap_or(config_defaults::PRE_ROLL_MS)
     }
 
     pub fn effective_input_device_priorities(&self) -> Vec<String> {
-        self.input_device_priorities
-            .clone()
-            .unwrap_or_else(|| EnvConfig::get().audio.input_device_priorities.clone())
+        self.input_device_priorities.clone().unwrap_or_else(|| {
+            config_defaults::INPUT_DEVICE_PRIORITIES
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect()
+        })
     }
 
     pub fn effective_recording_sounds_enabled(&self) -> bool {
         self.recording_sounds_enabled
-            .unwrap_or_else(|| EnvConfig::get().audio.recording_sounds_enabled)
+            .unwrap_or(config_defaults::RECORDING_SOUNDS_ENABLED)
     }
 
     pub fn effective_recording_hud_enabled(&self) -> bool {
         self.recording_hud_enabled
-            .unwrap_or_else(|| EnvConfig::get().ui.recording_hud_enabled)
+            .unwrap_or(config_defaults::RECORDING_HUD_ENABLED)
     }
 
     pub fn effective_push_to_talk_enabled(&self) -> bool {
         self.push_to_talk_enabled
-            .unwrap_or_else(|| EnvConfig::get().push_to_talk.enabled)
+            .unwrap_or(config_defaults::PUSH_TO_TALK_ENABLED)
     }
 
     pub fn effective_push_to_talk_hotkey(&self) -> String {
         self.push_to_talk_hotkey
             .clone()
-            .unwrap_or_else(|| EnvConfig::get().push_to_talk.hotkey.clone())
+            .unwrap_or_else(|| config_defaults::PUSH_TO_TALK_HOTKEY.to_string())
     }
 
     pub fn effective_transcribe_streaming(&self) -> bool {
         self.transcribe_streaming
-            .unwrap_or_else(|| EnvConfig::get().transcription.streaming_enabled)
+            .unwrap_or(config_defaults::TRANSCRIBE_STREAMING)
     }
 
     pub fn set_dict_path(&mut self, new_path: PathBuf) -> io::Result<()> {

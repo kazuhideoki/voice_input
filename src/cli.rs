@@ -100,7 +100,7 @@ pub enum ConfigCmd {
         #[arg(value_enum)]
         field: RuntimeConfigField,
     },
-    /// 永続設定を削除して `.env` の `VOICE_INPUT_DEFAULT_*` へ戻す
+    /// 永続設定を削除してアプリケーション既定値へ戻す
     Unset {
         #[arg(value_enum)]
         field: RuntimeConfigField,
@@ -110,60 +110,51 @@ pub enum ConfigCmd {
 }
 
 #[derive(Subcommand)]
+#[command(rename_all = "snake_case")]
 pub enum ConfigField {
     /// 辞書ファイルの保存先を指定
-    #[command(name = "dict-path")]
     DictPath { path: String },
     /// 既定の転写バックエンドを指定
-    #[command(name = "transcription-provider")]
     TranscriptionProvider {
         #[arg(value_parser = parse_transcription_provider)]
         provider: TranscriptionProvider,
     },
     /// 既定の最大録音時間を指定
-    #[command(name = "max-secs")]
     MaxSecs {
         #[arg(value_parser = parse_max_duration_secs_arg)]
         secs: u64,
     },
     /// 録音開始時のpre-roll長を指定
-    #[command(name = "pre-roll-ms")]
     PreRollMs {
         #[arg(value_parser = parse_audio_pre_roll_ms_arg)]
         millis: u64,
     },
     /// 入力デバイスの優先順位を指定
-    #[command(name = "input-device-priorities")]
     InputDevicePriorities {
         #[arg(required = true, num_args = 1..)]
         priorities: Vec<String>,
     },
     /// 録音開始・停止サウンドの有効・無効を指定
-    #[command(name = "recording-sounds-enabled")]
     RecordingSoundsEnabled {
         #[arg(action = clap::ArgAction::Set)]
         enabled: bool,
     },
     /// 録音状態HUDの有効・無効を指定
-    #[command(name = "recording-hud-enabled")]
     RecordingHudEnabled {
         #[arg(action = clap::ArgAction::Set)]
         enabled: bool,
     },
     /// push-to-talkの有効・無効を指定
-    #[command(name = "push-to-talk-enabled")]
     PushToTalkEnabled {
         #[arg(action = clap::ArgAction::Set)]
         enabled: bool,
     },
     /// push-to-talkのホットキーを指定
-    #[command(name = "push-to-talk-hotkey")]
     PushToTalkHotkey {
         #[arg(value_parser = parse_push_to_talk_hotkey_arg)]
         hotkey: String,
     },
     /// GPT Transcribeのストリーミング直接入力を指定
-    #[command(name = "transcribe-streaming")]
     TranscribeStreaming {
         #[arg(action = clap::ArgAction::Set)]
         enabled: bool,
@@ -171,6 +162,7 @@ pub enum ConfigField {
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
+#[value(rename_all = "snake_case")]
 pub enum RuntimeConfigField {
     TranscriptionProvider,
     MaxSecs,
@@ -212,7 +204,7 @@ mod tests {
             "voice_input",
             "config",
             "set",
-            "transcription-provider",
+            "transcription_provider",
             "gpt-live-transcribe",
         ])
         .unwrap();
@@ -229,10 +221,24 @@ mod tests {
         ));
     }
 
+    /// 設定項目のkebab-case指定は受け付けない
+    #[test]
+    fn rejects_kebab_case_config_field() {
+        let result = Cli::try_parse_from([
+            "voice_input",
+            "config",
+            "set",
+            "transcription-provider",
+            "gpt-transcribe",
+        ]);
+
+        assert!(result.is_err());
+    }
+
     /// 最大録音時間の永続設定は0を拒否する
     #[test]
     fn rejects_zero_persistent_max_secs() {
-        let result = Cli::try_parse_from(["voice_input", "config", "set", "max-secs", "0"]);
+        let result = Cli::try_parse_from(["voice_input", "config", "set", "max_secs", "0"]);
 
         assert!(result.is_err());
     }
@@ -240,7 +246,7 @@ mod tests {
     /// pre-rollの永続設定は上限超過を拒否する
     #[test]
     fn rejects_excessive_persistent_pre_roll() {
-        let result = Cli::try_parse_from(["voice_input", "config", "set", "pre-roll-ms", "5001"]);
+        let result = Cli::try_parse_from(["voice_input", "config", "set", "pre_roll_ms", "5001"]);
 
         assert!(result.is_err());
     }
@@ -252,7 +258,7 @@ mod tests {
             "voice_input",
             "config",
             "set",
-            "push-to-talk-hotkey",
+            "push_to_talk_hotkey",
             "opt+unknown-key",
         ]);
 
@@ -262,7 +268,7 @@ mod tests {
     /// 実行時設定の解除対象を解釈できる
     #[test]
     fn parses_runtime_config_unset() {
-        let cli = Cli::try_parse_from(["voice_input", "config", "unset", "transcription-provider"])
+        let cli = Cli::try_parse_from(["voice_input", "config", "unset", "transcription_provider"])
             .unwrap();
 
         assert!(matches!(
