@@ -1,8 +1,9 @@
 use super::encoder::{self, AudioFormat};
 use super::{AudioBackend, AudioBackendError};
+use crate::application::config_defaults;
 use crate::application::{AudioData, AudioDataFormat, AudioFrame, AudioInputSource, CapturedAudio};
 use crate::infrastructure::config::AppConfig;
-use crate::utils::config::{DEFAULT_MAX_RECORDING_DURATION_SECS, EnvConfig};
+use crate::utils::config::EnvConfig;
 use crate::utils::profiling;
 use audioadapter_buffers::SizeError;
 use cpal::{
@@ -158,7 +159,7 @@ enum AudioResampleError {
 pub enum CpalBackendError {
     #[error("recording is already in progress")]
     AlreadyRecording,
-    #[error("no input device available (check VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES)")]
+    #[error("no input device available (check config input_device_priorities)")]
     NoInputDevice,
     #[error("unsupported sample format")]
     UnsupportedSampleFormat,
@@ -681,9 +682,8 @@ impl CpalAudioBackend {
         let sample_rate = config.sample_rate;
         let channels = config.channels;
         let pre_roll_samples = self.pre_roll_buffer.lock().unwrap().snapshot();
-        let capacity =
-            Self::estimate_buffer_size(DEFAULT_MAX_RECORDING_DURATION_SECS, sample_rate, channels)
-                .saturating_add(pre_roll_samples.len());
+        let capacity = Self::estimate_buffer_size(config_defaults::MAX_SECS, sample_rate, channels)
+            .saturating_add(pre_roll_samples.len());
         let buffer = Arc::new(Mutex::new(Vec::with_capacity(capacity)));
         if !pre_roll_samples.is_empty() {
             buffer.lock().unwrap().extend_from_slice(&pre_roll_samples);
@@ -717,7 +717,7 @@ impl CpalAudioBackend {
         frame_tx: Option<tokio::sync::mpsc::UnboundedSender<AudioFrame>>,
     ) -> u64 {
         let capacity = sample_count.max(Self::estimate_buffer_size(
-            DEFAULT_MAX_RECORDING_DURATION_SECS,
+            config_defaults::MAX_SECS,
             sample_rate,
             channels,
         ));
@@ -1749,28 +1749,12 @@ impl AudioBackend for CpalAudioBackend {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-
-//     /// `VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES` が参照されているかをエラーメッセージで確認。
-//     #[test]
-//     fn input_device_priority_env_is_respected_in_error() {
-//         unsafe { std::env::set_var("VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES", "ClearlyNonexistentDevice") };
-//         let backend = CpalAudioBackend::default();
-//         let err = backend
-//             .start_recording()
-//             .expect_err("should fail without device");
-//         assert!(err.to_string().contains("VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES"));
-//     }
-// }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use cpal::{DeviceDescriptionBuilder, DeviceType, InterfaceType};
 
-    /// `VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES` に存在しないデバイスを設定し、バックエンドが
+    /// `input_device_priorities` に存在しないデバイスを設定し、バックエンドが
     /// (1) フォールバックを介して開始する **または** (2) 入力デバイスの欠落に
     /// 言及するエラーを返すことを確認します。これにより、優先順位/フォールバック
     /// コードが誤って削除されることを防ぎます。
@@ -2383,6 +2367,7 @@ mod tests {
 
     /// 優先順位先頭が存在しなくても利用可能な入力デバイスへフォールバックできる
     #[test]
+    #[cfg_attr(feature = "ci-test", ignore)]
     fn nonexistent_first_priority_falls_back_to_available_input_device() {
         let priorities = vec!["ClearlyNonexistentDevice".to_string()];
         let host = cpal::default_host();

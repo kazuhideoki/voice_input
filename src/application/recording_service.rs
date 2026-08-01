@@ -13,12 +13,11 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use crate::application::{
-    AudioBackend, AudioData, AudioDataFormat, AudioFrame, AudioInputSource, CapturedAudio, Recorder,
+    AudioBackend, AudioData, AudioDataFormat, AudioFrame, AudioInputSource, CapturedAudio,
+    Recorder, TranscriptionProvider, config_defaults,
 };
 use crate::error::{Result, VoiceInputError};
-use crate::utils::config::{
-    DEFAULT_MAX_RECORDING_DURATION_SECS, TranscriptionProvider, parse_max_duration_secs,
-};
+use crate::utils::config::parse_max_duration_secs;
 
 /// 録音状態
 #[derive(Debug)]
@@ -178,7 +177,7 @@ pub struct RecordingConfig {
 impl Default for RecordingConfig {
     fn default() -> Self {
         Self {
-            max_duration_secs: DEFAULT_MAX_RECORDING_DURATION_SECS,
+            max_duration_secs: config_defaults::MAX_SECS,
         }
     }
 }
@@ -204,7 +203,7 @@ impl Default for RecordingOptions {
     fn default() -> Self {
         Self {
             save_audio_path: None,
-            transcription_provider: TranscriptionProvider::DEFAULT,
+            transcription_provider: config_defaults::TRANSCRIPTION_PROVIDER,
             requested_audio_format: None,
             audio_frame_tx: None,
             input_file_path: None,

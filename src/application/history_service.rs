@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
+use crate::application::TranscriptionProvider;
 use crate::domain::transcription::FinalizedTranscription;
-use crate::utils::config::TranscriptionProvider;
 
 const DEFAULT_HISTORY_LIMIT: usize = 10;
 

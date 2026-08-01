@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let max_secs_override = cli.cmd.as_ref().and_then(command_max_secs);
     let persisted_config = AppConfig::load();
 
-    // 永続設定とコマンド指定を環境既定値より優先して、起動中不変の設定を構築する。
+    // 永続設定とコマンド指定をアプリケーション既定値より優先して、起動中不変の設定を構築する。
     EnvConfig::init_with_user_setting_overrides(
         &persisted_config.user_setting_overrides(),
         max_secs_override,
@@ -149,54 +149,54 @@ fn handle_config_command(action: ConfigCmd) -> Result<(), Box<dyn std::error::Er
         ConfigCmd::Set { field } => match field {
             ConfigField::DictPath { path } => {
                 config.set_dict_path(std::path::PathBuf::from(&path))?;
-                println!("✅ dict-path set to {path}");
+                println!("✅ dict_path set to {path}");
             }
             ConfigField::TranscriptionProvider { provider } => {
                 config.set_transcription_provider(provider)?;
-                println!("✅ transcription-provider set to {}", provider.as_str());
+                println!("✅ transcription_provider set to {}", provider.as_str());
                 notify_daemon_config_changed();
             }
             ConfigField::MaxSecs { secs } => {
                 config.set_max_secs(secs)?;
-                println!("✅ max-secs set to {secs}");
+                println!("✅ max_secs set to {secs}");
                 notify_daemon_config_changed();
             }
             ConfigField::PreRollMs { millis } => {
                 config.set_pre_roll_ms(millis)?;
-                println!("✅ pre-roll-ms set to {millis}");
+                println!("✅ pre_roll_ms set to {millis}");
                 notify_daemon_config_changed();
             }
             ConfigField::InputDevicePriorities { priorities } => {
                 config.set_input_device_priorities(priorities.clone())?;
                 println!(
-                    "✅ input-device-priorities set to {}",
+                    "✅ input_device_priorities set to {}",
                     priorities.join(", ")
                 );
                 notify_daemon_config_changed();
             }
             ConfigField::RecordingSoundsEnabled { enabled } => {
                 config.set_recording_sounds_enabled(enabled)?;
-                println!("✅ recording-sounds-enabled set to {enabled}");
+                println!("✅ recording_sounds_enabled set to {enabled}");
                 notify_daemon_config_changed();
             }
             ConfigField::RecordingHudEnabled { enabled } => {
                 config.set_recording_hud_enabled(enabled)?;
-                println!("✅ recording-hud-enabled set to {enabled}");
+                println!("✅ recording_hud_enabled set to {enabled}");
                 notify_daemon_config_changed();
             }
             ConfigField::PushToTalkEnabled { enabled } => {
                 config.set_push_to_talk_enabled(enabled)?;
-                println!("✅ push-to-talk-enabled set to {enabled}");
+                println!("✅ push_to_talk_enabled set to {enabled}");
                 notify_daemon_config_changed();
             }
             ConfigField::PushToTalkHotkey { hotkey } => {
                 config.set_push_to_talk_hotkey(hotkey.clone())?;
-                println!("✅ push-to-talk-hotkey set to {hotkey}");
+                println!("✅ push_to_talk_hotkey set to {hotkey}");
                 notify_daemon_config_changed();
             }
             ConfigField::TranscribeStreaming { enabled } => {
                 config.set_transcribe_streaming(enabled)?;
-                println!("✅ transcribe-streaming set to {enabled}");
+                println!("✅ transcribe_streaming set to {enabled}");
                 notify_daemon_config_changed();
             }
         },
@@ -228,35 +228,35 @@ fn handle_config_command(action: ConfigCmd) -> Result<(), Box<dyn std::error::Er
 }
 
 fn print_all_config(config: &AppConfig) {
-    println!("dict-path={}", config.dict_path().display());
+    println!("dict_path={}", config.dict_path().display());
     println!(
-        "transcription-provider={}",
+        "transcription_provider={}",
         config.effective_transcription_provider().as_str()
     );
-    println!("max-secs={}", config.effective_max_secs());
-    println!("pre-roll-ms={}", config.effective_pre_roll_ms());
+    println!("max_secs={}", config.effective_max_secs());
+    println!("pre_roll_ms={}", config.effective_pre_roll_ms());
     println!(
-        "input-device-priorities={}",
+        "input_device_priorities={}",
         config.effective_input_device_priorities().join(",")
     );
     println!(
-        "recording-sounds-enabled={}",
+        "recording_sounds_enabled={}",
         config.effective_recording_sounds_enabled()
     );
     println!(
-        "recording-hud-enabled={}",
+        "recording_hud_enabled={}",
         config.effective_recording_hud_enabled()
     );
     println!(
-        "push-to-talk-enabled={}",
+        "push_to_talk_enabled={}",
         config.effective_push_to_talk_enabled()
     );
     println!(
-        "push-to-talk-hotkey={}",
+        "push_to_talk_hotkey={}",
         config.effective_push_to_talk_hotkey()
     );
     println!(
-        "transcribe-streaming={}",
+        "transcribe_streaming={}",
         config.effective_transcribe_streaming()
     );
 }
@@ -291,15 +291,15 @@ fn print_runtime_config(field: RuntimeConfigField, config: &AppConfig) {
 
 fn runtime_config_field_name(field: RuntimeConfigField) -> &'static str {
     match field {
-        RuntimeConfigField::TranscriptionProvider => "transcription-provider",
-        RuntimeConfigField::MaxSecs => "max-secs",
-        RuntimeConfigField::PreRollMs => "pre-roll-ms",
-        RuntimeConfigField::InputDevicePriorities => "input-device-priorities",
-        RuntimeConfigField::RecordingSoundsEnabled => "recording-sounds-enabled",
-        RuntimeConfigField::RecordingHudEnabled => "recording-hud-enabled",
-        RuntimeConfigField::PushToTalkEnabled => "push-to-talk-enabled",
-        RuntimeConfigField::PushToTalkHotkey => "push-to-talk-hotkey",
-        RuntimeConfigField::TranscribeStreaming => "transcribe-streaming",
+        RuntimeConfigField::TranscriptionProvider => "transcription_provider",
+        RuntimeConfigField::MaxSecs => "max_secs",
+        RuntimeConfigField::PreRollMs => "pre_roll_ms",
+        RuntimeConfigField::InputDevicePriorities => "input_device_priorities",
+        RuntimeConfigField::RecordingSoundsEnabled => "recording_sounds_enabled",
+        RuntimeConfigField::RecordingHudEnabled => "recording_hud_enabled",
+        RuntimeConfigField::PushToTalkEnabled => "push_to_talk_enabled",
+        RuntimeConfigField::PushToTalkHotkey => "push_to_talk_hotkey",
+        RuntimeConfigField::TranscribeStreaming => "transcribe_streaming",
     }
 }
 

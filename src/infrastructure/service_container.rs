@@ -383,7 +383,7 @@ mod tests {
             audio: AudioConfig {
                 input_device_priorities: Vec::new(),
                 preferred_format: PreferredAudioFormat::Flac,
-                pre_roll_ms: crate::utils::config::DEFAULT_AUDIO_PRE_ROLL_MS,
+                pre_roll_ms: crate::application::config_defaults::PRE_ROLL_MS,
                 recording_sounds_enabled: true,
             },
             recording: RecordingConfig {
@@ -396,7 +396,7 @@ mod tests {
             },
             push_to_talk: PushToTalkConfig {
                 enabled: false,
-                hotkey: crate::utils::config::DEFAULT_PUSH_TO_TALK_HOTKEY.to_string(),
+                hotkey: crate::application::config_defaults::PUSH_TO_TALK_HOTKEY.to_string(),
             },
             profiling: ProfilingConfig { enabled: false },
         }

@@ -9,15 +9,6 @@ fn run_cmd(args: &[&str]) -> std::process::Output {
     command.output().expect("Failed to run command")
 }
 
-fn run_cmd_with_env(args: &[&str], key: &str, value: &str) -> std::process::Output {
-    let mut command = Command::new("cargo");
-    command
-        .args(["run", "--bin", "voice_input", "--"])
-        .args(args)
-        .env(key, value);
-    command.output().expect("Failed to run command")
-}
-
 fn run_built_cmd_with_runtime_dir(args: &[&str], runtime_dir: &TempDir) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_voice_input"))
         .args(args)
@@ -25,10 +16,6 @@ fn run_built_cmd_with_runtime_dir(args: &[&str], runtime_dir: &TempDir) -> std::
         .env(
             "VOICE_INPUT_SOCKET_PATH",
             runtime_dir.path().join("missing.sock"),
-        )
-        .env(
-            "VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER",
-            "gpt-transcribe",
         )
         .output()
         .expect("Failed to run built command")
@@ -111,18 +98,6 @@ fn start_command_rejects_negative_max_secs() {
     let output = run_cmd(&["start", "--max-secs=-1"]);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("invalid value"));
-}
-
-/// startコマンドの最大録音秒数は不正な環境変数より優先される
-#[test]
-fn start_command_max_secs_overrides_invalid_env() {
-    let output = run_cmd_with_env(
-        &["start", "--max-secs", "120"],
-        "VOICE_INPUT_DEFAULT_MAX_SECS",
-        "abc",
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stderr.contains("VOICE_INPUT_DEFAULT_MAX_SECS must be a positive integer"));
 }
 
 /// startコマンドで入力ファイルパスを指定できる
@@ -237,23 +212,23 @@ fn runtime_configuration_persists_and_unsets_supported_fields() {
         vec![
             "config",
             "set",
-            "transcription-provider",
+            "transcription_provider",
             "gpt-live-transcribe",
         ],
-        vec!["config", "set", "max-secs", "90"],
-        vec!["config", "set", "pre-roll-ms", "250"],
+        vec!["config", "set", "max_secs", "90"],
+        vec!["config", "set", "pre_roll_ms", "250"],
         vec![
             "config",
             "set",
-            "input-device-priorities",
+            "input_device_priorities",
             "External Mic",
             "MacBook Microphone",
         ],
-        vec!["config", "set", "recording-sounds-enabled", "false"],
-        vec!["config", "set", "recording-hud-enabled", "false"],
-        vec!["config", "set", "push-to-talk-enabled", "true"],
-        vec!["config", "set", "push-to-talk-hotkey", "cmd+space"],
-        vec!["config", "set", "transcribe-streaming", "true"],
+        vec!["config", "set", "recording_sounds_enabled", "false"],
+        vec!["config", "set", "recording_hud_enabled", "false"],
+        vec!["config", "set", "push_to_talk_enabled", "true"],
+        vec!["config", "set", "push_to_talk_hotkey", "cmd+space"],
+        vec!["config", "set", "transcribe_streaming", "true"],
     ] {
         let output = run_built_cmd_with_runtime_dir(&args, &runtime_dir);
         assert!(output.status.success());
@@ -274,7 +249,7 @@ fn runtime_configuration_persists_and_unsets_supported_fields() {
     assert_eq!(config["transcribe_streaming"], true);
 
     let output =
-        run_built_cmd_with_runtime_dir(&["config", "get", "transcription-provider"], &runtime_dir);
+        run_built_cmd_with_runtime_dir(&["config", "get", "transcription_provider"], &runtime_dir);
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
         "gpt-live-transcribe"
@@ -282,52 +257,52 @@ fn runtime_configuration_persists_and_unsets_supported_fields() {
 
     let output = run_built_cmd_with_runtime_dir(&["config", "show"], &runtime_dir);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("dict-path="));
-    assert!(stdout.contains("transcription-provider=gpt-live-transcribe"));
-    assert!(stdout.contains("max-secs=90"));
-    assert!(stdout.contains("pre-roll-ms=250"));
-    assert!(stdout.contains("input-device-priorities=External Mic,MacBook Microphone"));
-    assert!(stdout.contains("recording-sounds-enabled=false"));
-    assert!(stdout.contains("recording-hud-enabled=false"));
-    assert!(stdout.contains("push-to-talk-enabled=true"));
-    assert!(stdout.contains("push-to-talk-hotkey=cmd+space"));
-    assert!(stdout.contains("transcribe-streaming=true"));
+    assert!(stdout.contains("dict_path="));
+    assert!(stdout.contains("transcription_provider=gpt-live-transcribe"));
+    assert!(stdout.contains("max_secs=90"));
+    assert!(stdout.contains("pre_roll_ms=250"));
+    assert!(stdout.contains("input_device_priorities=External Mic,MacBook Microphone"));
+    assert!(stdout.contains("recording_sounds_enabled=false"));
+    assert!(stdout.contains("recording_hud_enabled=false"));
+    assert!(stdout.contains("push_to_talk_enabled=true"));
+    assert!(stdout.contains("push_to_talk_hotkey=cmd+space"));
+    assert!(stdout.contains("transcribe_streaming=true"));
 
     for field in [
-        "transcription-provider",
-        "max-secs",
-        "pre-roll-ms",
-        "input-device-priorities",
-        "recording-sounds-enabled",
-        "recording-hud-enabled",
-        "push-to-talk-enabled",
-        "push-to-talk-hotkey",
-        "transcribe-streaming",
+        "transcription_provider",
+        "max_secs",
+        "pre_roll_ms",
+        "input_device_priorities",
+        "recording_sounds_enabled",
+        "recording_hud_enabled",
+        "push_to_talk_enabled",
+        "push_to_talk_hotkey",
+        "transcribe_streaming",
     ] {
         let output = run_built_cmd_with_runtime_dir(&["config", "unset", field], &runtime_dir);
         assert!(output.status.success());
     }
 }
 
-/// 永続設定で上書きした項目は不正な環境既定値に影響されない
+/// unsetした項目はアプリケーション既定値へ戻る
 #[test]
-fn persisted_configuration_shadows_invalid_environment_default() {
+fn unset_configuration_restores_application_default() {
     let runtime_dir = TempDir::new().unwrap();
     let config_dir = runtime_dir.path().join("voice_input");
     std::fs::create_dir_all(&config_dir).unwrap();
     std::fs::write(config_dir.join("config.json"), r#"{"max_secs":90}"#).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_voice_input"))
-        .args(["config", "get", "max-secs"])
+        .args(["config", "unset", "max_secs"])
         .env("XDG_DATA_HOME", runtime_dir.path())
         .env(
             "VOICE_INPUT_SOCKET_PATH",
             runtime_dir.path().join("missing.sock"),
         )
-        .env("VOICE_INPUT_DEFAULT_MAX_SECS", "invalid")
         .output()
         .unwrap();
 
     assert!(output.status.success());
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "90");
+    let output = run_built_cmd_with_runtime_dir(&["config", "get", "max_secs"], &runtime_dir);
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "30");
 }

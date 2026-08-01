@@ -31,28 +31,17 @@ cp .env.example .env
 
 ```sh
 TRANSCRIPTION_API_KEY=your_openai_api_key_here # OpenAI 系利用時のみ
-VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER=gpt-transcribe
-VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING=false
-VOICE_INPUT_DEFAULT_MAX_SECS=30
-VOICE_INPUT_DEFAULT_PRE_ROLL_MS=500
-VOICE_INPUT_DEFAULT_RECORDING_SOUNDS_ENABLED=true
-VOICE_INPUT_DEFAULT_RECORDING_HUD_ENABLED=true
-VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES="device1,device2,device3"
-VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED=true
-VOICE_INPUT_DEFAULT_PUSH_TO_TALK_HOTKEY=opt+8
 ```
 
 必要に応じて `VOICE_INPUT_ENV_PATH`、`VOICE_INPUT_SOCKET_PATH`、`VOICE_INPUT_SOCKET_DIR`、`XDG_DATA_HOME` も指定できます。
 
 `.env` はデフォルトでカレントディレクトリから読み込まれ、`VOICE_INPUT_ENV_PATH` が設定されている場合はそのパスが優先されます。
-環境変数は `src/utils/config.rs` の `EnvConfig` で起動時に一度だけ読み込まれます。APIキー、Proxy、IPC・データ配置などの起動環境と、`VOICE_INPUT_DEFAULT_*` 形式のユーザー設定既定値を保持します。
-転写バックエンドは `gpt-transcribe`、`gpt-live-transcribe`、`mlx-qwen3-asr` から選べます。既定値は `VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER`、コマンドごとの上書きは `--transcription-provider` です。
-ユーザーが変更する設定はビルド後に `voice_input config` で `config.json` へ永続化します。優先順位は、コマンドごとの指定、`config.json`、`.env` の `VOICE_INPUT_DEFAULT_*`、プログラム内の既定値の順です。
-macOSでは `config.json` を `~/Library/Application Support/com.user.voice_input/config.json` に保存します。
+環境変数は `src/utils/config.rs` の `EnvConfig` で起動時に一度だけ読み込まれ、APIキー、Proxy、IPC・データ配置などの起動環境を保持します。
+転写バックエンドは `gpt-transcribe`、`gpt-live-transcribe`、`mlx-qwen3-asr` から選べます。コマンドごとの上書きは `--transcription-provider` です。
+ユーザーが変更する設定はビルド後に `voice_input config` で `config.json` へ永続化します。優先順位は、コマンドごとの指定、`config.json`、アプリケーション既定値の順です。既定値は `src/application/config_defaults.rs` に集約しています。
+macOSでは `config.json` を `~/Library/Application Support/com.user.voice_input/config.json` に保存します。このパスがシンボリックリンクの場合はリンクを維持したままリンク先を更新するため、dotfilesで管理できます。
 OpenAI 系のモデルは provider ごとに固定されます。`gpt-transcribe` は録音後の音声を GPT Transcribe へ送り、`gpt-live-transcribe` は GPT Live Transcribe で録音中に逐次入力します。`mlx-qwen3-asr` はローカルコマンドを使います。
-`VOICE_INPUT_DEFAULT_PRE_ROLL_MS` は録音開始直前の音声を先頭へ付与する長さです。既定値は 500ms、0 で無効です。
-`VOICE_INPUT_DEFAULT_RECORDING_SOUNDS_ENABLED=false` を設定すると、録音開始・停止時の効果音を無効化できます。未指定時は有効です。
-`VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED=true` の場合、`VOICE_INPUT_DEFAULT_PUSH_TO_TALK_HOTKEY` を押している間だけ録音します。既定は `opt+8` です。
+pre-roll の既定値は 500ms で、`pre_roll_ms` を 0 にすると無効です。録音開始・停止時の効果音と録音状態 HUD は既定で有効、push-to-talk は既定で無効、ホットキーは `opt+8` です。
 
 ## 音声処理
 
@@ -112,7 +101,7 @@ cargo build --release
    - `VoiceInput.app` を有効化
    - システム設定 → プライバシーとセキュリティ → アクセシビリティ
    - `VoiceInput.app` を有効化
-   - `VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED=true` を使う場合は、入力監視でも `VoiceInput.app` を有効化
+   - `push_to_talk_enabled=true` を使う場合は、入力監視でも `VoiceInput.app` を有効化
 
 3. **権限反映後の再起動**
 
@@ -199,9 +188,9 @@ voice_input toggle --max-secs 90
 既定値を永続変更する場合:
 
 ```sh
-voice_input config set max-secs 120
-voice_input config get max-secs
-voice_input config unset max-secs
+voice_input config set max_secs 120
+voice_input config get max_secs
+voice_input config unset max_secs
 ```
 
 転写バックエンドを一時的に変える場合:
@@ -215,17 +204,17 @@ voice_input start --transcription-provider mlx-qwen3-asr
 既定の転写バックエンドを永続変更する場合:
 
 ```sh
-voice_input config set transcription-provider gpt-live-transcribe
-voice_input config get transcription-provider
-voice_input config unset transcription-provider
+voice_input config set transcription_provider gpt-live-transcribe
+voice_input config get transcription_provider
+voice_input config unset transcription_provider
 ```
 
 pre-roll長を永続変更する場合:
 
 ```sh
-voice_input config set pre-roll-ms 250
-voice_input config get pre-roll-ms
-voice_input config unset pre-roll-ms
+voice_input config set pre_roll_ms 250
+voice_input config get pre_roll_ms
+voice_input config unset pre_roll_ms
 ```
 
 設定可能な全項目の現在値を表示する場合:
@@ -235,30 +224,30 @@ voice_input config show
 ```
 
 ```text
-dict-path=/path/to/dictionary.json
-transcription-provider=gpt-live-transcribe
-max-secs=120
-pre-roll-ms=250
-input-device-priorities=External Mic,MacBook Microphone
-recording-sounds-enabled=false
-recording-hud-enabled=true
-push-to-talk-enabled=true
-push-to-talk-hotkey=opt+8
-transcribe-streaming=false
+dict_path=/path/to/dictionary.json
+transcription_provider=gpt-live-transcribe
+max_secs=120
+pre_roll_ms=250
+input_device_priorities=External Mic,MacBook Microphone
+recording_sounds_enabled=false
+recording_hud_enabled=true
+push_to_talk_enabled=true
+push_to_talk_hotkey=opt+8
+transcribe_streaming=false
 ```
 
 そのほかのユーザー設定も同じ形式で変更できます。
 
 ```sh
-voice_input config set input-device-priorities "External Mic" "MacBook Microphone"
-voice_input config set recording-sounds-enabled false
-voice_input config set recording-hud-enabled true
-voice_input config set push-to-talk-enabled true
-voice_input config set push-to-talk-hotkey opt+8
-voice_input config set transcribe-streaming false
+voice_input config set input_device_priorities "External Mic" "MacBook Microphone"
+voice_input config set recording_sounds_enabled false
+voice_input config set recording_hud_enabled true
+voice_input config set push_to_talk_enabled true
+voice_input config set push_to_talk_hotkey opt+8
+voice_input config set transcribe_streaming false
 ```
 
-`unset` 後は対応する `.env` の `VOICE_INPUT_DEFAULT_*` へ戻ります。永続設定の変更後、LaunchAgentで動作しているデーモンは自動再起動して全設定を一貫して反映します。録音または転写処理中の場合は、すべて完了するまで再起動を待ちます。デーモンを手動起動している場合は、設定変更後に起動し直してください。
+`unset` 後は対応するアプリケーション既定値へ戻ります。永続設定の変更後、LaunchAgentで動作しているデーモンは自動再起動して全設定を一貫して反映します。録音または転写処理中の場合は、すべて完了するまで再起動を待ちます。デーモンを手動起動している場合は、設定変更後に起動し直してください。
 
 デバッグ用に WAV を入力したり、録音後の音声を保存できます。
 
@@ -273,7 +262,7 @@ voice_input start --save-audio /tmp/voice-input-debug.wav
 voice_input --list-devices
 ```
 
-入力デバイス名とインデックスを表示します。`input-device-priorities` を設定する際の参考にしてください。
+入力デバイス名とインデックスを表示します。`input_device_priorities` を設定する際の参考にしてください。
 
 確定転写の履歴を表示:
 
@@ -284,12 +273,12 @@ voice_input history
 キーを押している間だけ録音する場合は永続設定で有効化します。
 
 ```sh
-voice_input config set transcription-provider gpt-transcribe
-voice_input config set push-to-talk-enabled true
-voice_input config set push-to-talk-hotkey opt+8
+voice_input config set transcription_provider gpt-transcribe
+voice_input config set push_to_talk_enabled true
+voice_input config set push_to_talk_hotkey opt+8
 ```
 
-`push-to-talk-hotkey` は `opt+8`、`cmd+space`、`ctrl+shift+v`、`fn+f8` のような `modifier+key` 形式を受け付けます。キーボード配列差分で通常表記が合わない場合は `opt+keycode:28` のように raw keycode も指定できます。
+`push_to_talk_hotkey` は `opt+8`、`cmd+space`、`ctrl+shift+v`、`fn+f8` のような `modifier+key` 形式を受け付けます。キーボード配列差分で通常表記が合わない場合は `opt+keycode:28` のように raw keycode も指定できます。
 
 ## テキスト入力方式
 
@@ -329,7 +318,7 @@ CLI から編集できます。
 `config.json` に記録され、変更時には旧ファイルが `<旧パス>.bak` として残ります。
 
 ```sh
-voice_input config set dict-path /path/to/shared/dictionary.json
+voice_input config set dict_path /path/to/shared/dictionary.json
 ```
 
 ```sh

@@ -10,53 +10,20 @@ use once_cell::sync::OnceCell;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::application::config_defaults;
+pub use crate::application::config_defaults::TranscriptionProvider;
+
 /// グローバル環境変数設定
 static ENV_CONFIG: OnceCell<Arc<EnvConfig>> = OnceCell::new();
 
-/// 最大録音時間のデフォルト値（秒）
-pub const DEFAULT_MAX_RECORDING_DURATION_SECS: u64 = 30;
-
-/// 最大録音時間を指定する環境変数名
-pub const MAX_RECORDING_DURATION_SECS_ENV: &str = "VOICE_INPUT_DEFAULT_MAX_SECS";
-
-/// 録音開始時に先頭へ付与するローカル pre-roll のデフォルト値（ミリ秒）
-pub const DEFAULT_AUDIO_PRE_ROLL_MS: u64 = 500;
-
 /// 録音開始時 pre-roll の最大値（ミリ秒）
 pub const MAX_AUDIO_PRE_ROLL_MS: u64 = 5_000;
-
-/// 録音開始時の pre-roll 長を指定する環境変数名
-pub const AUDIO_PRE_ROLL_MS_ENV: &str = "VOICE_INPUT_DEFAULT_PRE_ROLL_MS";
-
-/// 録音開始・停止サウンドの有効化を指定する環境変数名
-pub const RECORDING_SOUNDS_ENABLED_ENV: &str = "VOICE_INPUT_DEFAULT_RECORDING_SOUNDS_ENABLED";
-
-/// 録音状態HUDの有効化を指定する環境変数名
-pub const RECORDING_HUD_ENABLED_ENV: &str = "VOICE_INPUT_DEFAULT_RECORDING_HUD_ENABLED";
 
 /// 録音状態HUDヘルパーのパスを指定する環境変数名
 pub const RECORDING_HUD_HELPER_PATH_ENV: &str = "VOICE_INPUT_RECORDING_HUD_HELPER_PATH";
 
 /// 録音状態HUDが受け取った状態を検証用に書き出すパスを指定する環境変数名
 pub const RECORDING_HUD_LOG_PATH_ENV: &str = "VOICE_INPUT_RECORDING_HUD_LOG_PATH";
-
-/// キー押下中だけ録音する push-to-talk を有効にする環境変数名
-pub const PUSH_TO_TALK_ENABLED_ENV: &str = "VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED";
-
-/// push-to-talk のトリガーキーを指定する環境変数名
-pub const PUSH_TO_TALK_HOTKEY_ENV: &str = "VOICE_INPUT_DEFAULT_PUSH_TO_TALK_HOTKEY";
-
-/// GPT Transcribe のストリーミング直接入力の既定値を指定する環境変数名
-pub const TRANSCRIBE_STREAMING_ENV: &str = "VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING";
-
-/// 優先入力デバイス一覧の既定値を指定する環境変数名
-pub const INPUT_DEVICE_PRIORITIES_ENV: &str = "VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES";
-
-/// push-to-talk のデフォルトホットキー
-pub const DEFAULT_PUSH_TO_TALK_HOTKEY: &str = "opt+8";
-
-/// CLI で未指定のときに使う既定の転写バックエンドを指定する環境変数名
-pub const DEFAULT_TRANSCRIPTION_PROVIDER_ENV: &str = "VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER";
 
 /// mlx-qwen3-asr で利用する固定モデル
 const DEFAULT_MLX_QWEN3_ASR_MODEL: &str = "Qwen/Qwen3-ASR-1.7B";
@@ -81,28 +48,15 @@ pub enum ConfigError {
         "transcription provider '{value}' is unsupported. Supported providers: gpt-transcribe, gpt-live-transcribe, mlx-qwen3-asr"
     )]
     UnsupportedTranscriptionProvider { value: String },
-    #[error("VOICE_INPUT_DEFAULT_MAX_SECS must be a positive integer: {value}")]
+    #[error("max_secs must be a positive integer: {value}")]
     InvalidMaxDurationSecs { value: String },
-    #[error("VOICE_INPUT_DEFAULT_PRE_ROLL_MS must be an integer between 0 and 5000: {value}")]
+    #[error("pre_roll_ms must be an integer between 0 and 5000: {value}")]
     InvalidAudioPreRollMs { value: String },
     #[error("{name} must be either 'true' or 'false': {value}")]
     InvalidBooleanEnv { name: &'static str, value: String },
 }
 
-/// 転写バックエンド種別
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum TranscriptionProvider {
-    #[serde(rename = "gpt-transcribe")]
-    GptTranscribe,
-    #[serde(rename = "gpt-live-transcribe")]
-    GptLiveTranscribe,
-    #[serde(rename = "mlx-qwen3-asr")]
-    MlxQwen3Asr,
-}
-
 impl TranscriptionProvider {
-    pub const DEFAULT: Self = Self::GptTranscribe;
-
     /// 文字列から転写バックエンド設定を生成
     pub fn parse(value: &str) -> Result<Self, ConfigError> {
         match value {
@@ -269,7 +223,7 @@ pub struct EnvConfig {
     pub profiling: ProfilingConfig,
 }
 
-/// `config.json` またはコマンド指定により環境既定値を置き換えるユーザー設定。
+/// `config.json` またはコマンド指定によりアプリケーション既定値を置き換えるユーザー設定。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UserSettingOverrides {
     pub transcription_provider: Option<TranscriptionProvider>,
@@ -293,18 +247,13 @@ impl EnvConfig {
         overrides: &UserSettingOverrides,
         max_duration_secs_override: Option<u64>,
     ) -> Result<Self, ConfigError> {
-        let provider = match overrides.transcription_provider {
-            Some(provider) => provider,
-            None => match non_empty_env(DEFAULT_TRANSCRIPTION_PROVIDER_ENV) {
-                Some(value) => TranscriptionProvider::parse(&value)?,
-                None => TranscriptionProvider::DEFAULT,
-            },
-        };
+        let provider = overrides
+            .transcription_provider
+            .unwrap_or(config_defaults::TRANSCRIPTION_PROVIDER);
         let mlx_qwen3_asr_model = DEFAULT_MLX_QWEN3_ASR_MODEL.to_string();
-        let streaming_enabled = match overrides.transcribe_streaming {
-            Some(enabled) => enabled,
-            None => parse_bool_env(TRANSCRIBE_STREAMING_ENV)?,
-        };
+        let streaming_enabled = overrides
+            .transcribe_streaming
+            .unwrap_or(config_defaults::TRANSCRIBE_STREAMING);
         let mlx_qwen3_asr_command = "mlx-qwen3-asr".to_string();
         let audio_pre_roll_ms = match overrides.pre_roll_ms {
             Some(millis) if millis <= MAX_AUDIO_PRE_ROLL_MS => millis,
@@ -313,10 +262,7 @@ impl EnvConfig {
                     value: millis.to_string(),
                 });
             }
-            None => match std::env::var(AUDIO_PRE_ROLL_MS_ENV) {
-                Ok(value) => parse_audio_pre_roll_ms(&value)?,
-                Err(_) => DEFAULT_AUDIO_PRE_ROLL_MS,
-            },
+            None => config_defaults::PRE_ROLL_MS,
         };
         let max_duration_secs = match max_duration_secs_override {
             Some(value) if value > 0 => value,
@@ -332,10 +278,7 @@ impl EnvConfig {
                         value: value.to_string(),
                     });
                 }
-                None => match std::env::var(MAX_RECORDING_DURATION_SECS_ENV) {
-                    Ok(value) => parse_max_duration_secs(&value)?,
-                    Err(_) => DEFAULT_MAX_RECORDING_DURATION_SECS,
-                },
+                None => config_defaults::MAX_SECS,
             },
         };
 
@@ -360,37 +303,38 @@ impl EnvConfig {
                 http: non_empty_env_with_lowercase_fallback("HTTP_PROXY"),
             },
             audio: AudioConfig {
-                input_device_priorities: overrides
-                    .input_device_priorities
-                    .clone()
-                    .unwrap_or_else(|| csv_env(INPUT_DEVICE_PRIORITIES_ENV)),
+                input_device_priorities: overrides.input_device_priorities.clone().unwrap_or_else(
+                    || {
+                        config_defaults::INPUT_DEVICE_PRIORITIES
+                            .iter()
+                            .map(|value| (*value).to_string())
+                            .collect()
+                    },
+                ),
                 preferred_format: PreferredAudioFormat::Flac,
                 pre_roll_ms: audio_pre_roll_ms,
-                recording_sounds_enabled: match overrides.recording_sounds_enabled {
-                    Some(enabled) => enabled,
-                    None => parse_bool_env_with_default(RECORDING_SOUNDS_ENABLED_ENV, true)?,
-                },
+                recording_sounds_enabled: overrides
+                    .recording_sounds_enabled
+                    .unwrap_or(config_defaults::RECORDING_SOUNDS_ENABLED),
             },
             recording: RecordingConfig { max_duration_secs },
             ui: UiConfig {
-                recording_hud_enabled: match overrides.recording_hud_enabled {
-                    Some(enabled) => enabled,
-                    None => parse_bool_env_with_default(RECORDING_HUD_ENABLED_ENV, true)?,
-                },
+                recording_hud_enabled: overrides
+                    .recording_hud_enabled
+                    .unwrap_or(config_defaults::RECORDING_HUD_ENABLED),
                 recording_hud_helper_path: non_empty_env(RECORDING_HUD_HELPER_PATH_ENV)
                     .map(PathBuf::from),
                 recording_hud_log_path: non_empty_env(RECORDING_HUD_LOG_PATH_ENV)
                     .map(PathBuf::from),
             },
             push_to_talk: PushToTalkConfig {
-                enabled: match overrides.push_to_talk_enabled {
-                    Some(enabled) => enabled,
-                    None => parse_bool_env(PUSH_TO_TALK_ENABLED_ENV)?,
-                },
-                hotkey: overrides.push_to_talk_hotkey.clone().unwrap_or_else(|| {
-                    non_empty_env(PUSH_TO_TALK_HOTKEY_ENV)
-                        .unwrap_or_else(|| DEFAULT_PUSH_TO_TALK_HOTKEY.to_string())
-                }),
+                enabled: overrides
+                    .push_to_talk_enabled
+                    .unwrap_or(config_defaults::PUSH_TO_TALK_ENABLED),
+                hotkey: overrides
+                    .push_to_talk_hotkey
+                    .clone()
+                    .unwrap_or_else(|| config_defaults::PUSH_TO_TALK_HOTKEY.to_string()),
             },
             profiling: ProfilingConfig {
                 enabled: parse_bool_env("VOICE_INPUT_PROFILE")?,
@@ -433,7 +377,7 @@ impl EnvConfig {
         )
     }
 
-    /// 永続設定を環境既定値より優先して設定を初期化する。
+    /// 永続設定をアプリケーション既定値より優先して設定を初期化する。
     pub fn init_with_user_setting_overrides(
         overrides: &UserSettingOverrides,
         max_duration_secs_override: Option<u64>,
@@ -506,18 +450,6 @@ fn non_empty_env_with_lowercase_fallback(name: &str) -> Option<String> {
     non_empty_env(name).or_else(|| non_empty_env(&name.to_ascii_lowercase()))
 }
 
-fn csv_env(name: &str) -> Vec<String> {
-    non_empty_env(name)
-        .map(|value| {
-            value
-                .split(',')
-                .map(|entry| entry.trim().to_string())
-                .filter(|entry| !entry.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 /// 最大録音時間の秒数を検証して返す
 pub fn parse_max_duration_secs(value: &str) -> Result<u64, ConfigError> {
     let secs = value
@@ -566,14 +498,13 @@ fn parse_bool_env_with_default(name: &'static str, default: bool) -> Result<bool
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioConfig, ConfigError, DEFAULT_AUDIO_PRE_ROLL_MS, DEFAULT_MAX_RECORDING_DURATION_SECS,
-        DEFAULT_PUSH_TO_TALK_HOTKEY, DEFAULT_TRANSCRIPTION_PROVIDER_ENV, EnvConfig,
-        MAX_AUDIO_PRE_ROLL_MS, PathConfig, PreferredAudioFormat, ProfilingConfig, ProxyConfig,
-        PushToTalkConfig, RECORDING_HUD_ENABLED_ENV, RECORDING_HUD_HELPER_PATH_ENV,
-        RECORDING_HUD_LOG_PATH_ENV, RECORDING_SOUNDS_ENABLED_ENV, RecordingConfig,
-        TRANSCRIBE_STREAMING_ENV, TranscriptionConfig, TranscriptionProvider, UiConfig,
+        AudioConfig, ConfigError, EnvConfig, PathConfig, PreferredAudioFormat, ProfilingConfig,
+        ProxyConfig, PushToTalkConfig, RECORDING_HUD_HELPER_PATH_ENV, RECORDING_HUD_LOG_PATH_ENV,
+        RecordingConfig, TranscriptionConfig, TranscriptionProvider, UiConfig,
         UserSettingOverrides, lock_test_env,
     };
+    use crate::application::config_defaults;
+    use crate::infrastructure::config::AppConfig;
     use std::path::PathBuf;
 
     fn sample_env_config(transcription: TranscriptionConfig) -> EnvConfig {
@@ -592,11 +523,11 @@ mod tests {
             audio: AudioConfig {
                 input_device_priorities: Vec::new(),
                 preferred_format: PreferredAudioFormat::Flac,
-                pre_roll_ms: DEFAULT_AUDIO_PRE_ROLL_MS,
+                pre_roll_ms: config_defaults::PRE_ROLL_MS,
                 recording_sounds_enabled: true,
             },
             recording: RecordingConfig {
-                max_duration_secs: DEFAULT_MAX_RECORDING_DURATION_SECS,
+                max_duration_secs: config_defaults::MAX_SECS,
             },
             ui: UiConfig {
                 recording_hud_enabled: true,
@@ -605,20 +536,15 @@ mod tests {
             },
             push_to_talk: PushToTalkConfig {
                 enabled: false,
-                hotkey: DEFAULT_PUSH_TO_TALK_HOTKEY.to_string(),
+                hotkey: config_defaults::PUSH_TO_TALK_HOTKEY.to_string(),
             },
             profiling: ProfilingConfig { enabled: false },
         }
     }
 
-    /// 永続設定がある項目は不正な下位環境既定値を解析せず上書き値を採用する
+    /// 永続設定はアプリケーション既定値を上書きする
     #[test]
-    fn user_setting_overrides_skip_shadowed_environment_validation() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_DEFAULT_MAX_SECS", "invalid");
-            std::env::set_var(TRANSCRIBE_STREAMING_ENV, "invalid");
-        }
+    fn user_setting_overrides_application_defaults() {
         let overrides = UserSettingOverrides {
             max_secs: Some(90),
             transcribe_streaming: Some(true),
@@ -627,13 +553,125 @@ mod tests {
 
         let result = EnvConfig::from_env_with_overrides(&overrides, None);
 
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_MAX_SECS");
-            std::env::remove_var(TRANSCRIBE_STREAMING_ENV);
-        }
         let config = result.unwrap();
         assert_eq!(config.recording.max_duration_secs, 90);
         assert!(config.transcription.streaming_enabled);
+    }
+
+    /// 永続設定から構築した環境設定は有効設定と同じ値を保持する
+    #[test]
+    fn environment_config_matches_effective_persisted_settings() {
+        let persisted = AppConfig {
+            dict_path: None,
+            transcription_provider: Some(TranscriptionProvider::MlxQwen3Asr),
+            max_secs: Some(90),
+            pre_roll_ms: Some(250),
+            input_device_priorities: Some(vec!["External Mic".to_string()]),
+            recording_sounds_enabled: Some(false),
+            recording_hud_enabled: Some(false),
+            push_to_talk_enabled: Some(true),
+            push_to_talk_hotkey: Some("cmd+space".to_string()),
+            transcribe_streaming: Some(true),
+        };
+
+        let environment =
+            EnvConfig::from_env_with_overrides(&persisted.user_setting_overrides(), None).unwrap();
+
+        assert_eq!(
+            environment.transcription.provider,
+            persisted.effective_transcription_provider()
+        );
+        assert_eq!(
+            environment.recording.max_duration_secs,
+            persisted.effective_max_secs()
+        );
+        assert_eq!(
+            environment.audio.pre_roll_ms,
+            persisted.effective_pre_roll_ms()
+        );
+        assert_eq!(
+            environment.audio.input_device_priorities,
+            persisted.effective_input_device_priorities()
+        );
+        assert_eq!(
+            environment.audio.recording_sounds_enabled,
+            persisted.effective_recording_sounds_enabled()
+        );
+        assert_eq!(
+            environment.ui.recording_hud_enabled,
+            persisted.effective_recording_hud_enabled()
+        );
+        assert_eq!(
+            environment.push_to_talk.enabled,
+            persisted.effective_push_to_talk_enabled()
+        );
+        assert_eq!(
+            environment.push_to_talk.hotkey,
+            persisted.effective_push_to_talk_hotkey()
+        );
+        assert_eq!(
+            environment.transcription.streaming_enabled,
+            persisted.effective_transcribe_streaming()
+        );
+    }
+
+    /// 廃止したユーザー設定用環境変数はアプリケーション既定値を変更しない
+    #[test]
+    fn removed_user_setting_environment_variables_are_ignored() {
+        let _lock = lock_test_env();
+        let removed_variables = [
+            (
+                "VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER",
+                "mlx-qwen3-asr",
+            ),
+            ("VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING", "true"),
+            ("VOICE_INPUT_DEFAULT_MAX_SECS", "99"),
+            ("VOICE_INPUT_DEFAULT_PRE_ROLL_MS", "0"),
+            ("VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES", "Ignored Mic"),
+            ("VOICE_INPUT_DEFAULT_RECORDING_SOUNDS_ENABLED", "false"),
+            ("VOICE_INPUT_DEFAULT_RECORDING_HUD_ENABLED", "false"),
+            ("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED", "true"),
+            ("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_HOTKEY", "cmd+space"),
+        ];
+        for (name, value) in removed_variables {
+            unsafe { std::env::set_var(name, value) };
+        }
+
+        let config = EnvConfig::from_env().unwrap();
+
+        for (name, _) in removed_variables {
+            unsafe { std::env::remove_var(name) };
+        }
+        assert_eq!(
+            config.transcription.provider,
+            config_defaults::TRANSCRIPTION_PROVIDER
+        );
+        assert_eq!(
+            config.transcription.streaming_enabled,
+            config_defaults::TRANSCRIBE_STREAMING
+        );
+        assert_eq!(
+            config.recording.max_duration_secs,
+            config_defaults::MAX_SECS
+        );
+        assert_eq!(config.audio.pre_roll_ms, config_defaults::PRE_ROLL_MS);
+        assert!(config.audio.input_device_priorities.is_empty());
+        assert_eq!(
+            config.audio.recording_sounds_enabled,
+            config_defaults::RECORDING_SOUNDS_ENABLED
+        );
+        assert_eq!(
+            config.ui.recording_hud_enabled,
+            config_defaults::RECORDING_HUD_ENABLED
+        );
+        assert_eq!(
+            config.push_to_talk.enabled,
+            config_defaults::PUSH_TO_TALK_ENABLED
+        );
+        assert_eq!(
+            config.push_to_talk.hotkey,
+            config_defaults::PUSH_TO_TALK_HOTKEY
+        );
     }
 
     fn openai_transcription_config() -> TranscriptionConfig {
@@ -688,9 +726,9 @@ mod tests {
         );
     }
 
-    /// ストリーミング設定は環境変数から有効化状態を読み取れる
+    /// ストリーミング設定は構築済み設定の有効化状態を保持する
     #[test]
-    fn streaming_flag_is_loaded_from_environment() {
+    fn streaming_flag_keeps_configured_value() {
         let mut transcription = openai_transcription_config();
         transcription.streaming_enabled = true;
         let config = sample_env_config(transcription);
@@ -757,86 +795,18 @@ mod tests {
     /// push-to-talk は既定で無効かつ opt+8 を既定ホットキーにする
     #[test]
     fn push_to_talk_defaults_to_disabled_opt_8() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED");
-            std::env::remove_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_HOTKEY");
-        }
-
         let config = EnvConfig::from_env().unwrap();
 
         assert!(!config.push_to_talk.enabled);
-        assert_eq!(config.push_to_talk.hotkey, DEFAULT_PUSH_TO_TALK_HOTKEY);
-    }
-
-    /// push-to-talk は環境変数から有効化とホットキー指定ができる
-    #[test]
-    fn push_to_talk_settings_are_loaded_from_environment() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED", "true");
-            std::env::set_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_HOTKEY", "cmd+space");
-        }
-
-        let config = EnvConfig::from_env().unwrap();
-
-        assert!(config.push_to_talk.enabled);
-        assert_eq!(config.push_to_talk.hotkey, "cmd+space");
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED");
-            std::env::remove_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_HOTKEY");
-        }
-    }
-
-    /// push-to-talk の有効化フラグは true/false 以外を許可しない
-    #[test]
-    fn try_from_env_rejects_invalid_push_to_talk_flag() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED", "enabled");
-        }
-
-        let result = EnvConfig::try_from_env();
-
         assert_eq!(
-            result.unwrap_err(),
-            ConfigError::InvalidBooleanEnv {
-                name: "VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED",
-                value: "enabled".to_string(),
-            }
+            config.push_to_talk.hotkey,
+            config_defaults::PUSH_TO_TALK_HOTKEY
         );
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_PUSH_TO_TALK_ENABLED");
-        }
     }
 
-    /// 録音最大秒数は環境変数から読み込める
+    /// 未設定なら既定の実行バックエンドを使う
     #[test]
-    fn max_duration_secs_is_loaded_from_environment() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_DEFAULT_MAX_SECS", "45");
-        }
-
-        let config = EnvConfig::from_env().unwrap();
-
-        assert_eq!(config.recording.max_duration_secs, 45);
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_MAX_SECS");
-        }
-    }
-
-    /// 環境変数がなければ既定の実行バックエンドを使う
-    #[test]
-    fn default_transcription_provider_is_used_without_provider_env() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::remove_var(DEFAULT_TRANSCRIPTION_PROVIDER_ENV);
-        }
-
+    fn default_transcription_provider_is_used_without_persisted_setting() {
         let config = EnvConfig::from_env().unwrap();
 
         assert_eq!(
@@ -848,48 +818,6 @@ mod tests {
             "Qwen/Qwen3-ASR-1.7B"
         );
         assert_eq!(config.transcription.mlx_qwen3_asr_command, "mlx-qwen3-asr");
-    }
-
-    /// CLI 未指定時の既定転写バックエンドは環境変数から読み込める
-    #[test]
-    fn default_transcription_provider_is_loaded_from_environment() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var(DEFAULT_TRANSCRIPTION_PROVIDER_ENV, "gpt-live-transcribe");
-        }
-
-        let config = EnvConfig::from_env().unwrap();
-
-        assert_eq!(
-            config.transcription.provider,
-            TranscriptionProvider::GptLiveTranscribe
-        );
-
-        unsafe {
-            std::env::remove_var(DEFAULT_TRANSCRIPTION_PROVIDER_ENV);
-        }
-    }
-
-    /// CLI 未指定時の既定転写バックエンドは未対応値を拒否する
-    #[test]
-    fn try_from_env_rejects_invalid_default_transcription_provider() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var(DEFAULT_TRANSCRIPTION_PROVIDER_ENV, "openai");
-        }
-
-        let result = EnvConfig::try_from_env();
-
-        assert_eq!(
-            result.unwrap_err(),
-            ConfigError::UnsupportedTranscriptionProvider {
-                value: "openai".to_string(),
-            }
-        );
-
-        unsafe {
-            std::env::remove_var(DEFAULT_TRANSCRIPTION_PROVIDER_ENV);
-        }
     }
 
     /// mlx-qwen3-asr コマンドは既定コマンドを使う
@@ -913,78 +841,14 @@ mod tests {
     /// 録音開始時の pre-roll は既定で 500ms になる
     #[test]
     fn audio_pre_roll_defaults_to_500ms() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS");
-        }
-
         let config = EnvConfig::from_env().unwrap();
 
-        assert_eq!(config.audio.pre_roll_ms, DEFAULT_AUDIO_PRE_ROLL_MS);
-    }
-
-    /// 録音開始時の pre-roll は環境変数から読み込める
-    #[test]
-    fn audio_pre_roll_ms_is_loaded_from_environment() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS", "250");
-        }
-
-        let config = EnvConfig::from_env().unwrap();
-
-        assert_eq!(config.audio.pre_roll_ms, 250);
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS");
-        }
-    }
-
-    /// 録音開始時の pre-roll は0msで無効化できる
-    #[test]
-    fn audio_pre_roll_ms_accepts_zero() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS", "0");
-        }
-
-        let config = EnvConfig::from_env().unwrap();
-
-        assert_eq!(config.audio.pre_roll_ms, 0);
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS");
-        }
-    }
-
-    /// 録音開始時の pre-roll は上限値を受け入れる
-    #[test]
-    fn audio_pre_roll_ms_accepts_maximum() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var(
-                "VOICE_INPUT_DEFAULT_PRE_ROLL_MS",
-                MAX_AUDIO_PRE_ROLL_MS.to_string(),
-            );
-        }
-
-        let config = EnvConfig::from_env().unwrap();
-
-        assert_eq!(config.audio.pre_roll_ms, MAX_AUDIO_PRE_ROLL_MS);
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS");
-        }
+        assert_eq!(config.audio.pre_roll_ms, config_defaults::PRE_ROLL_MS);
     }
 
     /// 録音開始・停止サウンドは既定で有効になる
     #[test]
     fn recording_sounds_are_enabled_by_default() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::remove_var(RECORDING_SOUNDS_ENABLED_ENV);
-        }
-
         let config = EnvConfig::from_env().unwrap();
 
         assert!(config.audio.recording_sounds_enabled);
@@ -993,31 +857,9 @@ mod tests {
     /// 録音状態HUDは既定で有効になる
     #[test]
     fn recording_hud_is_enabled_by_default() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::remove_var(RECORDING_HUD_ENABLED_ENV);
-        }
-
         let config = EnvConfig::from_env().unwrap();
 
         assert!(config.ui.recording_hud_enabled);
-    }
-
-    /// 録音状態HUDは環境変数で無効化できる
-    #[test]
-    fn recording_hud_can_be_disabled_from_environment() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var(RECORDING_HUD_ENABLED_ENV, "false");
-        }
-
-        let config = EnvConfig::from_env().unwrap();
-
-        assert!(!config.ui.recording_hud_enabled);
-
-        unsafe {
-            std::env::remove_var(RECORDING_HUD_ENABLED_ENV);
-        }
     }
 
     /// 録音状態HUDのヘルパーパスと検証ログパスは環境変数から読み込める
@@ -1046,46 +888,6 @@ mod tests {
         }
     }
 
-    /// 録音開始・停止サウンドは環境変数で無効化できる
-    #[test]
-    fn recording_sounds_can_be_disabled_from_environment() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var(RECORDING_SOUNDS_ENABLED_ENV, "false");
-        }
-
-        let config = EnvConfig::from_env().unwrap();
-
-        assert!(!config.audio.recording_sounds_enabled);
-
-        unsafe {
-            std::env::remove_var(RECORDING_SOUNDS_ENABLED_ENV);
-        }
-    }
-
-    /// 録音開始・停止サウンド設定はtrue/false以外を許可しない
-    #[test]
-    fn try_from_env_rejects_invalid_recording_sounds_flag() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var(RECORDING_SOUNDS_ENABLED_ENV, "off");
-        }
-
-        let result = EnvConfig::try_from_env();
-
-        assert_eq!(
-            result,
-            Err(ConfigError::InvalidBooleanEnv {
-                name: RECORDING_SOUNDS_ENABLED_ENV,
-                value: "off".to_string(),
-            })
-        );
-
-        unsafe {
-            std::env::remove_var(RECORDING_SOUNDS_ENABLED_ENV);
-        }
-    }
-
     /// OpenAI APIキーは新旧環境変数の後方互換を保つ
     #[test]
     fn transcription_api_key_falls_back_to_openai_api_key() {
@@ -1107,128 +909,13 @@ mod tests {
         }
     }
 
-    /// 録音最大秒数が整数でない場合は設定エラーになる
+    /// 明示指定された録音最大秒数はアプリケーション既定値より優先される
     #[test]
-    fn try_from_env_rejects_invalid_max_duration_secs() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_DEFAULT_MAX_SECS", "abc");
-        }
-
-        let result = EnvConfig::try_from_env();
-
-        assert_eq!(
-            result,
-            Err(ConfigError::InvalidMaxDurationSecs {
-                value: "abc".to_string(),
-            })
-        );
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_MAX_SECS");
-        }
-    }
-
-    /// 録音開始時の pre-roll が整数でない場合は設定エラーになる
-    #[test]
-    fn try_from_env_rejects_invalid_audio_pre_roll_ms() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS", "abc");
-        }
-
-        let result = EnvConfig::try_from_env();
-
-        assert_eq!(
-            result,
-            Err(ConfigError::InvalidAudioPreRollMs {
-                value: "abc".to_string(),
-            })
-        );
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS");
-        }
-    }
-
-    /// 録音開始時の pre-roll が上限を超える場合は設定エラーになる
-    #[test]
-    fn try_from_env_rejects_too_large_audio_pre_roll_ms() {
-        let _lock = lock_test_env();
-        let value = (MAX_AUDIO_PRE_ROLL_MS + 1).to_string();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS", &value);
-        }
-
-        let result = EnvConfig::try_from_env();
-
-        assert_eq!(result, Err(ConfigError::InvalidAudioPreRollMs { value }));
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_PRE_ROLL_MS");
-        }
-    }
-
-    /// 録音最大秒数が0の場合は設定エラーになる
-    #[test]
-    fn try_from_env_rejects_zero_max_duration_secs() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_DEFAULT_MAX_SECS", "0");
-        }
-
-        let result = EnvConfig::try_from_env();
-
-        assert_eq!(
-            result,
-            Err(ConfigError::InvalidMaxDurationSecs {
-                value: "0".to_string(),
-            })
-        );
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_MAX_SECS");
-        }
-    }
-
-    /// 録音最大秒数が負数の場合は設定エラーになる
-    #[test]
-    fn try_from_env_rejects_negative_max_duration_secs() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_DEFAULT_MAX_SECS", "-1");
-        }
-
-        let result = EnvConfig::try_from_env();
-
-        assert_eq!(
-            result,
-            Err(ConfigError::InvalidMaxDurationSecs {
-                value: "-1".to_string(),
-            })
-        );
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_MAX_SECS");
-        }
-    }
-
-    /// 明示指定された録音最大秒数は不正な環境変数より優先される
-    #[test]
-    fn explicit_max_duration_secs_overrides_invalid_environment() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_DEFAULT_MAX_SECS", "abc");
-        }
-
+    fn explicit_max_duration_secs_overrides_application_default() {
         let config = EnvConfig::try_from_env_with_recording_max_duration_secs(Some(120))
-            .expect("explicit max duration should override env");
+            .expect("explicit max duration should override the default");
 
         assert_eq!(config.recording.max_duration_secs, 120);
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_MAX_SECS");
-        }
     }
 
     /// 明示指定された録音最大秒数でも0は拒否する
@@ -1242,69 +929,6 @@ mod tests {
                 value: "0".to_string(),
             })
         );
-    }
-
-    /// ストリーミング設定はtrue/false以外を許可しない
-    #[test]
-    fn try_from_env_rejects_invalid_streaming_flag() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING", "TRUE");
-        }
-
-        let result = EnvConfig::try_from_env();
-
-        assert_eq!(
-            result,
-            Err(ConfigError::InvalidBooleanEnv {
-                name: "VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING",
-                value: "TRUE".to_string(),
-            })
-        );
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING");
-        }
-    }
-
-    /// ストリーミング設定はfalseを明示しても正常に無効化できる
-    #[test]
-    fn try_from_env_accepts_explicit_false_streaming_flag() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING", "false");
-        }
-
-        let result = EnvConfig::try_from_env().expect("streaming=false should be valid");
-
-        assert!(!result.transcription.streaming_enabled);
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING");
-        }
-    }
-
-    /// test_initが利用する検証経路は未初期化時に無効な環境変数を拒否する
-    #[test]
-    fn test_init_loader_rejects_invalid_env_when_uninitialized() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var("VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING", "TRUE");
-        }
-
-        let result = EnvConfig::load_for_test_init();
-
-        assert_eq!(
-            result,
-            Err(ConfigError::InvalidBooleanEnv {
-                name: "VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING",
-                value: "TRUE".to_string(),
-            })
-        );
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_TRANSCRIBE_STREAMING");
-        }
     }
 
     /// IPCソケット設定は環境変数から優先順に解決される
@@ -1353,33 +977,6 @@ mod tests {
 
         unsafe {
             std::env::remove_var("VOICE_INPUT_SOCKET_DIR");
-        }
-    }
-
-    /// 入力デバイス優先順はカンマ区切り環境変数から読み込める
-    #[test]
-    fn input_device_priorities_are_loaded_from_environment() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::set_var(
-                "VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES",
-                "Built-in Microphone, Yeti X ,  ,External Mic",
-            );
-        }
-
-        let config = EnvConfig::from_env().unwrap();
-
-        assert_eq!(
-            config.audio.input_device_priorities,
-            vec![
-                "Built-in Microphone".to_string(),
-                "Yeti X".to_string(),
-                "External Mic".to_string()
-            ]
-        );
-
-        unsafe {
-            std::env::remove_var("VOICE_INPUT_DEFAULT_INPUT_DEVICE_PRIORITIES");
         }
     }
 
