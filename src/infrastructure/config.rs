@@ -399,11 +399,11 @@ mod tests {
         );
     }
 
-    /// dotfiles由来の設定リンクを維持したままリンク先を更新できる
+    /// 設定リンクを維持したままリンク先を更新できる
     #[test]
     fn saving_config_keeps_symbolic_link_and_updates_target_file() {
         let tmp = TempDir::new().expect("create tempdir");
-        let shared_path = tmp.path().join("dotfiles/config.json");
+        let shared_path = tmp.path().join("hoge/config.json");
         fs::create_dir_all(shared_path.parent().expect("parent")).expect("create parent");
         fs::write(&shared_path, r#"{"max_secs":90}"#).expect("write shared config");
         let local_path = tmp.path().join("local/config.json");
