@@ -6,7 +6,7 @@ use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    io::{self, copy},
+    io::{self, Write, copy},
     path::{Path, PathBuf},
 };
 
@@ -78,16 +78,6 @@ impl AppConfig {
     fn load_from_path(path: &Path) -> Self {
         if let Ok(f) = fs::File::open(path) {
             if let Ok(cfg) = serde_json::from_reader::<_, AppConfig>(f) {
-                if fs::symlink_metadata(path)
-                    .is_ok_and(|metadata| metadata.file_type().is_symlink())
-                {
-                    if let Err(error) = cfg.save_to_path(path) {
-                        eprintln!(
-                            "failed to materialize local config {}: {error}",
-                            path.display()
-                        );
-                    }
-                }
                 return cfg;
             }
         }
@@ -137,12 +127,19 @@ impl AppConfig {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let tmp = path.with_extension("json.tmp");
+        let destination =
+            if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+                fs::canonicalize(path)?
+            } else {
+                path.to_path_buf()
+            };
+        let tmp = destination.with_extension("json.tmp");
         {
-            let f = fs::File::create(&tmp)?;
-            serde_json::to_writer_pretty(&f, self)?;
+            let mut f = fs::File::create(&tmp)?;
+            serde_json::to_writer_pretty(&mut f, self)?;
+            f.write_all(b"\n")?;
         }
-        fs::rename(tmp, path)?;
+        fs::rename(tmp, destination)?;
         Ok(())
     }
 
@@ -402,9 +399,9 @@ mod tests {
         );
     }
 
-    /// dotfiles由来の設定リンクは内容を引き継いだ端末固有ファイルへ切り替わる
+    /// dotfiles由来の設定リンクを維持したままリンク先を更新できる
     #[test]
-    fn loading_config_materializes_symbolic_link_as_local_file() {
+    fn saving_config_keeps_symbolic_link_and_updates_target_file() {
         let tmp = TempDir::new().expect("create tempdir");
         let shared_path = tmp.path().join("dotfiles/config.json");
         fs::create_dir_all(shared_path.parent().expect("parent")).expect("create parent");
@@ -413,18 +410,24 @@ mod tests {
         fs::create_dir_all(local_path.parent().expect("parent")).expect("create local parent");
         symlink(&shared_path, &local_path).expect("create config symlink");
 
-        let config = AppConfig::load_from_path(&local_path);
+        let mut config = AppConfig::load_from_path(&local_path);
 
         assert_eq!(config.max_secs, Some(90));
+        config.max_secs = Some(120);
+        config.save_to_path(&local_path).expect("save config");
+
         assert!(
-            !fs::symlink_metadata(&local_path)
+            fs::symlink_metadata(&local_path)
                 .expect("stat local config")
                 .file_type()
                 .is_symlink()
         );
-        assert_eq!(
-            fs::read_to_string(&shared_path).unwrap(),
-            r#"{"max_secs":90}"#
+        let saved = AppConfig::load_from_path(&shared_path);
+        assert_eq!(saved.max_secs, Some(120));
+        assert!(
+            fs::read_to_string(&shared_path)
+                .expect("read saved config")
+                .ends_with('\n')
         );
     }
 

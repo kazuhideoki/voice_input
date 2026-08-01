@@ -48,7 +48,7 @@ VOICE_INPUT_DEFAULT_PUSH_TO_TALK_HOTKEY=opt+8
 環境変数は `src/utils/config.rs` の `EnvConfig` で起動時に一度だけ読み込まれます。APIキー、Proxy、IPC・データ配置などの起動環境と、`VOICE_INPUT_DEFAULT_*` 形式のユーザー設定既定値を保持します。
 転写バックエンドは `gpt-transcribe`、`gpt-live-transcribe`、`mlx-qwen3-asr` から選べます。既定値は `VOICE_INPUT_DEFAULT_TRANSCRIPTION_PROVIDER`、コマンドごとの上書きは `--transcription-provider` です。
 ユーザーが変更する設定はビルド後に `voice_input config` で `config.json` へ永続化します。優先順位は、コマンドごとの指定、`config.json`、`.env` の `VOICE_INPUT_DEFAULT_*`、プログラム内の既定値の順です。
-macOSでは `config.json` を `~/Library/Application Support/com.user.voice_input/config.json` に保存します。端末固有の操作結果であり、dotfilesで共有する設定ファイルとしては扱いません。
+macOSでは `config.json` を `~/Library/Application Support/com.user.voice_input/config.json` に保存します。このパスがシンボリックリンクの場合はリンクを維持したままリンク先を更新するため、dotfilesで管理できます。
 OpenAI 系のモデルは provider ごとに固定されます。`gpt-transcribe` は録音後の音声を GPT Transcribe へ送り、`gpt-live-transcribe` は GPT Live Transcribe で録音中に逐次入力します。`mlx-qwen3-asr` はローカルコマンドを使います。
 `VOICE_INPUT_DEFAULT_PRE_ROLL_MS` は録音開始直前の音声を先頭へ付与する長さです。既定値は 500ms、0 で無効です。
 `VOICE_INPUT_DEFAULT_RECORDING_SOUNDS_ENABLED=false` を設定すると、録音開始・停止時の効果音を無効化できます。未指定時は有効です。
