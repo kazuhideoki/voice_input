@@ -33,16 +33,18 @@ pub fn format_dictionary(document: &DictionaryDocument) -> String {
         .map(|variant| variant.hit.to_string().len())
         .max()
         .unwrap_or_default();
-    let mut lines = vec![format!(
-        "Dictionary — {} {}, {} {}",
-        document.terms.len(),
-        count_label(document.terms.len(), "term", "terms"),
-        variant_count,
-        count_label(variant_count, "variant", "variants")
-    )];
+    let mut lines = vec![
+        format!(
+            "Dictionary — {} {}, {} {}",
+            document.terms.len(),
+            count_label(document.terms.len(), "term", "terms"),
+            variant_count,
+            count_label(variant_count, "variant", "variants")
+        ),
+        String::new(),
+    ];
 
     for term in &document.terms {
-        lines.push(String::new());
         lines.push(term.term.clone());
         for (variant_index, variant) in term.variants.iter().enumerate() {
             let width = UnicodeWidthStr::width(variant.surface.as_str());
@@ -303,10 +305,8 @@ mod tests {
                 "\n",
                 "Warp\n",
                 "  └─ ワープ           3 hits\n",
-                "\n",
                 "README.md\n",
                 "  └─ リードミー      12 hits\n",
-                "\n",
                 "Claude Code\n",
                 "  └─ クロードコード   3 hits",
             )
