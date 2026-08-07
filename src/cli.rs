@@ -1,10 +1,73 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use unicode_width::UnicodeWidthStr;
 
+use crate::domain::dict::DictionaryDocument;
 use crate::infrastructure::push_to_talk::validate_hotkey;
 use crate::utils::config::{
     TranscriptionProvider, parse_audio_pre_roll_ms, parse_max_duration_secs,
 };
+
+/// 辞書一覧を端末上の表示幅に合わせて整形する。
+pub fn format_dictionary(document: &DictionaryDocument) -> String {
+    if document.terms.is_empty() {
+        return "(no entries)".to_string();
+    }
+
+    let variant_count = document
+        .terms
+        .iter()
+        .map(|term| term.variants.len())
+        .sum::<usize>();
+    let surface_width = document
+        .terms
+        .iter()
+        .flat_map(|term| &term.variants)
+        .map(|variant| UnicodeWidthStr::width(variant.surface.as_str()))
+        .max()
+        .unwrap_or_default();
+    let hit_width = document
+        .terms
+        .iter()
+        .flat_map(|term| &term.variants)
+        .map(|variant| variant.hit.to_string().len())
+        .max()
+        .unwrap_or_default();
+    let mut lines = vec![format!(
+        "Dictionary — {} {}, {} {}",
+        document.terms.len(),
+        count_label(document.terms.len(), "term", "terms"),
+        variant_count,
+        count_label(variant_count, "variant", "variants")
+    )];
+
+    for term in &document.terms {
+        lines.push(String::new());
+        lines.push(term.term.clone());
+        for (variant_index, variant) in term.variants.iter().enumerate() {
+            let width = UnicodeWidthStr::width(variant.surface.as_str());
+            let padding = " ".repeat(surface_width - width);
+            let branch = if variant_index + 1 == term.variants.len() {
+                "└─"
+            } else {
+                "├─"
+            };
+            lines.push(format!(
+                "  {branch} {}{}  {:>hit_width$} {}",
+                variant.surface,
+                padding,
+                variant.hit,
+                count_label(variant.hit as usize, "hit", "hits")
+            ));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn count_label(count: usize, singular: &'static str, plural: &'static str) -> &'static str {
+    if count == 1 { singular } else { plural }
+}
 
 #[derive(Parser)]
 #[command(author, version, about = "Voice Input client (daemon control + dict)")]
@@ -194,8 +257,102 @@ fn parse_push_to_talk_hotkey_arg(value: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Cmd, ConfigCmd, ConfigField, RuntimeConfigField, TranscriptionProvider};
+    use super::{
+        Cli, Cmd, ConfigCmd, ConfigField, RuntimeConfigField, TranscriptionProvider,
+        format_dictionary,
+    };
+    use crate::domain::dict::{
+        CURRENT_DICTIONARY_VERSION, DictTerm, DictVariant, DictionaryDocument,
+    };
     use clap::Parser;
+
+    /// 日本語とASCIIが混在しても使用回数の列が端末上で揃う
+    #[test]
+    fn aligns_dictionary_hits_by_display_width() {
+        let document = DictionaryDocument {
+            version: CURRENT_DICTIONARY_VERSION,
+            terms: vec![
+                DictTerm {
+                    term: "Warp".to_string(),
+                    variants: vec![DictVariant {
+                        surface: "ワープ".to_string(),
+                        hit: 3,
+                    }],
+                },
+                DictTerm {
+                    term: "README.md".to_string(),
+                    variants: vec![DictVariant {
+                        surface: "リードミー".to_string(),
+                        hit: 12,
+                    }],
+                },
+                DictTerm {
+                    term: "Claude Code".to_string(),
+                    variants: vec![DictVariant {
+                        surface: "クロードコード".to_string(),
+                        hit: 3,
+                    }],
+                },
+            ],
+        };
+
+        assert_eq!(
+            format_dictionary(&document),
+            concat!(
+                "Dictionary — 3 terms, 3 variants\n",
+                "\n",
+                "Warp\n",
+                "  └─ ワープ           3 hits\n",
+                "\n",
+                "README.md\n",
+                "  └─ リードミー      12 hits\n",
+                "\n",
+                "Claude Code\n",
+                "  └─ クロードコード   3 hits",
+            )
+        );
+    }
+
+    /// 複数候補は枝記号を使い分け、1回だけの使用回数は単数形で表示する
+    #[test]
+    fn formats_multiple_variants_as_tree() {
+        let document = DictionaryDocument {
+            version: CURRENT_DICTIONARY_VERSION,
+            terms: vec![DictTerm {
+                term: "GitHub".to_string(),
+                variants: vec![
+                    DictVariant {
+                        surface: "ギットハブ".to_string(),
+                        hit: 8,
+                    },
+                    DictVariant {
+                        surface: "ギッハブ".to_string(),
+                        hit: 1,
+                    },
+                ],
+            }],
+        };
+
+        assert_eq!(
+            format_dictionary(&document),
+            concat!(
+                "Dictionary — 1 term, 2 variants\n",
+                "\n",
+                "GitHub\n",
+                "  ├─ ギットハブ  8 hits\n",
+                "  └─ ギッハブ    1 hit",
+            )
+        );
+    }
+
+    /// 空の辞書は空であることを明示する
+    #[test]
+    fn formats_empty_dictionary() {
+        assert_eq!(
+            format_dictionary(&DictionaryDocument::empty()),
+            "(no entries)"
+        );
+    }
 
     /// providerの永続設定コマンドを解釈できる
     #[test]

@@ -5,7 +5,7 @@ use clap::Parser;
 use std::path::PathBuf;
 use voice_input::{
     application::DictionaryService,
-    cli::{Cli, Cmd, ConfigCmd, ConfigField, DictCmd, RuntimeConfigField},
+    cli::{Cli, Cmd, ConfigCmd, ConfigField, DictCmd, RuntimeConfigField, format_dictionary},
     infrastructure::{config::AppConfig, dict::JsonFileDictRepo},
     ipc::{IpcCmd, send_cmd},
     load_env,
@@ -124,17 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 DictCmd::List => {
                     let document = service.list()?;
-                    if document.terms.is_empty() {
-                        println!("(no entries)");
-                    } else {
-                        println!("─ Dictionary ───────────────");
-                        for term in document.terms {
-                            println!("• {}", term.term);
-                            for variant in term.variants {
-                                println!("  - {:<20} hit={}", variant.surface, variant.hit);
-                            }
-                        }
-                    }
+                    println!("{}", format_dictionary(&document));
                 }
             }
         }
