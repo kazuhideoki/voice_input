@@ -369,7 +369,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     }
 
     fn prepare_realtime_session(&self) -> Result<PreparedRealtimeSession> {
-        build_prepared_realtime_session()
+        Ok(build_prepared_realtime_session())
     }
 
     fn take_ready_realtime_session(&self) -> Option<PreparedRealtimeSession> {
@@ -599,33 +599,24 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         match provider {
             crate::utils::config::TranscriptionProvider::GptTranscribe
             | crate::utils::config::TranscriptionProvider::GptLiveTranscribe => {
-                match transcription.api_key.clone() {
-                    Some(key) => {
-                        lines.push(format!("transcription provider: {}", provider.as_str()));
-                        lines.push("TRANSCRIPTION_API_KEY: present".to_string());
-                        let client = reqwest::Client::new();
-                        match client
-                            .get("https://api.openai.com/v1/models")
-                            .bearer_auth(key)
-                            .send()
-                            .await
-                        {
-                            Ok(resp) if resp.status().is_success() => {
-                                lines.push("OpenAI API: reachable".to_string());
-                            }
-                            Ok(resp) => {
-                                lines.push(format!("OpenAI API: fail({})", resp.status()));
-                                ok = false;
-                            }
-                            Err(e) => {
-                                lines.push(format!("OpenAI API: error({})", e));
-                                ok = false;
-                            }
-                        }
+                lines.push(format!("transcription provider: {}", provider.as_str()));
+                lines.push("TRANSCRIPTION_API_KEY: embedded".to_string());
+                let client = reqwest::Client::new();
+                match client
+                    .get("https://api.openai.com/v1/models")
+                    .bearer_auth(&transcription.api_key)
+                    .send()
+                    .await
+                {
+                    Ok(resp) if resp.status().is_success() => {
+                        lines.push("OpenAI API: reachable".to_string());
                     }
-                    None => {
-                        lines.push(format!("transcription provider: {}", provider.as_str()));
-                        lines.push("TRANSCRIPTION_API_KEY: missing".to_string());
+                    Ok(resp) => {
+                        lines.push(format!("OpenAI API: fail({})", resp.status()));
+                        ok = false;
+                    }
+                    Err(e) => {
+                        lines.push(format!("OpenAI API: error({})", e));
                         ok = false;
                     }
                 }
@@ -802,18 +793,18 @@ fn fan_out_audio_frames(
     }
 }
 
-fn build_prepared_realtime_session() -> Result<PreparedRealtimeSession> {
+fn build_prepared_realtime_session() -> PreparedRealtimeSession {
     let config =
-        GptLiveTranscribeConfig::from_transcription_config(&EnvConfig::get().transcription)?;
+        GptLiveTranscribeConfig::from_transcription_config(&EnvConfig::get().transcription);
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     let input_task = spawn_local(async move { process_streaming_text_input(&mut event_rx).await });
     let session = spawn_gpt_live_transcribe_session(config, event_tx.clone());
 
-    Ok(PreparedRealtimeSession {
+    PreparedRealtimeSession {
         session,
         event_tx,
         input_task,
-    })
+    }
 }
 
 fn ensure_ready_realtime_session(
@@ -825,13 +816,7 @@ fn ensure_ready_realtime_session(
         return;
     }
 
-    let initial = match build_prepared_realtime_session() {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            eprintln!("Realtime ready session warm-up skipped: {}", error);
-            return;
-        }
-    };
+    let initial = build_prepared_realtime_session();
 
     let ready_realtime_session_for_task = ready_realtime_session.clone();
     let ready_realtime_task_for_task = ready_realtime_task.clone();
@@ -859,13 +844,7 @@ fn ensure_ready_realtime_session(
                         error
                     );
                     tokio::time::sleep(REALTIME_READY_RETRY_DELAY).await;
-                    next = match build_prepared_realtime_session() {
-                        Ok(prepared) => Some(prepared),
-                        Err(error) => {
-                            eprintln!("Realtime ready session retry skipped: {}", error);
-                            None
-                        }
-                    };
+                    next = Some(build_prepared_realtime_session());
                 }
             }
         }

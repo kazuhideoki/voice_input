@@ -21,22 +21,24 @@ Rust 製の **音声録音・文字起こし CLI / デーモン** です。
 | **IPC Unix Socket**                | CLI ↔ デーモン間通信は JSON over UDS                    |
 | **高速メモリ処理**                 | OpenAI 系の通常録音処理はメモリ上で完結                |
 
-## 環境変数準備
+## ビルド時の API Key 準備
 
 ```sh
 cp .env.example .env
 ```
 
-主な設定:
+OpenAI 系の転写に使う API Key を `.env` に設定します。
 
 ```sh
-TRANSCRIPTION_API_KEY=your_openai_api_key_here # OpenAI 系利用時のみ
+TRANSCRIPTION_API_KEY=your_openai_api_key_here
 ```
 
-必要に応じて `VOICE_INPUT_ENV_PATH`、`VOICE_INPUT_SOCKET_PATH`、`VOICE_INPUT_SOCKET_DIR`、`XDG_DATA_HOME` も指定できます。
+リポジトリ直下 `.env` の `TRANSCRIPTION_API_KEY` だけがビルド時にバイナリへ埋め込まれます。未設定または空の場合、ビルドは失敗します。ビルド後の `VoiceInput.app` は API Key のために `.env` や実行時環境変数を必要としません。API Key を変更した場合は再ビルドし、`voice_input health` で新しいキーによる接続を確認してください。
 
-`.env` はデフォルトでカレントディレクトリから読み込まれ、`VOICE_INPUT_ENV_PATH` が設定されている場合はそのパスが優先されます。
-環境変数は `src/utils/config.rs` の `EnvConfig` で起動時に一度だけ読み込まれ、APIキー、Proxy、IPC・データ配置などの起動環境を保持します。
+> [!WARNING]
+> 埋め込まれた API Key は実行ファイルから抽出可能です。ビルドしたバイナリや `VoiceInput.app` を第三者へ配布しないでください。キーが漏えいした可能性がある場合は、OpenAI Platform でキーを無効化して再発行し、アプリを再ビルドしてください。
+
+Proxy、IPC・データ配置など、API Key 以外の環境変数は引き続き実行時に読み込まれます。`.env` はデフォルトでカレントディレクトリから読み込まれ、`VOICE_INPUT_ENV_PATH` が設定されている場合はそのパスが優先されます。必要に応じて `VOICE_INPUT_ENV_PATH`、`VOICE_INPUT_SOCKET_PATH`、`VOICE_INPUT_SOCKET_DIR`、`XDG_DATA_HOME` を指定できます。
 転写バックエンドは `gpt-transcribe`、`gpt-live-transcribe`、`mlx-qwen3-asr` から選べます。コマンドごとの上書きは `--transcription-provider` です。
 ユーザーが変更する設定はビルド後に `voice_input config` で `config.json` へ永続化します。優先順位は、コマンドごとの指定、`config.json`、アプリケーション既定値の順です。既定値は `src/application/config_defaults.rs` に集約しています。
 macOSでは `config.json` を `~/Library/Application Support/com.user.voice_input/config.json` に保存します。このパスがシンボリックリンクの場合はリンクを維持したままリンク先を更新するため、dotfilesで管理できます。
@@ -94,7 +96,7 @@ cargo build --release
 
    - `~/Library/LaunchAgents/com.user.voiceinputd.plist` を作成
    - LaunchAgent が `~/Applications/VoiceInput.app/Contents/MacOS/voice_inputd` を起動するよう設定
-   - `.env` の読み込み先を `VOICE_INPUT_ENV_PATH` で固定
+   - API Key 以外の実行時設定を読む `.env` のパスを `VOICE_INPUT_ENV_PATH` で固定
 
 2. **権限の付与**
    - システム設定 → プライバシーとセキュリティ → マイク

@@ -14,8 +14,6 @@ const GPT_TRANSCRIBE_MODEL: &str = "gpt-transcribe";
 
 #[derive(Debug, thiserror::Error)]
 pub enum OpenAiError {
-    #[error("OPENAI_API_KEY environment variable is not set")]
-    MissingApiKey,
     #[error("failed to build HTTP client")]
     HttpClientBuild(#[source] reqwest::Error),
     #[error("failed to create multipart body")]
@@ -88,11 +86,12 @@ impl OpenAiClient {
 
     /// Create a new OpenAI client from transcription config
     pub fn from_config(config: &TranscriptionConfig) -> Result<Self, OpenAiError> {
-        let api_key = config.api_key.clone().ok_or(OpenAiError::MissingApiKey)?;
-
         let client = build_http_client().map_err(OpenAiError::HttpClientBuild)?;
 
-        Ok(Self { api_key, client })
+        Ok(Self {
+            api_key: config.api_key.clone(),
+            client,
+        })
     }
 
     /// AudioDataから直接転写を実行
@@ -434,35 +433,23 @@ mod tests {
         assert_eq!(resp.text, "こんにちは");
     }
 
-    /// APIキー有無に応じてクライアント生成結果が変わる
+    /// 埋め込みAPIキーからクライアントを生成できる
     #[tokio::test]
-    async fn openai_client_new_respects_api_key_presence() {
+    async fn openai_client_uses_embedded_api_key() {
         // テスト用の初期化（既に初期化済みなら何もしない）
         EnvConfig::test_init();
 
-        // OpenAI APIキーが設定されているかどうかで挙動が変わる
         let client = OpenAiClient::new();
 
-        // 環境変数またはテスト設定でAPIキーが設定されていれば成功
-        // そうでなければ失敗
-        if EnvConfig::get().transcription.api_key.is_some() {
-            assert!(client.is_ok());
-        } else {
-            assert!(matches!(client, Err(OpenAiError::MissingApiKey)));
-        }
+        assert!(client.is_ok());
     }
 
     /// ダミー音声での転写がエラーになることを確認する
     #[tokio::test]
+    #[ignore = "Requires OpenAI API access"]
     async fn transcribe_audio_rejects_dummy_memory_audio() {
         // テスト用の初期化
         EnvConfig::test_init();
-
-        // OpenAI APIキーが設定されていない場合はテストをスキップ
-        if EnvConfig::get().transcription.api_key.is_none() {
-            println!("Skipping test: OPENAI_API_KEY not set");
-            return;
-        }
 
         let client = OpenAiClient::new().unwrap();
 
@@ -498,15 +485,10 @@ mod tests {
 
     /// 実在しないファイル相当の転写がエラーになることを確認する
     #[tokio::test]
+    #[ignore = "Requires OpenAI API access"]
     async fn transcribe_audio_rejects_missing_file_data() {
         // テスト用の初期化
         EnvConfig::test_init();
-
-        // OpenAI APIキーが設定されていない場合はテストをスキップ
-        if EnvConfig::get().transcription.api_key.is_none() {
-            println!("Skipping test: OPENAI_API_KEY not set");
-            return;
-        }
 
         let client = OpenAiClient::new().unwrap();
         // メモリモードでのテスト

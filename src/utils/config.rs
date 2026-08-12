@@ -28,6 +28,10 @@ pub const RECORDING_HUD_LOG_PATH_ENV: &str = "VOICE_INPUT_RECORDING_HUD_LOG_PATH
 /// mlx-qwen3-asr で利用する固定モデル
 const DEFAULT_MLX_QWEN3_ASR_MODEL: &str = "Qwen/Qwen3-ASR-1.7B";
 
+/// ビルド時に `.env` から埋め込まれた転写サービスAPIキー。
+const EMBEDDED_TRANSCRIPTION_API_KEY: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/transcription_api_key"));
+
 #[cfg(test)]
 use std::sync::Mutex;
 
@@ -90,7 +94,7 @@ pub struct TranscriptionConfig {
     /// 転写バックエンド
     pub provider: TranscriptionProvider,
     /// 転写サービス APIキー
-    pub api_key: Option<String>,
+    pub api_key: String,
     /// mlx-qwen3-asr のモデル名
     pub mlx_qwen3_asr_model: String,
     /// ストリーミング直接入力を有効にする
@@ -290,8 +294,7 @@ impl EnvConfig {
             },
             transcription: TranscriptionConfig {
                 provider,
-                api_key: non_empty_env("TRANSCRIPTION_API_KEY")
-                    .or_else(|| non_empty_env("OPENAI_API_KEY")),
+                api_key: EMBEDDED_TRANSCRIPTION_API_KEY.to_string(),
                 mlx_qwen3_asr_model,
                 streaming_enabled,
                 log_path: non_empty_env("OPENAI_TRANSCRIPTION_LOG_PATH").map(PathBuf::from),
@@ -677,7 +680,7 @@ mod tests {
     fn openai_transcription_config() -> TranscriptionConfig {
         TranscriptionConfig {
             provider: TranscriptionProvider::GptTranscribe,
-            api_key: None,
+            api_key: "test-api-key".to_string(),
             mlx_qwen3_asr_model: "Qwen/Qwen3-ASR-1.7B".to_string(),
             streaming_enabled: false,
             log_path: None,
@@ -888,25 +891,12 @@ mod tests {
         }
     }
 
-    /// OpenAI APIキーは新旧環境変数の後方互換を保つ
+    /// OpenAI APIキーはビルド時に埋め込まれている
     #[test]
-    fn transcription_api_key_falls_back_to_openai_api_key() {
-        let _lock = lock_test_env();
-        unsafe {
-            std::env::remove_var("TRANSCRIPTION_API_KEY");
-            std::env::set_var("OPENAI_API_KEY", "legacy-openai-key");
-        }
-
+    fn transcription_api_key_is_embedded_at_build_time() {
         let config = EnvConfig::from_env().unwrap();
 
-        assert_eq!(
-            config.transcription.api_key.as_deref(),
-            Some("legacy-openai-key")
-        );
-
-        unsafe {
-            std::env::remove_var("OPENAI_API_KEY");
-        }
+        assert!(!config.transcription.api_key.is_empty());
     }
 
     /// 明示指定された録音最大秒数はアプリケーション既定値より優先される

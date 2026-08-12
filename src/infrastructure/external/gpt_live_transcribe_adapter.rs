@@ -45,14 +45,10 @@ pub struct GptLiveTranscribeConfig {
 
 impl GptLiveTranscribeConfig {
     /// 転写設定から GPT Live Transcribe 設定を作成する。
-    pub fn from_transcription_config(config: &TranscriptionConfig) -> Result<Self> {
-        let api_key = config.api_key.clone().ok_or_else(|| {
-            VoiceInputError::from(TranscriptionClientError::Initialization {
-                message: "OPENAI_API_KEY environment variable is not set".to_string(),
-            })
-        })?;
-
-        Ok(Self { api_key })
+    pub fn from_transcription_config(config: &TranscriptionConfig) -> Self {
+        Self {
+            api_key: config.api_key.clone(),
+        }
     }
 }
 

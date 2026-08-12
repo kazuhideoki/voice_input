@@ -12,4 +12,10 @@ pub fn load_env() {
     } else {
         dotenvy::dotenv().ok();
     }
+
+    // APIキーはビルド時の埋め込み値だけを利用し、実行時環境には残さない。
+    unsafe {
+        std::env::remove_var("TRANSCRIPTION_API_KEY");
+        std::env::remove_var("OPENAI_API_KEY");
+    }
 }

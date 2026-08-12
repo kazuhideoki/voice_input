@@ -58,6 +58,9 @@ ci-test = []  # CI環境で安全に実行できるテストのみを有効化
 tempfile = "3.27.0"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 
+[build-dependencies]
+dotenvy = "0.15.7"
+
 [[bench]]
 name = "recording"
 harness = false

@@ -369,7 +369,7 @@ mod tests {
             },
             transcription: TranscriptionConfig {
                 provider: TranscriptionProvider::MlxQwen3Asr,
-                api_key: None,
+                api_key: "test-api-key".to_string(),
                 mlx_qwen3_asr_model: "Qwen/Qwen3-ASR-1.7B".to_string(),
                 streaming_enabled: false,
                 log_path: None,
