@@ -1,12 +1,16 @@
 # ASR benchmark results
 
-This directory contains benchmark results for Japanese ASR requests using the
-audio files `capture-000001.wav` through `capture-000006.wav` from:
+This directory contains benchmark results for Japanese ASR providers and
+configurations. Each subdirectory records its own corpus, measurement boundary,
+and evaluation limitations.
+
+The original OpenAI and pyannote comparisons use the audio files
+`capture-000001.wav` through `capture-000006.wav` from:
 
 `/Users/kazuhideoki/diarize-log-storage/storage/runs/20260421T150358_264+0900/audios`
 
-Each target model was requested 5 times per audio file, for 30 requests per
-model.
+In those comparisons, each target model was requested 5 times per audio file,
+for 30 requests per model.
 
 ## Summary
 
@@ -28,6 +32,10 @@ model.
   - Rerun of pyannote using `faster-whisper-large-v3-turbo`.
 - `pyannote-whisper-comparison/`
   - Comparison of OpenAI, pyannote Parakeet, and pyannote Whisper results.
+- `apple-speech-vs-gpt-live-transcribe-20260818/`
+  - Japanese quality and latency comparison between Apple `SpeechTranscriber`
+    and the current `gpt-live-transcribe` path, including a no-ground-truth
+    observation using a `diarize-log-storage` recording.
 
 ## Files
 

@@ -1,0 +1,144 @@
+{
+  "synthetic": [
+    {
+      "sample": "gold_1",
+      "reference_characters": 41,
+      "results": [
+        {
+          "provider": "apple_accurate",
+          "elapsed_seconds": 0.81367875,
+          "edit_distance": 5,
+          "cer": 0.121951,
+          "transcript": "MacOSを中心にシェル設定、エディタ設定、各シクリードをまとめて管理するリポジトリです。"
+        },
+        {
+          "provider": "apple_fast",
+          "elapsed_seconds": 0.86415625,
+          "edit_distance": 5,
+          "cer": 0.121951,
+          "transcript": "MacOSを中心にシェル設定エディタ設定、各シクリー用をまとめて管理するリポジトリです。"
+        },
+        {
+          "provider": "gpt_live",
+          "session_elapsed_seconds": 10.360905834008008,
+          "commit_to_completed_seconds": 0.532782000023872,
+          "edit_distance": 6,
+          "cer": 0.146341,
+          "transcript": "マックOSを中心にシェル設定、エディタ設定、各種クエリをまとめて管理するリポジトリです。"
+        }
+      ]
+    },
+    {
+      "sample": "gold_2",
+      "reference_characters": 55,
+      "results": [
+        {
+          "provider": "apple_accurate",
+          "elapsed_seconds": 0.193462709,
+          "edit_distance": 11,
+          "cer": 0.2,
+          "transcript": "ラスクベリー杯 4では、 USB全体の電流が 1.2アンペアを超えると緑キャプチャーが切断される可能性があります。"
+        },
+        {
+          "provider": "apple_fast",
+          "elapsed_seconds": 0.188921458,
+          "edit_distance": 11,
+          "cer": 0.2,
+          "transcript": "ラスクベリー第 4では、 USB全体の電流が 1.2アンペアを超えると緑キャプチャーが切断される可能性があります。"
+        },
+        {
+          "provider": "gpt_live",
+          "session_elapsed_seconds": 12.298649417003617,
+          "commit_to_completed_seconds": 0.702091540908441,
+          "edit_distance": 9,
+          "cer": 0.163636,
+          "transcript": "ラスプベリーPi 4ではUSB全体の電流が1.2アンペアを超えると緑キャプチャーが切断される可能性があります。"
+        }
+      ]
+    },
+    {
+      "sample": "gold_3",
+      "reference_characters": 29,
+      "results": [
+        {
+          "provider": "apple_accurate",
+          "elapsed_seconds": 0.136238041,
+          "edit_distance": 0,
+          "cer": 0.0,
+          "transcript": "えっと、昨日は朝まず面接を一人して、その方はお見送りにしました。"
+        },
+        {
+          "provider": "apple_fast",
+          "elapsed_seconds": 0.13437075,
+          "edit_distance": 3,
+          "cer": 0.103448,
+          "transcript": "ネット昨日は朝まず面接を一人して、その方はお見送りにしました。"
+        },
+        {
+          "provider": "gpt_live",
+          "session_elapsed_seconds": 7.787319750059396,
+          "commit_to_completed_seconds": 0.615138665772975,
+          "edit_distance": 0,
+          "cer": 0.0,
+          "transcript": "えっと、昨日は朝まず面接を一人して、その方はお見送りにしました。"
+        }
+      ]
+    }
+  ],
+  "aggregate": [
+    {
+      "provider": "apple_accurate",
+      "reference_characters": 125,
+      "edit_distance": 16,
+      "cer": 0.128,
+      "mean_file_processing_seconds": 0.3811265
+    },
+    {
+      "provider": "apple_fast",
+      "reference_characters": 125,
+      "edit_distance": 19,
+      "cer": 0.152,
+      "mean_file_processing_seconds": 0.39581615266666664
+    },
+    {
+      "provider": "gpt_live",
+      "reference_characters": 125,
+      "edit_distance": 15,
+      "cer": 0.12,
+      "mean_commit_to_completed_seconds": 0.6166707355684293
+    }
+  ],
+  "natural": {
+    "duration_seconds": 45,
+    "has_human_reference": false,
+    "results": [
+      {
+        "provider": "stored_gpt_transcribe",
+        "representation": "diarized segments",
+        "observations": [
+          "Recognized SCMチーム.",
+          "Rendered 緑キャプチャー as ミドルキャプチャー."
+        ]
+      },
+      {
+        "provider": "apple_accurate",
+        "elapsed_seconds": 1.087166834,
+        "transcript": "裁判の検証ですね。エムチームが耐久テストやったものを受け取って。で前報告した通りえっとなんでしょう赤黒 3つパターンは大丈夫だよね。かったということ今あの赤黒緑 VGAのパターンを調べてました。でどうやら緑キャプチャーかなんか電流いっぱい使うらしくんあれを使わ",
+        "observations": [
+          "Rendered SCMチーム as エムチーム.",
+          "Recognized 緑キャプチャー."
+        ]
+      },
+      {
+        "provider": "apple_fast",
+        "elapsed_seconds": 1.227290584,
+        "transcript": "台盤の検証ですね。ムチームが耐久テースでやったものを受け取ってで、前報告した通りえとなんでしょう赤黒 3つパターンは大丈夫だよね。たということ今あの赤黒緑 VGAのパパー調べてましたね。で、どうやら緑キャプチャーかなんか電流いっぱい使うらしくあれは使",
+        "observations": [
+          "Rendered 耐久テスト as 耐久テース.",
+          "Rendered パターン as パパー.",
+          "Recognized 緑キャプチャー."
+        ]
+      }
+    ]
+  }
+}

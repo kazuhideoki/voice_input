@@ -1,0 +1,93 @@
+{
+  "run_date": "2026-08-18",
+  "timezone": "Asia/Tokyo",
+  "environment": {
+    "os": "macOS 26.5.2",
+    "os_build": "25F84",
+    "architecture": "arm64",
+    "swift": "6.3.3",
+    "voice_input_commit": "464ed6c57f3ec112f5380d61811bcb97d111710e",
+    "talkify_main_commit": "af41d64f63ac2fc94861280fd5fdf2f1b1df75da"
+  },
+  "providers": [
+    {
+      "id": "apple_accurate",
+      "engine": "Apple SpeechTranscriber",
+      "locale": "ja-JP",
+      "reporting_options": [],
+      "result_policy": "finalized results only"
+    },
+    {
+      "id": "apple_fast",
+      "engine": "Apple SpeechTranscriber",
+      "locale": "ja-JP",
+      "reporting_options": [
+        "volatileResults",
+        "fastResults"
+      ],
+      "result_policy": "finalized results only",
+      "note": "Matches Talkify's transcription reporting options, but not its complete microphone-to-insertion path."
+    },
+    {
+      "id": "gpt_live",
+      "engine": "OpenAI Realtime transcription",
+      "model": "gpt-live-transcribe",
+      "languages": [
+        "ja"
+      ],
+      "delay": "low",
+      "input_format": "audio/pcm",
+      "sample_rate_hz": 24000,
+      "append_chunk_ms": 100,
+      "send_interval_scale": 1.0,
+      "turn_detection": null
+    }
+  ],
+  "synthetic_corpus": {
+    "generator": "macOS say",
+    "voice": "Kyoko",
+    "conversion": "16-bit little-endian PCM WAV, mono, 16000 Hz",
+    "samples": [
+      {
+        "id": "gold_1",
+        "duration_seconds": 8.237813,
+        "sha256": "319544a0b1aa7ed11725b31400f047da82cfba667635e325cd937c1f740f2e6d",
+        "reference": "macOSを中心に、シェル設定、エディタ設定、各種CLIをまとめて管理するリポジトリです。"
+      },
+      {
+        "id": "gold_2",
+        "duration_seconds": 9.98775,
+        "sha256": "d2bf917418f8d0e034b1d9257e629e3a8201a87203cc929c076cc168ec764c17",
+        "reference": "Raspberry Pi 4では、USB全体の電流が1.2アンペアを超えると、緑キャプチャーが切断される可能性があります。"
+      },
+      {
+        "id": "gold_3",
+        "duration_seconds": 5.811625,
+        "sha256": "3dd45000fdb0cb085393c4dc737daab3f7da90be494a5c01cf4222b66181b3f2",
+        "reference": "えっと、昨日は朝まず面接を一人して、その方はお見送りにしました。"
+      }
+    ]
+  },
+  "natural_corpus": {
+    "run_id": "20260818T140644_385+0900",
+    "title": "耐久テスト組合せ定義とステージング復旧",
+    "capture": "sources/microphone/audios/capture-000001.wav",
+    "selected_range_seconds": [
+      0,
+      45
+    ],
+    "derived_audio_sha256": "e042cc06838a80ed133facc1c2b2b0fd09dbd48ef473873302a8980d31621736",
+    "reference_kind": "none",
+    "stored_comparison_model": "gpt-transcribe",
+    "privacy": "The natural recording was processed by Apple locally and was not newly sent to OpenAI during this benchmark."
+  },
+  "cer_normalization": {
+    "unicode": "NFKC",
+    "case": "casefold",
+    "removed_unicode_categories": [
+      "Punctuation",
+      "Symbol",
+      "Separator"
+    ]
+  }
+}
