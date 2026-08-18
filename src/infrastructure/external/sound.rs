@@ -14,6 +14,37 @@ static TEST_OSASCRIPT_RUNNER: OnceLock<OsaScriptRunner> = OnceLock::new();
 #[cfg(test)]
 static TEST_SOUND_RUNNER: OnceLock<Mutex<Option<SoundRunner>>> = OnceLock::new();
 
+const PAUSE_APPLE_MUSIC_SCRIPT: &str = r#"
+    try
+        if application "Music" is not running then
+            return false
+        end if
+        tell application "Music"
+            set was_playing to (player state is playing)
+            if was_playing then
+                pause
+            end if
+            return was_playing
+        end tell
+    on error
+        return false
+    end try
+"#;
+
+const RESUME_APPLE_MUSIC_SCRIPT: &str = r#"
+    try
+        if application "Music" is not running then
+            return false
+        end if
+        tell application "Music"
+            play
+            return true
+        end tell
+    on error
+        return false
+    end try
+"#;
+
 #[cfg(test)]
 fn set_test_osascript_runner(
     runner: impl Fn(String) -> std::io::Result<Output> + Send + Sync + 'static,
@@ -88,25 +119,10 @@ pub fn play_transcription_complete_sound() {
         .spawn();
 }
 
-/// Apple Music を一時停止し、元々再生中だったかを返します。
+/// 制御時点で起動済みの Apple Music を一時停止し、元々再生中だったかを返します。
 pub async fn pause_apple_music() -> bool {
-    // 直接 Music アプリを操作する - プロセスチェックをバイパス
-    let playing_script = r#"
-        try
-            tell application "Music"
-                set was_playing to (player state is playing)
-                if was_playing then
-                    pause
-                end if
-                return was_playing
-            end tell
-        on error
-            return false
-        end try
-    "#;
-
     // エラーハンドリングを強化
-    match spawn_blocking(move || run_osascript(playing_script.to_string())).await {
+    match spawn_blocking(move || run_osascript(PAUSE_APPLE_MUSIC_SCRIPT.to_string())).await {
         Ok(Ok(output)) => {
             if output.status.success() {
                 if let Ok(result) = String::from_utf8(output.stdout) {
@@ -134,25 +150,13 @@ pub async fn pause_apple_music() -> bool {
     false
 }
 
-/// Apple Music を再開します。
+/// 制御時点で起動済みの Apple Music を再開します。
 pub fn resume_apple_music() {
-    // 直接 Music アプリを操作する - プロセスチェックをバイパス
-    let play_script = r#"
-        try
-            tell application "Music"
-                play
-                return true
-            end tell
-        on error
-            return false
-        end try
-    "#;
-
     // エラーハンドリングを強化
     std::thread::spawn(move || {
         match std::process::Command::new("osascript")
             .arg("-e")
-            .arg(play_script)
+            .arg(RESUME_APPLE_MUSIC_SCRIPT)
             .output()
         {
             Ok(output) => {
@@ -178,9 +182,29 @@ pub fn resume_apple_music() {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{pause_apple_music, set_test_osascript_runner};
+    use super::{
+        PAUSE_APPLE_MUSIC_SCRIPT, RESUME_APPLE_MUSIC_SCRIPT, pause_apple_music,
+        set_test_osascript_runner,
+    };
     use std::time::Duration;
     use std::{os::unix::process::ExitStatusExt, process::Output};
+
+    /// 一時停止と再開はいずれもMusicを制御する直前に起動状態を確認する
+    #[test]
+    fn music_control_requires_running_application() {
+        for script in [PAUSE_APPLE_MUSIC_SCRIPT, RESUME_APPLE_MUSIC_SCRIPT] {
+            let running_check = script
+                .find("application \"Music\" is not running")
+                .expect("Music の起動状態を確認する");
+            let music_control = script
+                .find("tell application \"Music\"")
+                .expect("Music を制御する");
+            assert!(
+                running_check < music_control,
+                "Music 制御より先に起動状態を確認する"
+            );
+        }
+    }
 
     /// osascript 待機中もランタイムが停止しない
     #[tokio::test(flavor = "current_thread")]
