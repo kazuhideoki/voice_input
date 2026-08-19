@@ -69,6 +69,29 @@ impl Drop for PendingTranscriptionGuard {
     }
 }
 
+#[derive(Debug)]
+struct RealtimeFinalizationGuard {
+    active: Rc<Cell<bool>>,
+}
+
+impl RealtimeFinalizationGuard {
+    fn try_new(active: Rc<Cell<bool>>) -> Result<Self> {
+        if active.replace(true) {
+            return Err(VoiceInputError::SystemError(
+                "gpt-live-transcribe finalization is already in progress".to_string(),
+            ));
+        }
+
+        Ok(Self { active })
+    }
+}
+
+impl Drop for RealtimeFinalizationGuard {
+    fn drop(&mut self) {
+        self.active.set(false);
+    }
+}
+
 struct PreparedRealtimeSession {
     session: GptLiveTranscribeSessionHandle,
     event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
@@ -97,6 +120,7 @@ pub struct CommandHandler<T: AudioBackend> {
     realtime_session: Rc<RefCell<Option<ActiveRealtimeSession>>>,
     ready_realtime_session: Rc<RefCell<Option<PreparedRealtimeSession>>>,
     ready_realtime_task: Rc<RefCell<Option<tokio::task::JoinHandle<()>>>>,
+    realtime_finalization_in_progress: Rc<Cell<bool>>,
     recording_sounds_enabled: bool,
     pending_transcriptions: Rc<Cell<usize>>,
 }
@@ -104,7 +128,9 @@ pub struct CommandHandler<T: AudioBackend> {
 impl<T: AudioBackend + 'static> CommandHandler<T> {
     /// 録音または転写処理が残っているかを返す。
     pub fn has_active_work(&self) -> bool {
-        self.recording.borrow().is_recording() || self.pending_transcriptions.get() > 0
+        self.recording.borrow().is_recording()
+            || self.realtime_finalization_in_progress.get()
+            || self.pending_transcriptions.get() > 0
     }
 
     /// 新しいCommandHandlerを作成
@@ -142,6 +168,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             realtime_session: Rc::new(RefCell::new(None)),
             ready_realtime_session: Rc::new(RefCell::new(None)),
             ready_realtime_task: Rc::new(RefCell::new(None)),
+            realtime_finalization_in_progress: Rc::new(Cell::new(false)),
             recording_sounds_enabled,
             pending_transcriptions: Rc::new(Cell::new(0)),
         }
@@ -269,6 +296,12 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         let runtime_config = AppConfig::load_runtime();
         let provider = runtime_config.resolve_transcription_provider(transcription_provider);
         let max_duration_secs = Some(runtime_config.resolve_max_secs(max_duration_secs));
+
+        if self.realtime_finalization_in_progress.get() {
+            return Err(VoiceInputError::SystemError(
+                "previous gpt-live-transcribe session is still finalizing".to_string(),
+            ));
+        }
 
         // キー押下直後の視覚フィードバックを優先するため、音や録音準備より先にHUDを出す
         recording_hud::set_state(HudState::Detecting);
@@ -439,6 +472,12 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
 
     /// 録音停止処理
     async fn handle_stop(&self) -> Result<IpcResp> {
+        if self.realtime_finalization_in_progress.get() {
+            return Err(VoiceInputError::SystemError(
+                "gpt-live-transcribe finalization is already in progress".to_string(),
+            ));
+        }
+
         // 停止音を再生
         play_stop_sound_if_enabled(self.recording_sounds_enabled);
         recording_hud::set_state(HudState::Transcribing);
@@ -504,6 +543,8 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     }
 
     async fn handle_stop_realtime(&self) -> Result<IpcResp> {
+        let _finalization_guard =
+            RealtimeFinalizationGuard::try_new(self.realtime_finalization_in_progress.clone())?;
         let active = self.realtime_session.borrow_mut().take().ok_or_else(|| {
             VoiceInputError::SystemError("realtime session not found".to_string())
         })?;
@@ -548,6 +589,8 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
     fn handle_status(&self) -> Result<IpcResp> {
         let state = if self.recording.borrow().is_recording() {
             "Recording"
+        } else if self.realtime_finalization_in_progress.get() {
+            "Finalizing"
         } else {
             "Idle"
         };
@@ -663,6 +706,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         let realtime_session = self.realtime_session.clone();
         let ready_realtime_session = self.ready_realtime_session.clone();
         let ready_realtime_task = self.ready_realtime_task.clone();
+        let realtime_finalization_in_progress = self.realtime_finalization_in_progress.clone();
         let tx = self.transcription_tx.clone();
         let pending_transcriptions = self.pending_transcriptions.clone();
         let recording_sounds_enabled = self.recording_sounds_enabled;
@@ -682,6 +726,21 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                             if let Some(active) = realtime_session.borrow_mut().take() {
                                 recording_hud::set_state(HudState::Transcribing);
                                 let session_id = active.session_id;
+                                let _finalization_guard = match RealtimeFinalizationGuard::try_new(
+                                    realtime_finalization_in_progress.clone(),
+                                ) {
+                                    Ok(guard) => guard,
+                                    Err(error) => {
+                                        eprintln!(
+                                            "Realtime auto-stop could not begin finalization: {}",
+                                            error
+                                        );
+                                        active.session.abort();
+                                        active.input_task.abort();
+                                        recording_hud::set_state(HudState::Hidden);
+                                        return;
+                                    }
+                                };
                                 if let Err(error) = stop_active_realtime_session(
                                     recording.clone(),
                                     transcription.clone(),
@@ -1065,6 +1124,66 @@ mod tests {
         assert_eq!(count.get(), 1);
         drop(guard);
         assert_eq!(count.get(), 0);
+    }
+
+    /// Realtime確定処理ガードは生存中だけ処理中状態を保持する
+    #[test]
+    fn realtime_finalization_guard_tracks_lifetime() {
+        let active = Rc::new(Cell::new(false));
+        let guard = RealtimeFinalizationGuard::try_new(active.clone()).unwrap();
+
+        assert!(active.get());
+        assert!(RealtimeFinalizationGuard::try_new(active.clone()).is_err());
+        drop(guard);
+        assert!(!active.get());
+    }
+
+    /// 前回のRealtime確定処理中は新しい録音を開始しない
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_is_rejected_during_realtime_finalization() {
+        let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+        let media_control = MediaControlService::with_controller(Box::new(
+            DelayedMediaController::new(false, Duration::from_millis(0)),
+        ));
+        let (handler, recording, _media_control, _rx) = build_handler(backend, media_control);
+        handler.realtime_finalization_in_progress.set(true);
+
+        let error = handler.handle(start_cmd()).await.unwrap_err();
+
+        assert!(error.to_string().contains("still finalizing"));
+        assert!(!recording.borrow().is_recording());
+        assert!(handler.has_active_work());
+    }
+
+    /// Realtime確定処理中の状態をFinalizingとして返す
+    #[tokio::test(flavor = "current_thread")]
+    async fn status_reports_realtime_finalization() {
+        let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+        let media_control = MediaControlService::with_controller(Box::new(
+            DelayedMediaController::new(false, Duration::from_millis(0)),
+        ));
+        let (handler, _recording, _media_control, _rx) = build_handler(backend, media_control);
+        handler.realtime_finalization_in_progress.set(true);
+
+        let response = handler.handle(IpcCmd::Status).await.unwrap();
+
+        assert_eq!(response.msg, "state=Finalizing");
+    }
+
+    /// Realtime確定処理中の重複停止を拒否する
+    #[tokio::test(flavor = "current_thread")]
+    async fn stop_is_rejected_during_realtime_finalization() {
+        let backend = RecordingOrderBackend::new(Arc::new(StdMutex::new(Vec::new())));
+        let media_control = MediaControlService::with_controller(Box::new(
+            DelayedMediaController::new(false, Duration::from_millis(0)),
+        ));
+        let (handler, _recording, _media_control, _rx) = build_handler(backend, media_control);
+        handler.realtime_finalization_in_progress.set(true);
+
+        let error = handler.handle(IpcCmd::Stop).await.unwrap_err();
+
+        assert!(error.to_string().contains("already in progress"));
+        assert!(handler.has_active_work());
     }
 
     struct NoopDictRepository;
