@@ -153,6 +153,7 @@ fn spawn_push_to_talk_if_enabled(
     config: &voice_input::utils::config::PushToTalkConfig,
 ) -> Result<Option<PushToTalkMonitor>> {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (stop_completion_tx, mut stop_completion_rx) = tokio::sync::mpsc::unbounded_channel();
     let monitor = push_to_talk::spawn_monitor(config, tx)?;
     if monitor.is_none() {
         return Ok(None);
@@ -160,41 +161,48 @@ fn spawn_push_to_talk_if_enabled(
 
     println!("push-to-talk enabled: hotkey={}", config.hotkey);
     spawn_local(async move {
-        let mut push_to_talk_recording = false;
+        let mut state = PushToTalkState::default();
 
-        while let Some(event) = rx.recv().await {
-            match event {
-                PushToTalkEvent::KeyDown => {
-                    if push_to_talk_recording || recording_service.borrow().is_recording() {
-                        continue;
-                    }
+        loop {
+            tokio::select! {
+                event = rx.recv() => {
+                    let Some(event) = event else {
+                        break;
+                    };
 
-                    let response = command_handler
-                        .borrow()
-                        .handle(IpcCmd::Start {
-                            save_audio_path: None,
-                            max_duration_secs: None,
-                            transcription_provider: None,
-                        })
-                        .await;
+                    match event {
+                        PushToTalkEvent::KeyDown => {
+                            if state.on_key_down(recording_service.borrow().is_recording()) {
+                                let started = start_push_to_talk_recording(&command_handler).await;
+                                state.on_start_finished(started);
+                            }
+                        }
+                        PushToTalkEvent::KeyUp => {
+                            if !state.on_key_up(recording_service.borrow().is_recording()) {
+                                continue;
+                            }
 
-                    match response {
-                        Ok(_) => push_to_talk_recording = true,
-                        Err(error) => eprintln!("Push-to-talk start failed: {error}"),
+                            let command_handler = command_handler.clone();
+                            let stop_completion_tx = stop_completion_tx.clone();
+                            spawn_local(async move {
+                                let result = command_handler.borrow().handle(IpcCmd::Stop).await;
+                                let _ = stop_completion_tx.send(result);
+                            });
+                        }
                     }
                 }
-                PushToTalkEvent::KeyUp => {
-                    if !push_to_talk_recording {
-                        continue;
-                    }
+                result = stop_completion_rx.recv(), if state.stop_in_progress => {
+                    let Some(result) = result else {
+                        break;
+                    };
 
-                    push_to_talk_recording = false;
-                    if !recording_service.borrow().is_recording() {
-                        continue;
-                    }
-
-                    if let Err(error) = command_handler.borrow().handle(IpcCmd::Stop).await {
+                    if let Err(error) = result {
                         eprintln!("Push-to-talk stop failed: {error}");
+                    }
+
+                    if state.on_stop_finished(recording_service.borrow().is_recording()) {
+                        let started = start_push_to_talk_recording(&command_handler).await;
+                        state.on_start_finished(started);
                     }
                 }
             }
@@ -202,6 +210,66 @@ fn spawn_push_to_talk_if_enabled(
     });
 
     Ok(monitor)
+}
+
+#[derive(Debug, Default)]
+struct PushToTalkState {
+    hotkey_down: bool,
+    recording_owned: bool,
+    stop_in_progress: bool,
+}
+
+impl PushToTalkState {
+    fn on_key_down(&mut self, service_recording: bool) -> bool {
+        self.hotkey_down = true;
+        !self.recording_owned && !self.stop_in_progress && !service_recording
+    }
+
+    fn on_start_finished(&mut self, started: bool) {
+        self.recording_owned = started;
+    }
+
+    fn on_key_up(&mut self, service_recording: bool) -> bool {
+        self.hotkey_down = false;
+        if !self.recording_owned {
+            return false;
+        }
+
+        self.recording_owned = false;
+        self.stop_in_progress = service_recording;
+        self.stop_in_progress
+    }
+
+    fn on_stop_finished(&mut self, service_recording: bool) -> bool {
+        self.stop_in_progress = false;
+        if service_recording {
+            self.recording_owned = true;
+            return false;
+        }
+
+        self.hotkey_down
+    }
+}
+
+async fn start_push_to_talk_recording(
+    command_handler: &std::rc::Rc<std::cell::RefCell<CommandHandler<CpalAudioBackend>>>,
+) -> bool {
+    let response = command_handler
+        .borrow()
+        .handle(IpcCmd::Start {
+            save_audio_path: None,
+            max_duration_secs: None,
+            transcription_provider: None,
+        })
+        .await;
+
+    match response {
+        Ok(_) => true,
+        Err(error) => {
+            eprintln!("Push-to-talk start failed: {error}");
+            false
+        }
+    }
 }
 
 fn spawn_runtime_recovery_monitor(
@@ -325,6 +393,50 @@ async fn handle_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 確定中に押し続けたキーは確定完了後の録音開始へ引き継ぐ
+    #[test]
+    fn held_key_during_stop_starts_after_finalization() {
+        let mut state = PushToTalkState::default();
+        assert!(state.on_key_down(false));
+        state.on_start_finished(true);
+        assert!(state.on_key_up(true));
+
+        assert!(!state.on_key_down(false));
+        assert!(state.on_stop_finished(false));
+        state.on_start_finished(true);
+
+        assert!(state.recording_owned);
+    }
+
+    /// 確定中に押して離したキーは短時間録音として再生しない
+    #[test]
+    fn released_key_during_stop_is_not_replayed() {
+        let mut state = PushToTalkState::default();
+        assert!(state.on_key_down(false));
+        state.on_start_finished(true);
+        assert!(state.on_key_up(true));
+
+        assert!(!state.on_key_down(false));
+        assert!(!state.on_key_up(false));
+        assert!(!state.on_stop_finished(false));
+
+        assert!(!state.recording_owned);
+    }
+
+    /// 停止失敗後も録音中なら次のキー解除で停止を再試行できる
+    #[test]
+    fn failed_stop_preserves_push_to_talk_ownership() {
+        let mut state = PushToTalkState::default();
+        assert!(state.on_key_down(false));
+        state.on_start_finished(true);
+        assert!(state.on_key_up(true));
+
+        assert!(!state.on_stop_finished(true));
+        assert!(state.recording_owned);
+        assert!(!state.on_key_down(true));
+        assert!(state.on_key_up(true));
+    }
 
     /// サービスコンテナが初期化できる
     #[tokio::test(flavor = "current_thread")]

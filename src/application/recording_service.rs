@@ -342,7 +342,12 @@ impl<T: AudioBackend> RecordingService<T> {
                 ctx.state = RecordingState::Idle;
                 return Err(VoiceInputError::NoAudioCaptured(message));
             }
-            Err(err) => return Err(VoiceInputError::from(err)),
+            Err(err) => {
+                if !self.recorder.borrow().is_recording() {
+                    ctx.state = RecordingState::Idle;
+                }
+                return Err(VoiceInputError::from(err));
+            }
         };
 
         ctx.state = RecordingState::Idle;
@@ -370,13 +375,19 @@ impl<T: AudioBackend> RecordingService<T> {
             }
         }
 
-        let capture = match self.recorder.borrow_mut().stop_capture() {
+        let stop_result = self.recorder.borrow_mut().stop_capture();
+        let capture = match stop_result {
             Ok(capture) => capture,
             Err(crate::application::AudioBackendError::NoAudioCaptured { message }) => {
                 ctx.state = RecordingState::Idle;
                 return Err(VoiceInputError::NoAudioCaptured(message));
             }
-            Err(err) => return Err(VoiceInputError::from(err)),
+            Err(err) => {
+                if !self.recorder.borrow().is_recording() {
+                    ctx.state = RecordingState::Idle;
+                }
+                return Err(VoiceInputError::from(err));
+            }
         };
 
         ctx.state = RecordingState::Idle;
@@ -513,6 +524,10 @@ mod tests {
         is_recording: Arc<AtomicBool>,
     }
 
+    struct StoppedFailingStopAudioBackend {
+        is_recording: Arc<AtomicBool>,
+    }
+
     struct NoAudioCapturedBackend {
         is_recording: Arc<AtomicBool>,
     }
@@ -528,6 +543,14 @@ mod tests {
     }
 
     impl FailingStopAudioBackend {
+        fn new() -> Self {
+            Self {
+                is_recording: Arc::new(AtomicBool::new(false)),
+            }
+        }
+    }
+
+    impl StoppedFailingStopAudioBackend {
         fn new() -> Self {
             Self {
                 is_recording: Arc::new(AtomicBool::new(false)),
@@ -598,6 +621,37 @@ mod tests {
         ) -> std::result::Result<AudioData, crate::application::AudioBackendError> {
             Err(crate::application::AudioBackendError::StreamOperation {
                 message: "stop failed".to_string(),
+            })
+        }
+
+        fn is_recording(&self) -> bool {
+            self.is_recording.load(Ordering::SeqCst)
+        }
+    }
+
+    impl crate::application::AudioBackend for StoppedFailingStopAudioBackend {
+        fn start_recording(
+            &self,
+        ) -> std::result::Result<(), crate::application::AudioBackendError> {
+            self.is_recording.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn stop_recording(
+            &self,
+        ) -> std::result::Result<AudioData, crate::application::AudioBackendError> {
+            self.is_recording.store(false, Ordering::SeqCst);
+            Err(crate::application::AudioBackendError::StreamOperation {
+                message: "stop failed after backend stopped".to_string(),
+            })
+        }
+
+        fn stop_capture(
+            &self,
+        ) -> std::result::Result<CapturedAudio, crate::application::AudioBackendError> {
+            self.is_recording.store(false, Ordering::SeqCst);
+            Err(crate::application::AudioBackendError::StreamOperation {
+                message: "capture stop failed after backend stopped".to_string(),
             })
         }
 
@@ -1057,5 +1111,51 @@ mod tests {
         assert!(service.is_recording());
         assert!(service.is_active_session(session_id).unwrap());
         assert!(service.music_was_playing().unwrap());
+    }
+
+    /// バックエンド停止後の通常停止失敗では録音状態をIdleへ戻す
+    #[tokio::test]
+    async fn stop_failure_after_backend_stopped_clears_active_session() {
+        let backend = StoppedFailingStopAudioBackend::new();
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
+        let service = RecordingService::new(
+            recorder,
+            RecordingConfig {
+                max_duration_secs: 30,
+            },
+        );
+
+        service
+            .start_recording(RecordingOptions::default())
+            .await
+            .unwrap();
+
+        let error = service.stop_recording().await.unwrap_err();
+
+        assert!(matches!(error, VoiceInputError::AudioBackendError(_)));
+        assert!(!service.is_recording());
+    }
+
+    /// バックエンド停止後のraw capture停止失敗では録音状態をIdleへ戻す
+    #[tokio::test]
+    async fn capture_stop_failure_after_backend_stopped_clears_active_session() {
+        let backend = StoppedFailingStopAudioBackend::new();
+        let recorder = Rc::new(RefCell::new(Recorder::new(backend)));
+        let service = RecordingService::new(
+            recorder,
+            RecordingConfig {
+                max_duration_secs: 30,
+            },
+        );
+
+        service
+            .start_recording(RecordingOptions::default())
+            .await
+            .unwrap();
+
+        let error = service.stop_capture().await.unwrap_err();
+
+        assert!(matches!(error, VoiceInputError::AudioBackendError(_)));
+        assert!(!service.is_recording());
     }
 }
