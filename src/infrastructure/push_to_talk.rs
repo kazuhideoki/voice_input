@@ -229,6 +229,8 @@ fn key_code_for_name(value: &str) -> Option<u16> {
 mod platform {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use std::time::Duration;
 
     use core_foundation::runloop::CFRunLoop;
     use core_graphics::event::{
@@ -239,40 +241,80 @@ mod platform {
 
     use super::{ALL_MODIFIERS, Hotkey, PushToTalkEvent};
 
+    const EVENT_TAP_RETRY_DELAY: Duration = Duration::from_secs(1);
+
     pub fn run_event_tap(
         hotkey: Hotkey,
         tx: mpsc::UnboundedSender<PushToTalkEvent>,
         startup_tx: std::sync::mpsc::Sender<Result<(), String>>,
     ) -> Result<(), String> {
-        let active = Arc::new(AtomicBool::new(false));
-        let callback_active = active.clone();
+        let run_loop = CFRunLoop::get_current();
         let mut startup_tx = Some(startup_tx);
 
-        let result = CGEventTap::with_enabled(
-            CGEventTapLocation::HID,
-            CGEventTapPlacement::HeadInsertEventTap,
-            CGEventTapOptions::Default,
-            vec![CGEventType::KeyDown, CGEventType::KeyUp],
-            move |_proxy, event_type, event| {
-                handle_event(hotkey, &tx, callback_active.as_ref(), event_type, event)
-            },
-            || {
+        loop {
+            let callback_active = Arc::new(AtomicBool::new(false));
+            let callback_run_loop = run_loop.clone();
+            let callback_tx = tx.clone();
+            let result = CGEventTap::with_enabled(
+                CGEventTapLocation::HID,
+                CGEventTapPlacement::HeadInsertEventTap,
+                CGEventTapOptions::Default,
+                vec![CGEventType::KeyDown, CGEventType::KeyUp],
+                move |_proxy, event_type, event| {
+                    if let Some((reason, was_active)) =
+                        reset_active_on_tap_disabled(callback_active.as_ref(), event_type)
+                    {
+                        if was_active {
+                            let _ = callback_tx.send(PushToTalkEvent::KeyUp);
+                        }
+                        eprintln!("Push-to-talk event tap was disabled ({reason}); restarting it.");
+                        callback_run_loop.stop();
+                        return CallbackResult::Keep;
+                    }
+
+                    handle_event(
+                        hotkey,
+                        &callback_tx,
+                        callback_active.as_ref(),
+                        event_type,
+                        event,
+                    )
+                },
+                || {
+                    if let Some(startup_tx) = startup_tx.take() {
+                        let _ = startup_tx.send(Ok(()));
+                    }
+                    CFRunLoop::run_current()
+                },
+            );
+
+            if result.is_err() {
+                let error = "failed to install macOS event tap; grant Accessibility/Input Monitoring permission to VoiceInput.app".to_string();
                 if let Some(startup_tx) = startup_tx.take() {
-                    let _ = startup_tx.send(Ok(()));
+                    let _ = startup_tx.send(Err(error.clone()));
+                    return Err(error);
                 }
-                CFRunLoop::run_current()
-            },
-        );
 
-        if result.is_err() {
-            let error = "failed to install macOS event tap; grant Accessibility/Input Monitoring permission to VoiceInput.app".to_string();
-            if let Some(startup_tx) = startup_tx.take() {
-                let _ = startup_tx.send(Err(error.clone()));
+                eprintln!(
+                    "Push-to-talk event tap restart failed; retrying in {}s: {error}",
+                    EVENT_TAP_RETRY_DELAY.as_secs()
+                );
+                thread::sleep(EVENT_TAP_RETRY_DELAY);
             }
-            return Err(error);
         }
+    }
 
-        Ok(())
+    fn reset_active_on_tap_disabled(
+        active: &AtomicBool,
+        event_type: CGEventType,
+    ) -> Option<(&'static str, bool)> {
+        let reason = match event_type {
+            CGEventType::TapDisabledByTimeout => "timeout",
+            CGEventType::TapDisabledByUserInput => "user input",
+            _ => return None,
+        };
+
+        Some((reason, active.swap(false, Ordering::SeqCst)))
     }
 
     fn handle_event(
@@ -313,6 +355,45 @@ mod platform {
 
     fn relevant_flags(flags: CGEventFlags) -> u64 {
         flags.bits() & ALL_MODIFIERS
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use core_graphics::event::CGEventType;
+
+        use super::reset_active_on_tap_disabled;
+
+        /// Event Tapの無効化では理由にかかわらず押下状態を解除する
+        #[test]
+        fn tap_disable_resets_active_state() {
+            let timeout_active = AtomicBool::new(true);
+            let user_input_active = AtomicBool::new(true);
+
+            let timeout_result =
+                reset_active_on_tap_disabled(&timeout_active, CGEventType::TapDisabledByTimeout);
+            let user_input_result = reset_active_on_tap_disabled(
+                &user_input_active,
+                CGEventType::TapDisabledByUserInput,
+            );
+
+            assert_eq!(timeout_result, Some(("timeout", true)));
+            assert_eq!(user_input_result, Some(("user input", true)));
+            assert!(!timeout_active.load(Ordering::SeqCst));
+            assert!(!user_input_active.load(Ordering::SeqCst));
+        }
+
+        /// 通常のキーイベントでは押下状態を変更しない
+        #[test]
+        fn key_event_keeps_active_state() {
+            let active = AtomicBool::new(true);
+
+            let result = reset_active_on_tap_disabled(&active, CGEventType::KeyUp);
+
+            assert_eq!(result, None);
+            assert!(active.load(Ordering::SeqCst));
+        }
     }
 }
 
