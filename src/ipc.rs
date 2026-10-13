@@ -22,6 +22,8 @@ pub enum IpcError {
     Deserialize(#[source] serde_json::Error),
     #[error("no response from daemon")]
     NoResponse,
+    #[error("daemon response timed out")]
+    Timeout,
 }
 
 #[cfg(test)]
@@ -80,6 +82,8 @@ pub enum IpcCmd {
     History,
     ListDevices,
     Health,
+    /// 利用条件の診断（権限はデーモン自身で確認する）
+    Doctor,
     /// 永続設定の変更をデーモンへ通知
     ReloadConfig,
 }
@@ -126,6 +130,23 @@ impl From<AudioDataDto> for AudioData {
 
 /// コマンドを送信して `IpcResp` を取得する同期ユーティリティ。
 pub fn send_cmd(cmd: &IpcCmd) -> Result<IpcResp, IpcError> {
+    send_cmd_inner(cmd, &socket_path(), None)
+}
+
+/// 指定したソケットへ、接続から応答までの制限時間付きでコマンドを送る。
+pub fn send_cmd_with_timeout(
+    cmd: &IpcCmd,
+    path: &Path,
+    timeout: std::time::Duration,
+) -> Result<IpcResp, IpcError> {
+    send_cmd_inner(cmd, path, Some(timeout))
+}
+
+fn send_cmd_inner(
+    cmd: &IpcCmd,
+    path: &Path,
+    timeout: Option<std::time::Duration>,
+) -> Result<IpcResp, IpcError> {
     use futures::{SinkExt, StreamExt};
     use tokio::net::UnixStream;
     use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
@@ -135,24 +156,32 @@ pub fn send_cmd(cmd: &IpcCmd) -> Result<IpcResp, IpcError> {
         .build()
         .map_err(IpcError::Runtime)?
         .block_on(async {
-            let path = socket_path();
-            if !Path::new(&path).exists() {
-                return Err(IpcError::DaemonSocketNotFound);
-            }
+            let exchange = async {
+                if !path.exists() {
+                    return Err(IpcError::DaemonSocketNotFound);
+                }
 
-            let stream = UnixStream::connect(path).await.map_err(IpcError::Connect)?;
-            let (r, w) = stream.into_split();
-            let mut writer = FramedWrite::new(w, LinesCodec::new());
-            let mut reader = FramedRead::new(r, LinesCodec::new());
+                let stream = UnixStream::connect(path).await.map_err(IpcError::Connect)?;
+                let (r, w) = stream.into_split();
+                let mut writer = FramedWrite::new(w, LinesCodec::new());
+                let mut reader = FramedRead::new(r, LinesCodec::new());
 
-            writer
-                .send(serde_json::to_string(cmd).map_err(IpcError::Serialize)?)
-                .await
-                .map_err(IpcError::Send)?;
-            if let Some(Ok(line)) = reader.next().await {
-                serde_json::from_str::<IpcResp>(&line).map_err(IpcError::Deserialize)
-            } else {
-                Err(IpcError::NoResponse)
+                writer
+                    .send(serde_json::to_string(cmd).map_err(IpcError::Serialize)?)
+                    .await
+                    .map_err(IpcError::Send)?;
+                if let Some(Ok(line)) = reader.next().await {
+                    serde_json::from_str::<IpcResp>(&line).map_err(IpcError::Deserialize)
+                } else {
+                    Err(IpcError::NoResponse)
+                }
+            };
+            // 通常コマンドは録音終了・転写完了まで待つため、診断だけ時間を制限する。
+            match timeout {
+                Some(duration) => tokio::time::timeout(duration, exchange)
+                    .await
+                    .map_err(|_| IpcError::Timeout)?,
+                None => exchange.await,
             }
         })
 }

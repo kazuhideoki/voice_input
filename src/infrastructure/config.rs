@@ -36,17 +36,20 @@ pub struct AppConfig {
 static RUNTIME_CONFIG: OnceCell<AppConfig> = OnceCell::new();
 
 fn data_dir() -> PathBuf {
+    let dir = diagnostic_data_dir().expect("cannot resolve platform dirs");
+    fs::create_dir_all(&dir).expect("create data dir");
+    dir
+}
+
+/// 診断用に保存先を解決する。ディレクトリは作成しない。
+pub fn diagnostic_data_dir() -> io::Result<PathBuf> {
     if let Some(xdg_data_home) = xdg_data_home_from_env() {
-        let dir = xdg_data_home.join("voice_input");
-        fs::create_dir_all(&dir).expect("create data dir");
-        return dir;
+        return Ok(xdg_data_home.join("voice_input"));
     }
 
-    let proj =
-        ProjectDirs::from("com", "user", "voice_input").expect("cannot resolve platform dirs");
-    let dir = proj.data_local_dir();
-    fs::create_dir_all(dir).expect("create data dir");
-    dir.to_path_buf()
+    let proj = ProjectDirs::from("com", "user", "voice_input")
+        .ok_or_else(|| io::Error::other("cannot resolve platform dirs"))?;
+    Ok(proj.data_local_dir().to_path_buf())
 }
 
 fn config_path() -> PathBuf {
@@ -69,6 +72,23 @@ fn copy_file_contents(source: &PathBuf, destination: &PathBuf) -> io::Result<()>
 }
 
 impl AppConfig {
+    /// 診断用に設定を読み込む。未作成なら既定値、読込・JSONエラーはそのまま返す。
+    pub fn load_for_diagnosis(path: &Path) -> io::Result<Self> {
+        match fs::File::open(path) {
+            Ok(file) => serde_json::from_reader(file)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                // 壊れたシンボリックリンクを未設定とは扱わない。
+                if fs::symlink_metadata(path).is_ok() {
+                    Err(error)
+                } else {
+                    Ok(Self::default())
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     pub fn load() -> Self {
         let path = config_path();
         Self::load_from_path(&path)

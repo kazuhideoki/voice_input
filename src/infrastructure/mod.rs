@@ -2,6 +2,7 @@ pub mod audio;
 pub mod command_handler;
 pub mod config;
 pub mod dict;
+pub mod doctor;
 pub mod external;
 pub mod media_control_service;
 pub mod push_to_talk;

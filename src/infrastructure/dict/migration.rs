@@ -45,6 +45,25 @@ pub(super) fn load_or_migrate(path: &Path) -> Result<DictionaryDocument> {
     Ok(document)
 }
 
+/// 内容を検証するだけで、移行・バックアップ・保存を行わない。
+pub(super) fn validate_read_only(path: &Path) -> Result<()> {
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error)
+            if error.kind() == io::ErrorKind::NotFound && fs::symlink_metadata(path).is_err() =>
+        {
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    let value: Value = serde_json::from_reader(file)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let version = detect_version(&value)?;
+    let migrated = run_migrations(RawDictionary { version, value })?;
+    parse_current_document(migrated.value)?;
+    Ok(())
+}
+
 pub(super) fn save_document(path: &Path, document: &DictionaryDocument) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

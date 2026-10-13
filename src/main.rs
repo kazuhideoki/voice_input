@@ -16,6 +16,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     load_env();
 
     let cli = Cli::parse();
+    if matches!(cli.cmd, Some(Cmd::Doctor)) {
+        let report = voice_input::infrastructure::doctor::run();
+        println!("{}", report.render());
+        std::process::exit(if report.is_ready() { 0 } else { 1 });
+    }
     let max_secs_override = cli.cmd.as_ref().and_then(command_max_secs);
     let persisted_config = AppConfig::load();
 
@@ -90,6 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Status => relay(IpcCmd::Status)?,
         Cmd::History => relay(IpcCmd::History)?,
         Cmd::Health => relay(IpcCmd::Health)?,
+        Cmd::Doctor => unreachable!("doctor is handled before runtime initialization"),
 
         /* 辞書操作 → ローカル JSON */
         Cmd::Dict { action } => {
@@ -315,6 +321,7 @@ fn command_max_secs(cmd: &Cmd) -> Option<u64> {
         | Cmd::Status
         | Cmd::History
         | Cmd::Health
+        | Cmd::Doctor
         | Cmd::Dict { .. }
         | Cmd::Config { .. } => None,
     }

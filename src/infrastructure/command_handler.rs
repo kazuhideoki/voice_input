@@ -271,6 +271,17 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             IpcCmd::History => self.handle_history(),
             IpcCmd::ListDevices => self.handle_list_devices(),
             IpcCmd::Health => self.handle_health().await,
+            IpcCmd::Doctor => {
+                let state = self.handle_status()?.msg;
+                let input_status = self.recording.borrow().input_stream_status();
+                let diagnosis =
+                    crate::infrastructure::doctor::diagnose_daemon(&state, input_status).await;
+                Ok(IpcResp {
+                    ok: diagnosis.report.is_ready(),
+                    msg: serde_json::to_string(&diagnosis)
+                        .map_err(|error| VoiceInputError::SystemError(error.to_string()))?,
+                })
+            }
             IpcCmd::ReloadConfig => Ok(IpcResp {
                 ok: true,
                 msg: "runtime configuration saved; daemon restarting after active recording"

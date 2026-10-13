@@ -62,6 +62,15 @@ where
     result
 }
 
+/// 入力やワーカーの再初期化を行わず、受信チャネルの稼働状態を確認する。
+pub fn worker_is_running() -> bool {
+    worker_slot().lock().is_ok_and(|worker| {
+        worker
+            .as_ref()
+            .is_some_and(TextInputWorkerHandle::is_running)
+    })
+}
+
 /// テキスト入力ワーカーを初期化
 pub fn init_worker() -> Result<(), TextInputWorkerError> {
     if worker_slot()
