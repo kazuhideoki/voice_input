@@ -61,12 +61,31 @@ OpenAI 系の通常録音処理は音声データをメモリ上で直接処理�
 - 5 分間の録音: 約 50MB
 - 10 分間の録音: 約 100MB
 
+## 開発コマンド
+
+リポジトリ直下で `make help`（または `make`）を実行すると、操作一覧を確認できます。
+既存の `scripts/` を Makefile から呼び出すため、スクリプトの直接実行も引き続き使えます。
+
+| コマンド | 用途 |
+| --- | --- |
+| `make setup` | 初回の LaunchAgent 設定 |
+| `make install` | ビルド・アプリ配置・署名・daemon 再起動。普段の更新に使用 |
+| `make restart` | 再ビルドせず daemon を再起動 |
+| `make build` | Rust バイナリのリリースビルドのみ |
+| `make test` | 環境依存テストを除いたテスト |
+| `make quality` | 既存のローカル品質チェック（環境依存テストを含む） |
+| `make uninstall` | アプリ・LaunchAgent の削除と macOS の権限リセット |
+| `make clean` | Cargo のビルド生成物を削除 |
+
+初回は `make setup` → `make install` → macOS の権限付与 → `make restart` の順に実行します。
+`make build` で生成したバイナリはアプリには反映されません。アプリを更新する場合は `make install` を使ってください。
+
 ## ビルド
 
 ```bash
 git clone https://github.com/yourname/voice_input.git
 cd voice_input
-cargo build --release
+make build
 
 # 生成物:
 # - target/release/voice_input … CLI
@@ -87,11 +106,11 @@ cargo build --release
 1. **app bundle 配置**
 
    ```sh
-   ./scripts/setup-app-bundle.sh
-   ./scripts/build-app-bundle.sh
+   make setup
+   make install
    ```
 
-   このスクリプトは個人用の開発環境を前提に絶対パスを書き込むため、リポジトリ配置先が異なる場合は中身を調整してから実行してください。
+   この操作は現在のリポジトリ配置先を絶対パスとして LaunchAgent に書き込みます。リポジトリを移動した場合は `make setup` を再実行してください。
    実行すると以下を自動で行います：
 
    - `~/Library/LaunchAgents/com.user.voiceinputd.plist` を作成
@@ -108,18 +127,18 @@ cargo build --release
 3. **権限反映後の再起動**
 
 ```sh
-./scripts/restart-app-bundle.sh
+make restart
 ```
 
-`restart-app-bundle.sh` は再ビルドや再署名を行わず、権限付与の反映に必要な再起動だけを実行します。
-`cleanup-app-bundle.sh` は bundle を削除したうえで、bundle identifier に対して `Microphone` / `Accessibility` / `Input Monitoring` の TCC 設定を reset します。
+`make restart` は再ビルドや再署名を行わず、権限付与の反映に必要な再起動だけを実行します。
+`make uninstall` は bundle を削除したうえで、bundle identifier に対して `Microphone` / `Accessibility` / `Input Monitoring` の TCC 設定を reset します。
 
 ### 開発時の再ビルド
 
 app bundle を LaunchAgent で起動するため、再ビルド時の権限再設定は不要です：
 
 ```sh
-./scripts/build-app-bundle.sh
+make install
 ```
 
 通常はこのコマンドだけで十分です。以下をまとめて行います：
@@ -156,7 +175,7 @@ macOS の TCC システムは実行ファイルや bundle identity を基準に�
 tail -f /tmp/voice_inputd.err
 
 # まず通常の再ビルド兼再起動を試す
-./scripts/build-app-bundle.sh
+make install
 
 # LaunchAgent を明示的に再起動
 launchctl kickstart -k gui/$(id -u)/com.user.voiceinputd
@@ -165,10 +184,10 @@ launchctl kickstart -k gui/$(id -u)/com.user.voiceinputd
 開発環境自体を解除したい場合は、以下を実行してください。
 
 ```sh
-./scripts/cleanup-app-bundle.sh
+make uninstall
 ```
 
-ビルド生成物まで消したい場合は、別途 `cargo clean` を実行してください。
+ビルド生成物まで消したい場合は、別途 `make clean` を実行してください。
 
 ## 使い方
 
@@ -364,22 +383,22 @@ voice_input dict list
 
 ```bash
 # 開発ビルド
-cargo build
+make build-debug
 
 # リリースビルド
-cargo build --release
+make build
 
 # すべてのテストを実行（ローカル環境）
-cargo test
+make test-local
 
 # 環境依存を避けるテスト（音声デバイスが不要なテストのみ）
-cargo test --features ci-test
+make test
 
 # フォーマットチェック
-cargo fmt -- --check
+make fmt-check
 
 # Lintチェック
-cargo clippy --all-targets -- -D warnings
+make lint
 ```
 
 ### パフォーマンス
@@ -388,7 +407,7 @@ cargo clippy --all-targets -- -D warnings
 
 ```bash
 # ベンチマーク実行（詳細な性能測定）
-cargo bench
+make bench
 ```
 
 #### メモリ処理の利点
@@ -403,14 +422,14 @@ cargo bench
 
 ```bash
 # 基本的な品質チェック
-./scripts/quality-check.sh
+make quality
 
 # ベンチマークを含む完全チェック
-./scripts/quality-check.sh --bench
+make quality-bench
 ```
 
-`scripts/quality-check.sh` は `cargo fmt -- --check`、
-`cargo clippy --all-targets -- -D warnings`、`cargo test` を順に実行したあと、
+`make quality` は既存の `scripts/quality-check.sh` を呼び出し、`make fmt-check`、
+`make lint`、`make test-local` 相当の処理を順に実行したあと、
 補助的なE2E確認をベストエフォートで流します。
 
 ### Rustバージョン管理
@@ -427,8 +446,8 @@ targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
 
 ### テスト戦略
 
-- **ローカル環境**: `cargo test` ですべてのテストを実行
-- **環境依存テストを避けたい場合**: `cargo test --features ci-test` で環境依存のテストをスキップ
+- **ローカル環境**: `make test-local` ですべてのテストを実行
+- **環境依存テストを避けたい場合**: `make test` で環境依存のテストをスキップ
 - **無視されるテスト**: 音声デバイス、デーモンプロセス、GUI操作が必要なテスト
 
 ## License
