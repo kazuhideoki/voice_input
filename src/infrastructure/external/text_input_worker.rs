@@ -121,6 +121,11 @@ pub struct TextInputWorkerHandle {
 }
 
 impl TextInputWorkerHandle {
+    /// 入力せずに、ワーカーがリクエストを受け取れるかを確認する。
+    pub fn is_running(&self) -> bool {
+        !self.sender.is_closed()
+    }
+
     /// 新しいハンドルを作成
     pub fn new(sender: mpsc::UnboundedSender<TextInputRequest>) -> Self {
         Self { sender }

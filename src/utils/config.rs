@@ -124,6 +124,15 @@ pub struct PathConfig {
 }
 
 impl PathConfig {
+    /// 設定の妥当性に依存せず、診断・IPCに必要な配置を読み取る。
+    pub fn from_env() -> Self {
+        Self {
+            xdg_data_home: non_empty_env("XDG_DATA_HOME").map(PathBuf::from),
+            socket_path: non_empty_env("VOICE_INPUT_SOCKET_PATH").map(PathBuf::from),
+            socket_dir: non_empty_env("VOICE_INPUT_SOCKET_DIR").map(PathBuf::from),
+        }
+    }
+
     /// IPC ソケットパスを返す
     pub fn ipc_socket_path(&self) -> PathBuf {
         const SOCKET_FILENAME: &str = "voice_input.sock";
@@ -287,11 +296,7 @@ impl EnvConfig {
         };
 
         Ok(Self {
-            paths: PathConfig {
-                xdg_data_home: non_empty_env("XDG_DATA_HOME").map(PathBuf::from),
-                socket_path: non_empty_env("VOICE_INPUT_SOCKET_PATH").map(PathBuf::from),
-                socket_dir: non_empty_env("VOICE_INPUT_SOCKET_DIR").map(PathBuf::from),
-            },
+            paths: PathConfig::from_env(),
             transcription: TranscriptionConfig {
                 provider,
                 api_key: EMBEDDED_TRANSCRIPTION_API_KEY.to_string(),
@@ -348,6 +353,11 @@ impl EnvConfig {
     /// 環境変数から設定を構築し、妥当性を検証する
     pub fn try_from_env() -> Result<Self, ConfigError> {
         Self::from_env()
+    }
+
+    /// 永続設定を検証し、グローバル設定を変更せず診断用の設定を構築する。
+    pub fn try_with_user_settings(overrides: &UserSettingOverrides) -> Result<Self, ConfigError> {
+        Self::from_env_with_overrides(overrides, None)
     }
 
     /// 環境変数から設定を構築し、録音最大秒数だけ明示値で上書きする
@@ -440,6 +450,25 @@ impl EnvConfig {
 /// 初期化前に `config.json` の配置を決めるXDGデータディレクトリを返す。
 pub fn xdg_data_home_from_env() -> Option<PathBuf> {
     non_empty_env("XDG_DATA_HOME").map(PathBuf::from)
+}
+
+/// macOS診断用に、配置スクリプトと同じapp bundleとLaunchAgentのパスを読む。
+#[cfg(target_os = "macos")]
+pub fn doctor_installation_paths() -> Option<(PathBuf, PathBuf)> {
+    let base = directories::BaseDirs::new()?;
+    let home = base.home_dir();
+    let app = non_empty_env("VOICE_INPUT_APP_BUNDLE_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join("Applications/VoiceInput.app"));
+    let label = non_empty_env("VOICE_INPUT_LAUNCH_AGENT_LABEL")
+        .unwrap_or_else(|| "com.user.voiceinputd".to_string());
+    let agent = non_empty_env("VOICE_INPUT_LAUNCH_AGENT_PLIST_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            home.join("Library/LaunchAgents")
+                .join(format!("{label}.plist"))
+        });
+    Some((app, agent))
 }
 
 fn non_empty_env(name: &str) -> Option<String> {

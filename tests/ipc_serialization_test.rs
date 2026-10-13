@@ -33,6 +33,7 @@ fn ipc_commands_roundtrip_via_json() {
         IpcCmd::Status,
         IpcCmd::History,
         IpcCmd::Health,
+        IpcCmd::Doctor,
         IpcCmd::ListDevices,
         IpcCmd::ReloadConfig,
     ];

@@ -122,6 +122,8 @@ pub enum Cmd {
     History,
     /// ヘルスチェック
     Health,
+    /// 利用条件を診断し、不足項目と対処方法を表示
+    Doctor,
     /// 🔤 辞書操作
     Dict {
         #[command(subcommand)]

@@ -61,6 +61,14 @@ pub enum AudioBackendError {
 /// 録音デバイス抽象。
 /// 実装は `start_recording`→`stop_recording` が 1 対で呼ばれることを前提とする。
 pub trait AudioBackend {
+    /// 入力ストリームを変更せず、初期化済みでエラーがないかを確認する。
+    /// 診断に対応しないバックエンドは成功と判定しないようエラーを返す。
+    fn input_stream_status(&self) -> Result<String, AudioBackendError> {
+        Err(AudioBackendError::State {
+            message: "input stream diagnosis is not supported".to_string(),
+        })
+    }
+
     /// 録音を開始。
     fn start_recording(&self) -> Result<(), AudioBackendError>;
 
@@ -130,6 +138,11 @@ pub struct Recorder<T: AudioBackend> {
 }
 
 impl<T: AudioBackend> Recorder<T> {
+    /// 入力ストリームの準備状態を読み取る。
+    pub fn input_stream_status(&self) -> Result<String, AudioBackendError> {
+        self.backend.input_stream_status()
+    }
+
     /// バックエンドを注入して新しい `Recorder` を作成。
     pub fn new(backend: T) -> Self {
         Self { backend }

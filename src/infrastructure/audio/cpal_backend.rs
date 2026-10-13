@@ -580,6 +580,44 @@ fn device_list_label(description: &DeviceDescription) -> String {
 
 // =============== WAVヘッダー生成機能 ================================
 impl CpalAudioBackend {
+    /// 実際の選択規則で入力デバイスと形式を確認する。ストリームや録音は開始しない。
+    pub fn diagnose_input() -> Result<String, AudioBackendError> {
+        let host = cpal::default_host();
+        let _ = host
+            .input_devices()
+            .map_err(|error| AudioBackendError::State {
+                message: error.to_string(),
+            })?;
+        let priorities = input_device_priorities();
+        let device =
+            select_input_device_with_priorities(&host, &priorities, false).ok_or_else(|| {
+                AudioBackendError::State {
+                    message: "利用可能な入力デバイスがありません".to_string(),
+                }
+            })?;
+        let format = device
+            .default_input_config()
+            .map_err(|error| AudioBackendError::State {
+                message: error.to_string(),
+            })?;
+        if !matches!(
+            format.sample_format(),
+            SampleFormat::I16 | SampleFormat::F32
+        ) {
+            return Err(AudioBackendError::State {
+                message: format!("未対応の音声形式: {}", format.sample_format()),
+            });
+        }
+        Ok(format!(
+            "{} / {}Hz / {}ch / {} / 優先順位: {}",
+            device_cache_key(&device),
+            format.sample_rate(),
+            format.channels(),
+            format.sample_format(),
+            priorities.join(", ")
+        ))
+    }
+
     fn invalidate_input_stream(&self) {
         if let Some(state) = self.recording_state.lock().unwrap().take() {
             state.accepting_input.store(false, Ordering::SeqCst);
@@ -1698,6 +1736,29 @@ impl CpalAudioBackend {
 }
 
 impl AudioBackend for CpalAudioBackend {
+    fn input_stream_status(&self) -> Result<String, AudioBackendError> {
+        let stream = self
+            .stream
+            .lock()
+            .map_err(|error| AudioBackendError::State {
+                message: error.to_string(),
+            })?;
+        let Some(ready) = stream.as_ref() else {
+            return Err(AudioBackendError::StreamOperation {
+                message: "入力ストリームが初期化されていません".to_string(),
+            });
+        };
+        if self.stream_needs_rebuild.load(Ordering::SeqCst) {
+            return Err(AudioBackendError::StreamOperation {
+                message: "入力ストリームでエラーを検出しました（再初期化が必要）".to_string(),
+            });
+        }
+        Ok(format!(
+            "初期化済み / {} / {}Hz / {}ch",
+            ready.identity.selected_device_key, ready.identity.sample_rate, ready.identity.channels
+        ))
+    }
+
     fn start_recording(&self) -> Result<(), AudioBackendError> {
         CpalAudioBackend::start_recording_inner(self, None)
     }

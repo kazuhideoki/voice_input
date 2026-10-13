@@ -410,6 +410,13 @@ impl<T: AudioBackend> RecordingService<T> {
             .map_err(VoiceInputError::from)
     }
 
+    /// 録音を開始せず、バックエンドの入力ストリームを診断する。
+    pub fn input_stream_status(
+        &self,
+    ) -> std::result::Result<String, crate::application::AudioBackendError> {
+        self.recorder.borrow().input_stream_status()
+    }
+
     /// 録音中かどうかを確認
     pub fn is_recording(&self) -> bool {
         if let Ok(ctx) = self.context.lock() {
