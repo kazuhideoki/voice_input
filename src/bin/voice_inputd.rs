@@ -40,6 +40,7 @@ use voice_input::{
     ipc::{IpcCmd, IpcResp, socket_path},
     load_env,
     utils::config::{EnvConfig, PushToTalkConfig},
+    utils::diagnostics,
 };
 
 // ────────────────────────────────────────────────────────
@@ -93,6 +94,7 @@ async fn async_main() -> Result<()> {
     let history_service = container.history_service.clone();
 
     text_input::init_worker().map_err(|e| VoiceInputError::SystemError(e.to_string()))?;
+    spawn_runtime_lag_monitor();
     if AppConfig::load_runtime().effective_recording_hud_enabled() {
         recording_hud::init_worker();
     }
@@ -270,6 +272,23 @@ async fn start_push_to_talk_recording(
             false
         }
     }
+}
+
+fn spawn_runtime_lag_monitor() {
+    spawn_local(async {
+        let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            let scheduled = ticker.tick().await;
+            let lag = scheduled.elapsed();
+            if lag >= Duration::from_millis(100) {
+                diagnostics::log(
+                    "runtime.lag",
+                    serde_json::json!({"lag_ms": lag.as_millis()}),
+                );
+            }
+        }
+    });
 }
 
 fn spawn_runtime_recovery_monitor(

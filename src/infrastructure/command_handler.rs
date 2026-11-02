@@ -37,7 +37,9 @@ use crate::infrastructure::{
 };
 use crate::ipc::{IpcCmd, IpcResp};
 use crate::utils::config::{EnvConfig, TranscriptionProvider};
+use crate::utils::diagnostics;
 use crate::utils::profiling;
+use serde_json::json;
 
 const REALTIME_READY_RETRY_DELAY: Duration = Duration::from_secs(5);
 
@@ -361,9 +363,17 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
                 return Err(error);
             }
         };
+        diagnostics::log(
+            "recording.started",
+            json!({"session_id": session_id, "provider": provider.as_str()}),
+        );
 
         if let Some(mut active) = realtime_session {
             active.session_id = session_id;
+            diagnostics::log(
+                "recording.realtime_bound",
+                json!({"session_id": session_id, "realtime_id": active.session.trace_id()}),
+            );
             *self.realtime_session.borrow_mut() = Some(active);
         }
 
@@ -560,6 +570,7 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
             VoiceInputError::SystemError("realtime session not found".to_string())
         })?;
         let session_id = active.session_id;
+        let stop_started = std::time::Instant::now();
 
         let outcome = match stop_active_realtime_session(
             self.recording.clone(),
@@ -571,10 +582,18 @@ impl<T: AudioBackend + 'static> CommandHandler<T> {
         {
             Ok(outcome) => outcome,
             Err(error) => {
+                diagnostics::log(
+                    "recording.finalized",
+                    json!({"session_id": session_id, "ok": false, "elapsed_ms": stop_started.elapsed().as_millis()}),
+                );
                 hide_hud_if_no_newer_session(session_id, self.recording.clone());
                 return Err(error);
             }
         };
+        diagnostics::log(
+            "recording.finalized",
+            json!({"session_id": session_id, "ok": true, "elapsed_ms": stop_started.elapsed().as_millis()}),
+        );
         self.warm_gpt_live_transcribe_session_if_enabled();
         hide_hud_if_no_newer_session(session_id, self.recording.clone());
 
@@ -867,8 +886,10 @@ fn build_prepared_realtime_session() -> PreparedRealtimeSession {
     let config =
         GptLiveTranscribeConfig::from_transcription_config(&EnvConfig::get().transcription);
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-    let input_task = spawn_local(async move { process_streaming_text_input(&mut event_rx).await });
     let session = spawn_gpt_live_transcribe_session(config, event_tx.clone());
+    let trace_id = session.trace_id();
+    let input_task =
+        spawn_local(async move { process_streaming_text_input(&mut event_rx, trace_id).await });
 
     PreparedRealtimeSession {
         session,
@@ -946,6 +967,10 @@ async fn stop_active_realtime_session<T: AudioBackend + 'static>(
     let capture_outcome = match recording.borrow().stop_capture().await {
         Ok(outcome) => outcome,
         Err(error) => {
+            diagnostics::log(
+                "recording.failed",
+                json!({"session_id": active.session_id, "phase": "capture_stop"}),
+            );
             active.session.abort();
             active.input_task.abort();
             return Err(error);
@@ -980,6 +1005,10 @@ async fn stop_active_realtime_session<T: AudioBackend + 'static>(
     let raw_output = match session.finish().await {
         Ok(output) => output,
         Err(error) => {
+            diagnostics::log(
+                "recording.failed",
+                json!({"session_id": session_id, "phase": "transcription_finish"}),
+            );
             input_task.abort();
             return Err(error);
         }
@@ -989,6 +1018,10 @@ async fn stop_active_realtime_session<T: AudioBackend + 'static>(
     history
         .borrow_mut()
         .record_finalized(&finalized, capture_outcome.context.transcription_provider);
+    diagnostics::log(
+        "transcription.finalized",
+        json!({"session_id": session_id, "chars": finalized.text.chars().count()}),
+    );
     let _ = event_tx.send(TranscriptionEvent::Completed(finalized.clone()));
 
     match input_task.await {

@@ -4,6 +4,7 @@ pub mod error;
 pub mod infrastructure;
 pub mod utils {
     pub mod config;
+    pub mod diagnostics;
     pub mod env;
     pub mod profiling;
 }

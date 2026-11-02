@@ -4,7 +4,7 @@ use crate::application::config_defaults;
 use crate::application::{AudioData, AudioDataFormat, AudioFrame, AudioInputSource, CapturedAudio};
 use crate::infrastructure::config::AppConfig;
 use crate::utils::config::EnvConfig;
-use crate::utils::profiling;
+use crate::utils::{diagnostics, profiling};
 use audioadapter_buffers::SizeError;
 use cpal::{
     Device, DeviceDescription, SampleFormat, Stream, StreamConfig,
@@ -14,6 +14,7 @@ use rubato::{
     Async, FixedAsync, ResampleError, Resampler, ResamplerConstructionError,
     SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
+use serde_json::json;
 use std::{
     borrow::Cow,
     error::Error,
@@ -29,6 +30,7 @@ use std::{
 
 /// 録音状態（メモリモード専用）
 struct MemoryRecordingState {
+    started_at: Instant,
     buffer: Arc<Mutex<Vec<i16>>>,
     sample_rate: u32,
     channels: u16,
@@ -735,6 +737,7 @@ impl CpalAudioBackend {
         }
         let generation = self.capture_generation.fetch_add(1, Ordering::SeqCst) + 1;
         *self.recording_state.lock().unwrap() = Some(MemoryRecordingState {
+            started_at: Instant::now(),
             buffer,
             sample_rate,
             channels,
@@ -762,6 +765,7 @@ impl CpalAudioBackend {
         let buffer = Arc::new(Mutex::new(Vec::with_capacity(capacity)));
         let generation = self.capture_generation.fetch_add(1, Ordering::SeqCst) + 1;
         *self.recording_state.lock().unwrap() = Some(MemoryRecordingState {
+            started_at: Instant::now(),
             buffer,
             sample_rate,
             channels,
@@ -1403,6 +1407,10 @@ impl CpalAudioBackend {
             return Ok(());
         }
 
+        diagnostics::log(
+            "audio.start_no_samples",
+            json!({"generation": generation, "timeout_ms": INPUT_READINESS_TIMEOUT.as_millis()}),
+        );
         eprintln!("Audio input produced no samples at recording start; rebuilding input stream.");
         self.stop_accepting_current_capture();
         self.invalidate_input_stream();
@@ -1524,6 +1532,17 @@ impl CpalAudioBackend {
         let mut samples = state.buffer.lock().unwrap();
         let samples_len = samples.len();
         let live_samples_len = state.live_sample_count.load(Ordering::SeqCst);
+        diagnostics::log(
+            "audio.capture",
+            json!({
+                "generation": state.generation,
+                "wall_ms": state.started_at.elapsed().as_millis(),
+                "live_ms": live_samples_len as u64 * 1000 / u64::from(state.sample_rate.max(1)) / u64::from(state.channels.max(1)),
+                "live_samples": live_samples_len, "total_samples": samples_len,
+                "sample_rate": state.sample_rate, "channels": state.channels,
+                "accepted": has_minimum_capture(live_samples_len, state.sample_rate, state.channels),
+            }),
+        );
         if !has_minimum_capture(live_samples_len, state.sample_rate, state.channels) {
             drop(samples);
             eprintln!(
@@ -2187,6 +2206,7 @@ mod tests {
         let buffer = Arc::new(Mutex::new(vec![10i16]));
         let accepting_input = Arc::new(AtomicBool::new(false));
         let recording_state = Arc::new(Mutex::new(Some(MemoryRecordingState {
+            started_at: Instant::now(),
             buffer: buffer.clone(),
             sample_rate: 48_000,
             channels: 1,
@@ -2216,6 +2236,7 @@ mod tests {
         let accepting_input = Arc::new(AtomicBool::new(true));
         let (frame_tx, mut frame_rx) = tokio::sync::mpsc::unbounded_channel();
         let recording_state = Arc::new(Mutex::new(Some(MemoryRecordingState {
+            started_at: Instant::now(),
             buffer: buffer.clone(),
             sample_rate: 48_000,
             channels: 1,
@@ -2271,6 +2292,7 @@ mod tests {
         let pre_roll_buffer = Arc::new(Mutex::new(PreRollAudioBuffer::new()));
         pre_roll_buffer.lock().unwrap().set_capacity(3);
         let recording_state = Arc::new(Mutex::new(Some(MemoryRecordingState {
+            started_at: Instant::now(),
             buffer: capture_buffer.clone(),
             sample_rate: 48_000,
             channels: 1,
@@ -2298,6 +2320,7 @@ mod tests {
         let backend = CpalAudioBackend::default();
         let live_sample_count = Arc::new(AtomicUsize::new(0));
         *backend.recording_state.lock().unwrap() = Some(MemoryRecordingState {
+            started_at: Instant::now(),
             buffer: Arc::new(Mutex::new(vec![10i16, 20i16])),
             sample_rate: 48_000,
             channels: 1,
@@ -2772,6 +2795,7 @@ mod tests {
         // メモリモードの状態作成
         let buffer = Arc::new(Mutex::new(Vec::<i16>::new()));
         let memory_state = MemoryRecordingState {
+            started_at: Instant::now(),
             buffer: buffer.clone(),
             sample_rate: 48000,
             channels: 2,
@@ -2855,6 +2879,7 @@ mod tests {
         let live_samples_len = samples.len();
         let buffer = Arc::new(Mutex::new(samples));
         *backend.recording_state.lock().unwrap() = Some(MemoryRecordingState {
+            started_at: Instant::now(),
             buffer: buffer.clone(),
             sample_rate: 48000,
             channels: 1,
@@ -2894,6 +2919,7 @@ mod tests {
         let live_samples_len = samples.len();
         let buffer = Arc::new(Mutex::new(samples));
         *backend.recording_state.lock().unwrap() = Some(MemoryRecordingState {
+            started_at: Instant::now(),
             buffer,
             sample_rate: 48000,
             channels: 1,
@@ -2924,6 +2950,7 @@ mod tests {
         // テスト用の空のMemoryRecordingStateを設定
         let buffer = Arc::new(Mutex::new(Vec::<i16>::new()));
         *backend.recording_state.lock().unwrap() = Some(MemoryRecordingState {
+            started_at: Instant::now(),
             buffer: buffer.clone(),
             sample_rate: 44100,
             channels: 2,
@@ -2958,6 +2985,7 @@ mod tests {
 
         let pre_roll_only = vec![1000i16; min_capture_samples(48_000, 1, MIN_CAPTURE_DURATION)];
         *backend.recording_state.lock().unwrap() = Some(MemoryRecordingState {
+            started_at: Instant::now(),
             buffer: Arc::new(Mutex::new(pre_roll_only)),
             sample_rate: 48_000,
             channels: 1,
