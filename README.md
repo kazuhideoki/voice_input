@@ -181,6 +181,42 @@ make install
 launchctl kickstart -k gui/$(id -u)/com.user.voiceinputd
 ```
 
+#### 高負荷時の入力遅延・欠落を調べる
+
+文字入力はUTF-16で最大16単位ずつに分け、送信ごとに20ms以上待機します。
+逐次入力・最終補正のBackspaceにも同じ待機を適用し、負荷による遅延時も
+送信順序を維持します。大量の補正では削除数に応じて待ち時間が増えます。
+OSへイベントを送った後の入力先アプリの受信確認は行っていないため、
+すべてのアプリ・負荷条件での無欠落を保証するものではありません。
+
+診断メタデータは常時 `/tmp/voice_inputd.err` に `VOICE_INPUT_DIAG` で記録します。
+JSONにはUTC時刻・プロセスID・処理IDを含み、転写本文・音声・APIキーは含みません。
+`realtime_id` と `stream_id` は同じIDで、`recording.realtime_bound` から
+録音の `session_id` に対応付けられます。`request_id` は文字入力要求の識別子です。
+
+| イベント | 確認する内容 |
+| --- | --- |
+| `runtime.lag` | 実行ループの遅延が100ms以上。CPU競合や同期処理による停止の手がかり |
+| `audio.capture` | `wall_ms` と開始後の `live_ms`、音声量による受付可否。開始前バッファは `total_samples` にのみ含む |
+| `audio.start_no_samples` | 開始時の音声取得待ち80msを超え、ストリームを再構築 |
+| `realtime.ready` / `realtime.end` | 接続準備時間と転写処理の成否。`end` の時間は待機中の時間も含む |
+| `realtime.commit` | 送信音声の長さ、停止時の未送信フレーム数と送信待ち時間 |
+| `realtime.delta` / `realtime.transcript` | サーバーから部分結果・確定結果を受信した時刻と文字数。`queued=false` は入力処理への受け渡し失敗 |
+| `transcription.finalized` | 確定した転写結果の文字数 |
+| `input.queued` / `input.begin` / `input.end` | 文字数・削除数・キュー待ち時間・入力処理時間と成否 |
+| `stream_input.end` | 受信・確定文字数、エラー後の未送信文字数、入力待ちの最大滞留数、中断の有無 |
+| `recording.failed` | 録音停止と転写確定のどちらで失敗したか |
+
+```sh
+rg 'VOICE_INPUT_DIAG' /tmp/voice_inputd.err
+voice_input history
+```
+
+`input.end` の `delivery=posted_unverified` はOSへの送信成功を表し、
+画面への反映確認ではありません。履歴に全文があるのに入力先だけ欠ける場合は、
+同時刻の `input.*` と `stream_input.*` を確認します。
+履歴はdaemon起動中の最新10件なので、再起動前に比較してください。
+
 開発環境自体を解除したい場合は、以下を実行してください。
 
 ```sh

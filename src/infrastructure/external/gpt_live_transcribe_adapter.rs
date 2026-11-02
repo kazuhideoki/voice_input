@@ -21,6 +21,7 @@ use crate::application::{AudioFrame, TranscriptionClientError, TranscriptionEven
 use crate::domain::transcription::TranscriptionOutput;
 use crate::error::{Result, VoiceInputError};
 use crate::utils::config::TranscriptionConfig;
+use crate::utils::diagnostics;
 use crate::utils::profiling;
 
 const OPENAI_REALTIME_TRANSCRIPTION_URL: &str =
@@ -54,6 +55,7 @@ impl GptLiveTranscribeConfig {
 
 /// 実行中の GPT Live Transcribe セッション。
 pub struct GptLiveTranscribeSessionHandle {
+    trace_id: u64,
     frame_tx: mpsc::UnboundedSender<AudioFrame>,
     stop_tx: Option<oneshot::Sender<()>>,
     ready_rx: Option<oneshot::Receiver<Result<()>>>,
@@ -62,6 +64,11 @@ pub struct GptLiveTranscribeSessionHandle {
 }
 
 impl GptLiveTranscribeSessionHandle {
+    /// 通信と文字入力の診断ログを関連付けるID。
+    pub fn trace_id(&self) -> u64 {
+        self.trace_id
+    }
+
     /// セッションへ録音中 PCM フレームを送るための sender。
     pub fn frame_tx(&self) -> mpsc::UnboundedSender<AudioFrame> {
         self.frame_tx.clone()
@@ -138,13 +145,26 @@ pub fn spawn_gpt_live_transcribe_session(
     let (ready_tx, ready_rx) = oneshot::channel();
     let (result_tx, result_rx) = oneshot::channel();
 
+    let trace_id = diagnostics::next_id();
     let task = tokio::task::spawn_local(async move {
-        let result =
-            run_gpt_live_transcribe_session(config, frame_rx, stop_rx, event_tx, ready_tx).await;
+        let started = Instant::now();
+        diagnostics::log("realtime.begin", json!({"realtime_id": trace_id}));
+        let result = run_gpt_live_transcribe_session(
+            config, frame_rx, stop_rx, event_tx, ready_tx, trace_id,
+        )
+        .await;
+        diagnostics::log(
+            "realtime.end",
+            json!({
+                "realtime_id": trace_id, "elapsed_ms": started.elapsed().as_millis(),
+                "ok": result.is_ok(), "final_chars": result.as_ref().map(|output| output.text.chars().count()).unwrap_or(0),
+            }),
+        );
         let _ = result_tx.send(result);
     });
 
     GptLiveTranscribeSessionHandle {
+        trace_id,
         frame_tx,
         stop_tx: Some(stop_tx),
         ready_rx: Some(ready_rx),
@@ -159,8 +179,10 @@ async fn run_gpt_live_transcribe_session(
     mut stop_rx: oneshot::Receiver<()>,
     event_tx: mpsc::UnboundedSender<TranscriptionEvent>,
     ready_tx: oneshot::Sender<Result<()>>,
+    trace_id: u64,
 ) -> Result<TranscriptionOutput> {
     let overall_timer = profiling::Timer::start("gpt_live_transcribe.session");
+    let started = Instant::now();
     let mut ready_tx = Some(ready_tx);
     let request = match build_realtime_request(&config.api_key) {
         Ok(request) => request,
@@ -212,7 +234,12 @@ async fn run_gpt_live_transcribe_session(
     }
 
     let mut converter = Pcm24kMonoConverter::default();
+    diagnostics::log(
+        "realtime.ready",
+        json!({"realtime_id": trace_id, "elapsed_ms": started.elapsed().as_millis()}),
+    );
     let mut pending_audio = Vec::new();
+    let mut audio_ms = 0.0;
     let mut committed = false;
     let completion_timeout = tokio::time::sleep(COMPLETION_TIMEOUT);
     tokio::pin!(completion_timeout);
@@ -224,7 +251,7 @@ async fn run_gpt_live_transcribe_session(
                 let Some(message) = message else {
                     return Err(request_error("realtime websocket closed before final transcript"));
                 };
-                if let Some(output) = handle_realtime_message(message, &event_tx).await? {
+                if let Some(output) = handle_realtime_message(message, &event_tx, trace_id).await? {
                     if profiling::enabled() {
                         overall_timer.log_with(&format!("text_len={}", output.text.len()));
                     } else {
@@ -235,17 +262,22 @@ async fn run_gpt_live_transcribe_session(
             }
             frame = frame_rx.recv(), if !committed => {
                 if let Some(frame) = frame {
+                    audio_ms += frame.samples.len() as f64 * 1000.0 / f64::from(frame.sample_rate.max(1)) / f64::from(frame.channels.max(1));
                     append_converted_frame(&mut write, &mut converter, &mut pending_audio, frame).await?;
                 }
             }
             stop = &mut stop_rx, if !committed => {
                 let _ = stop;
+                let drain_started = Instant::now();
+                let backlog_frames = frame_rx.len();
                 while let Ok(frame) = frame_rx.try_recv() {
+                    audio_ms += frame.samples.len() as f64 * 1000.0 / f64::from(frame.sample_rate.max(1)) / f64::from(frame.channels.max(1));
                     append_converted_frame(&mut write, &mut converter, &mut pending_audio, frame).await?;
                 }
                 flush_pending_audio(&mut write, &mut pending_audio, true).await?;
                 send_json(&mut write, json!({"type": "input_audio_buffer.commit"})).await?;
                 profiling::log_point("gpt_live_transcribe.audio.commit", "");
+                diagnostics::log("realtime.commit", json!({"realtime_id": trace_id, "audio_ms": audio_ms as u64, "backlog_frames": backlog_frames, "drain_ms": drain_started.elapsed().as_millis()}));
                 committed = true;
                 completion_timeout.as_mut().reset(Instant::now() + COMPLETION_TIMEOUT);
                 completion_timeout_enabled = true;
@@ -335,6 +367,7 @@ where
 async fn handle_realtime_message(
     message: std::result::Result<Message, tokio_tungstenite::tungstenite::Error>,
     event_tx: &mpsc::UnboundedSender<TranscriptionEvent>,
+    trace_id: u64,
 ) -> Result<Option<TranscriptionOutput>> {
     let message = message.map_err(map_ws_error)?;
     if !message.is_text() {
@@ -345,12 +378,22 @@ async fn handle_realtime_message(
     match event.event_type.as_str() {
         "conversation.item.input_audio_transcription.delta" => {
             if let Some(delta) = event.text_delta() {
-                let _ = event_tx.send(TranscriptionEvent::Delta(delta));
+                let chars = delta.chars().count();
+                let queued = event_tx.send(TranscriptionEvent::Delta(delta)).is_ok();
+                diagnostics::log(
+                    "realtime.delta",
+                    json!({"realtime_id": trace_id, "chars": chars, "queued": queued}),
+                );
             }
             Ok(None)
         }
         "conversation.item.input_audio_transcription.completed" => {
-            Ok(Some(event.into_transcription_output()))
+            let output = event.into_transcription_output();
+            diagnostics::log(
+                "realtime.transcript",
+                json!({"realtime_id": trace_id, "chars": output.text.chars().count()}),
+            );
+            Ok(Some(output))
         }
         "error" => Err(request_error(&event.error_message())),
         _ => Ok(None),

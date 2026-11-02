@@ -27,8 +27,10 @@ use crate::infrastructure::external::{
     text_input,
 };
 use crate::utils::config::TranscriptionProvider;
+use crate::utils::diagnostics;
 use crate::utils::profiling;
 use async_trait::async_trait;
+use serde_json::json;
 
 /// 転写結果を処理
 pub async fn handle_transcription(
@@ -222,17 +224,61 @@ impl TextApplier for ProfiledTextApplier {
 
 pub(crate) async fn process_streaming_text_input(
     event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<TranscriptionEvent>,
+    trace_id: u64,
 ) -> Option<FinalizedTranscription> {
-    process_streaming_events(event_rx, &ProfiledTextApplier).await
+    process_streaming_events_with_id(event_rx, &ProfiledTextApplier, trace_id).await
+}
+
+struct StreamInputTrace {
+    id: u64,
+    started: std::time::Instant,
+    delta_chars: usize,
+    skipped_chars: usize,
+    final_chars: usize,
+    max_backlog: usize,
+    outcome: &'static str,
+}
+
+impl Drop for StreamInputTrace {
+    fn drop(&mut self) {
+        diagnostics::log(
+            "stream_input.end",
+            json!({
+                "stream_id": self.id, "elapsed_ms": self.started.elapsed().as_millis(),
+                "delta_chars": self.delta_chars, "skipped_chars": self.skipped_chars,
+                "final_chars": self.final_chars, "max_backlog": self.max_backlog,
+            "outcome": self.outcome, "delivery": if self.outcome == "posted" { "posted_unverified" } else { "incomplete" },
+            }),
+        );
+    }
 }
 
 async fn process_streaming_events(
     event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<TranscriptionEvent>,
     text_applier: &dyn TextApplier,
 ) -> Option<FinalizedTranscription> {
+    process_streaming_events_with_id(event_rx, text_applier, diagnostics::next_id()).await
+}
+
+async fn process_streaming_events_with_id(
+    event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<TranscriptionEvent>,
+    text_applier: &dyn TextApplier,
+    trace_id: u64,
+) -> Option<FinalizedTranscription> {
+    let mut trace = StreamInputTrace {
+        id: trace_id,
+        started: std::time::Instant::now(),
+        delta_chars: 0,
+        skipped_chars: 0,
+        final_chars: 0,
+        max_backlog: 0,
+        outcome: "interrupted",
+    };
+    diagnostics::log("stream_input.begin", json!({"stream_id": trace.id}));
     let mut rendered_text = String::new();
     let mut input_succeeded = true;
     while let Some(event) = event_rx.recv().await {
+        trace.max_backlog = trace.max_backlog.max(event_rx.len());
         match event {
             TranscriptionEvent::Delta(delta) => {
                 let delta = if rendered_text.is_empty() {
@@ -243,19 +289,36 @@ async fn process_streaming_events(
                 if delta.is_empty() {
                     continue;
                 }
+                trace.delta_chars += delta.chars().count();
                 if input_succeeded {
                     if rendered_text.is_empty() {
                         input_succeeded = text_applier.type_text(delta).await;
                     } else {
                         input_succeeded = text_applier.type_text_continuous(delta).await;
                     }
+                    diagnostics::log(
+                        "stream_input.delta",
+                        json!({
+                            "stream_id": trace.id, "chars": delta.chars().count(),
+                            "ok": input_succeeded, "backlog": event_rx.len(),
+                        }),
+                    );
+                    trace.max_backlog = trace.max_backlog.max(event_rx.len());
+                } else {
+                    trace.skipped_chars += delta.chars().count();
                 }
                 rendered_text.push_str(delta);
             }
             TranscriptionEvent::Completed(finalized) if rendered_text.is_empty() => {
+                trace.final_chars = finalized.text.chars().count();
                 if input_succeeded {
-                    text_applier.type_text(&finalized.text).await;
+                    input_succeeded = text_applier.type_text(&finalized.text).await;
                 }
+                trace.outcome = if input_succeeded {
+                    "posted"
+                } else {
+                    "input_failed"
+                };
                 return Some(finalized);
             }
             TranscriptionEvent::Completed(finalized) => {
@@ -263,15 +326,22 @@ async fn process_streaming_events(
                 // その状態で後続 delta や最終 patch を送り続けると、既存テキスト破壊の
                 // 可能性があるため、以後はイベントを受け流すだけにして副作用を止める。
                 if input_succeeded {
-                    text_applier
+                    input_succeeded = text_applier
                         .patch_text_continuous(&rendered_text, &finalized.text)
                         .await;
                 }
+                trace.final_chars = finalized.text.chars().count();
+                trace.outcome = if input_succeeded {
+                    "posted"
+                } else {
+                    "input_failed"
+                };
                 return Some(finalized);
             }
         }
     }
 
+    trace.outcome = "closed_before_completion";
     None
 }
 

@@ -7,9 +7,33 @@ use enigo::{
     Direction::{Click, Release},
     Enigo, Key, Keyboard, Settings,
 };
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::error::VoiceInputError;
+use crate::utils::diagnostics;
+use serde_json::json;
+
+// Enigo/macOS の1イベント上限より小さくし、UTF-16の長さでも上限を守る。
+const INPUT_CHUNK_UTF16_LIMIT: usize = 16;
+// OSと入力先がイベントを処理できるよう、継続入力と削除にも間隔を設ける。
+const INPUT_EVENT_INTERVAL: Duration = Duration::from_millis(20);
+
+/// 入力要求の識別子と、キューへ投入した時刻。
+#[derive(Debug)]
+pub struct InputRequestTrace {
+    id: u64,
+    queued_at: Instant,
+}
+
+impl InputRequestTrace {
+    fn new() -> Self {
+        Self {
+            id: diagnostics::next_id(),
+            queued_at: Instant::now(),
+        }
+    }
+}
 
 /// 常駐ワーカー用のテキスト入力エラー
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -46,11 +70,24 @@ impl From<TextInputWorkerError> for VoiceInputError {
         }
     }
 }
+
+impl TextInputWorkerError {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::EnigoInitFailed(_) => "enigo_init_failed",
+            Self::WorkerSpawnFailed(_) => "worker_spawn_failed",
+            Self::InputFailed(_) => "input_failed",
+            Self::ChannelClosed(_) => "channel_closed",
+        }
+    }
+}
 /// ワーカーへ送る入力リクエスト
 #[derive(Debug)]
 pub enum TextInputRequest {
     /// テキストをそのまま入力
     TypeText {
+        /// キュー待機時間を計測するためのメタデータ。
+        trace: InputRequestTrace,
         /// 入力するテキスト
         text: String,
         /// 入力実行モード
@@ -60,6 +97,8 @@ pub enum TextInputRequest {
     },
     /// 入力済みテキストの末尾を削って差分を入力
     ReplaceSuffix {
+        /// キュー待機時間を計測するためのメタデータ。
+        trace: InputRequestTrace,
         /// 削除する文字数
         delete_count: usize,
         /// 追加するテキスト
@@ -153,13 +192,23 @@ impl TextInputWorkerHandle {
         mode: TextInputExecutionMode,
     ) -> Result<oneshot::Receiver<Result<(), TextInputWorkerError>>, TextInputWorkerError> {
         let (tx, rx) = oneshot::channel();
+        let trace = InputRequestTrace::new();
+        let request_id = trace.id;
+        diagnostics::log(
+            "input.queued",
+            json!({"request_id": trace.id, "chars": text.chars().count(), "delete_chars": 0}),
+        );
         self.sender
             .send(TextInputRequest::TypeText {
+                trace,
                 text,
                 mode,
                 completion: tx,
             })
-            .map_err(|e| TextInputWorkerError::ChannelClosed(format!("send failed: {}", e)))?;
+            .map_err(|e| {
+                diagnostics::log("input.enqueue_failed", json!({"request_id": request_id}));
+                TextInputWorkerError::ChannelClosed(format!("send failed: {}", e))
+            })?;
         Ok(rx)
     }
 
@@ -188,14 +237,24 @@ impl TextInputWorkerHandle {
         mode: TextInputExecutionMode,
     ) -> Result<oneshot::Receiver<Result<(), TextInputWorkerError>>, TextInputWorkerError> {
         let (tx, rx) = oneshot::channel();
+        let trace = InputRequestTrace::new();
+        let request_id = trace.id;
+        diagnostics::log(
+            "input.queued",
+            json!({"request_id": trace.id, "chars": text.chars().count(), "delete_chars": delete_count}),
+        );
         self.sender
             .send(TextInputRequest::ReplaceSuffix {
+                trace,
                 delete_count,
                 text,
                 mode,
                 completion: tx,
             })
-            .map_err(|e| TextInputWorkerError::ChannelClosed(format!("send failed: {}", e)))?;
+            .map_err(|e| {
+                diagnostics::log("input.enqueue_failed", json!({"request_id": request_id}));
+                TextInputWorkerError::ChannelClosed(format!("send failed: {}", e))
+            })?;
         Ok(rx)
     }
 }
@@ -260,6 +319,7 @@ fn run_worker(mut rx: mpsc::UnboundedReceiver<TextInputRequest>) {
     let mut enigo = match Enigo::new(&settings) {
         Ok(enigo) => enigo,
         Err(e) => {
+            diagnostics::log("input.init_failed", json!({"reason": "enigo_init"}));
             let msg = e.to_string();
             while let Some(req) = rx.blocking_recv() {
                 let _ = req
@@ -271,37 +331,43 @@ fn run_worker(mut rx: mpsc::UnboundedReceiver<TextInputRequest>) {
     };
 
     while let Some(req) = rx.blocking_recv() {
-        match req {
+        let (trace, text, mode, delete_count, completion) = match req {
             TextInputRequest::TypeText {
+                trace,
                 text,
                 mode,
                 completion,
-            } => {
-                let result = type_text_with_enigo(&mut enigo, &text, mode);
-                let _ = completion.send(result);
-            }
+            } => (trace, text, mode, 0, completion),
             TextInputRequest::ReplaceSuffix {
+                trace,
                 delete_count,
                 text,
                 mode,
                 completion,
-            } => {
-                let result = replace_suffix_with_enigo(&mut enigo, delete_count, &text, mode);
-                let _ = completion.send(result);
-            }
+            } => (trace, text, mode, delete_count, completion),
+        };
+        let queue_ms = trace.queued_at.elapsed().as_millis();
+        let started = Instant::now();
+        diagnostics::log(
+            "input.begin",
+            json!({
+                "request_id": trace.id, "queue_ms": queue_ms, "queue_depth": rx.len(),
+                "chars": text.chars().count(), "delete_chars": delete_count,
+            }),
+        );
+        let result = replace_suffix_with_enigo(&mut enigo, delete_count, &text, mode);
+        diagnostics::log(
+            "input.end",
+            json!({
+                "request_id": trace.id, "elapsed_ms": started.elapsed().as_millis(),
+                "ok": result.is_ok(), "delivery": if result.is_ok() { "posted_unverified" } else { "failed" },
+                "error_kind": result.as_ref().err().map(TextInputWorkerError::kind),
+            }),
+        );
+        if completion.send(result).is_err() {
+            diagnostics::log("input.completion_dropped", json!({"request_id": trace.id}));
         }
     }
-}
-
-fn type_text_with_enigo(
-    enigo: &mut Enigo,
-    text: &str,
-    mode: TextInputExecutionMode,
-) -> Result<(), TextInputWorkerError> {
-    if mode == TextInputExecutionMode::Standalone {
-        prepare_input(enigo)?;
-    }
-    input_text(enigo, text, mode)
 }
 
 fn replace_suffix_with_enigo(
@@ -314,13 +380,18 @@ fn replace_suffix_with_enigo(
         prepare_input(enigo)?;
     }
 
-    for _ in 0..delete_count {
-        enigo
-            .key(Key::Backspace, Click)
-            .map_err(|e| TextInputWorkerError::InputFailed(e.to_string()))?;
-    }
-
-    input_text(enigo, text, mode)
+    apply_paced_input(
+        delete_count,
+        text,
+        |step| {
+            match step {
+                InputStep::Delete => enigo.key(Key::Backspace, Click),
+                InputStep::Text(chunk) => enigo.text(chunk),
+            }
+            .map_err(|e| TextInputWorkerError::InputFailed(e.to_string()))
+        },
+        std::thread::sleep,
+    )
 }
 
 fn prepare_input(enigo: &mut Enigo) -> Result<(), TextInputWorkerError> {
@@ -332,17 +403,37 @@ fn prepare_input(enigo: &mut Enigo) -> Result<(), TextInputWorkerError> {
     Ok(())
 }
 
-fn input_text(
-    enigo: &mut Enigo,
-    text: &str,
-    mode: TextInputExecutionMode,
-) -> Result<(), TextInputWorkerError> {
-    if let Err(e) = enigo.text(text) {
-        return Err(TextInputWorkerError::InputFailed(e.to_string()));
-    }
+#[derive(Debug, PartialEq, Eq)]
+enum InputStep<'a> {
+    Delete,
+    Text(&'a str),
+}
 
-    if mode == TextInputExecutionMode::Standalone {
-        std::thread::sleep(std::time::Duration::from_millis(30));
+fn apply_paced_input(
+    delete_count: usize,
+    text: &str,
+    mut emit: impl FnMut(InputStep<'_>) -> Result<(), TextInputWorkerError>,
+    mut wait: impl FnMut(Duration),
+) -> Result<(), TextInputWorkerError> {
+    for _ in 0..delete_count {
+        emit(InputStep::Delete)?;
+        wait(INPUT_EVENT_INTERVAL);
+    }
+    let mut start = 0;
+    let mut units = 0;
+    for (index, ch) in text.char_indices() {
+        if units + ch.len_utf16() > INPUT_CHUNK_UTF16_LIMIT {
+            emit(InputStep::Text(&text[start..index]))?;
+            wait(INPUT_EVENT_INTERVAL);
+            start = index;
+            units = 0;
+        }
+        units += ch.len_utf16();
+    }
+    if start < text.len() {
+        emit(InputStep::Text(&text[start..]))?;
+        // 次の要求（特に最終補正の削除）が先行しないよう末尾でも待機する。
+        wait(INPUT_EVENT_INTERVAL);
     }
     Ok(())
 }
@@ -350,6 +441,104 @@ fn input_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 日本語と絵文字を欠落させずUTF-16上限内で分割し、各送信後に待機する
+    #[test]
+    fn paced_input_preserves_unicode_and_waits_after_every_chunk() {
+        let text = "あいうえお😀かきくけこ😸さしすせそたちつてと";
+        let steps = std::cell::RefCell::new(Vec::new());
+        let mut emitted = String::new();
+        apply_paced_input(
+            0,
+            text,
+            |step| {
+                let InputStep::Text(chunk) = step else {
+                    panic!("unexpected deletion")
+                };
+                assert!(chunk.encode_utf16().count() <= INPUT_CHUNK_UTF16_LIMIT);
+                emitted.push_str(chunk);
+                steps.borrow_mut().push("emit");
+                Ok(())
+            },
+            |duration| {
+                assert_eq!(duration, INPUT_EVENT_INTERVAL);
+                steps.borrow_mut().push("wait");
+            },
+        )
+        .unwrap();
+        assert_eq!(emitted, text);
+        assert!(steps.borrow().len() > 2);
+        assert!(
+            steps
+                .borrow()
+                .chunks_exact(2)
+                .all(|pair| pair == ["emit", "wait"])
+        );
+    }
+
+    /// 削除だけの最終補正でも各Backspaceの後で待機する
+    #[test]
+    fn deletion_only_patch_is_paced() {
+        let steps = std::cell::RefCell::new(Vec::new());
+        apply_paced_input(
+            3,
+            "",
+            |step| {
+                assert_eq!(step, InputStep::Delete);
+                steps.borrow_mut().push("delete");
+                Ok(())
+            },
+            |_| steps.borrow_mut().push("wait"),
+        )
+        .unwrap();
+        assert_eq!(
+            *steps.borrow(),
+            ["delete", "wait", "delete", "wait", "delete", "wait"]
+        );
+    }
+
+    /// 入力途中の失敗後は後続文字も削除も送信しない
+    #[test]
+    fn failed_emission_stops_patch_without_retrying() {
+        let mut calls = 0;
+        let mut waits = 0;
+        let result = apply_paced_input(
+            2,
+            "追加",
+            |_| {
+                calls += 1;
+                if calls == 2 {
+                    return Err(TextInputWorkerError::InputFailed("busy".into()));
+                }
+                Ok(())
+            },
+            |_| waits += 1,
+        );
+        assert!(matches!(result, Err(TextInputWorkerError::InputFailed(_))));
+        assert_eq!(calls, 2);
+        assert_eq!(waits, 1);
+    }
+
+    /// 送信が遅くても文字列を再送せず削除と追記の順序を保つ
+    #[test]
+    fn slow_emission_preserves_patch_order_without_duplicates() {
+        let mut steps = Vec::new();
+        apply_paced_input(
+            2,
+            "訂正",
+            |step| {
+                std::thread::sleep(Duration::from_millis(5));
+                steps.push(match step {
+                    InputStep::Delete => "delete".to_string(),
+                    InputStep::Text(text) => text.to_string(),
+                });
+                Ok(())
+            },
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(steps, ["delete", "delete", "訂正"]);
+    }
 
     /// テキスト入力リクエストを送ると完了通知の受信側を受け取れる
     #[test]
